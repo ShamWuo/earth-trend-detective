@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Local ETG persistence cache
+.etg-cache/
+
+# Env
+.env
+.env*.local
+
+# Testing & builds
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# OS
+.DS_Store

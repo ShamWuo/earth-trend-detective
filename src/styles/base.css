@@ -1,0 +1,476 @@
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  overscroll-behavior: none;
+  accent-color: var(--accent);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-outfit), Arial, Helvetica, sans-serif;
+  letter-spacing: -0.015em;
+}
+
+/* Focus visibility (WCAG 2.4.7) */
+:where(
+  a[href], button, select, summary,
+  [tabindex]:not([tabindex="-1"]),
+  [role="button"], [role="tab"], [role="option"], [role="switch"]
+):focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 2px;
+}
+
+/* ─── Native <dialog> Modal Scroll Containment & Styling ─── */
+dialog.etg-dialog {
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-primary);
+  max-inline-size: min(94vw, 780px);
+  inline-size: 100%;
+  max-block-size: min(90dvh, 760px);
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+dialog.etg-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+dialog.etg-dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog.etg-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background-color: rgba(10, 10, 12, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+/* ─── Native Range Slider (Timeline Scrubber) ─── */
+input[type="range"].etg-slider {
+  --slider-track-size: 0.375rem;
+  --slider-thumb-size: 1.05rem;
+  --slider-track-radius: 2px;
+  --slider-thumb-radius: 2px;
+  --slider-track-color: var(--border-strong);
+  --slider-fill-color: var(--accent-fg);
+  --slider-thumb-color: var(--text-primary);
+  --slider-direction: to right;
+
+  --attr-min: attr(min type(<number>), 0);
+  --attr-max: attr(max type(<number>), 100);
+  --control-value: attr(value type(<number>), 100);
+  --slider-progress: calc(
+    progress(var(--control-value), var(--attr-min), var(--attr-max)) * 100%
+  );
+
+  appearance: none;
+  inline-size: 100%;
+  block-size: 2rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+@supports not (opacity: progress(1, 0, 100)) {
+  input[type="range"].etg-slider {
+    --slider-progress: calc(
+      (var(--control-value) - var(--attr-min)) /
+      max(1, (var(--attr-max) - var(--attr-min))) * 100%
+    );
+  }
+}
+
+input[type="range"].etg-slider:dir(rtl) {
+  --slider-direction: to left;
+}
+
+/* WebKit/Blink — never comma-combine with Firefox pseudo-selectors */
+input[type="range"].etg-slider::-webkit-slider-runnable-track {
+  block-size: var(--slider-track-size);
+  border: 0;
+  border-radius: var(--slider-track-radius);
+  background: linear-gradient(
+    var(--slider-direction),
+    var(--slider-fill-color) var(--slider-progress),
+    var(--slider-track-color) var(--slider-progress)
+  );
+}
+
+input[type="range"].etg-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  inline-size: var(--slider-thumb-size);
+  block-size: var(--slider-thumb-size);
+  margin-block-start: calc((var(--slider-track-size) - var(--slider-thumb-size)) / 2);
+  border: 2px solid var(--slider-fill-color);
+  border-radius: var(--slider-thumb-radius);
+  background: var(--slider-thumb-color);
+}
+
+/* Firefox */
+input[type="range"].etg-slider::-moz-range-track {
+  block-size: var(--slider-track-size);
+  border: 0;
+  border-radius: var(--slider-track-radius);
+  background: var(--slider-track-color);
+}
+
+input[type="range"].etg-slider::-moz-range-progress {
+  block-size: var(--slider-track-size);
+  border-radius: var(--slider-track-radius);
+  background: var(--slider-fill-color);
+}
+
+input[type="range"].etg-slider::-moz-range-thumb {
+  inline-size: var(--slider-thumb-size);
+  block-size: var(--slider-thumb-size);
+  border: 2px solid var(--slider-fill-color);
+  border-radius: var(--slider-thumb-radius);
+  background: var(--slider-thumb-color);
+}
+
+input[type="range"].etg-slider:focus-visible {
+  outline: 2px solid var(--slider-fill-color);
+  outline-offset: 4px;
+}
+
+/* ─── Responsive Container-Queried Telemetry Table ─── */
+.etg-table-region {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: 240px;
+  container-type: inline-size;
+  border: 1px solid var(--border);
+  background: var(--surface-inset);
+}
+
+.etg-table-region table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.75rem;
+}
+
+.etg-table-region thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  background: var(--surface-band);
+}
+
+.etg-table-region thead th {
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  font-weight: 600;
+  color: var(--text-subtle);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.etg-table-region tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--surface);
+  text-align: left;
+  padding: 0.4rem 0.65rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.etg-table-region tbody td {
+  padding: 0.4rem 0.65rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+@container (width < 420px) {
+  .etg-table-region table,
+  .etg-table-region thead,
+  .etg-table-region tbody,
+  .etg-table-region tr,
+  .etg-table-region th,
+  .etg-table-region td {
+    display: block;
+  }
+
+  .etg-table-region thead {
+    display: none;
+  }
+
+  .etg-table-region tbody tr {
+    margin-block-end: 0.65rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.35rem;
+  }
+
+  .etg-table-region tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 2;
+    background: var(--surface-band);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .etg-table-region tbody td:nth-child(2)::before {
+    content: var(--col-2, "Value") ": ";
+    color: var(--text-subtle);
+    font-weight: 600;
+  }
+
+  .etg-table-region tbody td:nth-child(3)::before {
+    content: var(--col-3, "Trend Fit") ": ";
+    color: var(--text-subtle);
+    font-weight: 600;
+  }
+
+  .etg-table-region tbody td:nth-child(4)::before {
+    content: var(--col-4, "Z-Score") ": ";
+    color: var(--text-subtle);
+    font-weight: 600;
+  }
+}
+
+/* ─── Form Inputs ─── */
+.form-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  border-radius: var(--radius-sm);
+  outline: none;
+  color: var(--text-primary);
+  background: var(--form-field-bg);
+  border: 1px solid var(--form-field-border);
+  transition: border-color 150ms ease;
+}
+
+.form-input:focus {
+  border-color: var(--accent-fg);
+}
+
+.form-input::placeholder {
+  color: var(--form-field-placeholder);
+}
+
+/* ─── Graph Void Surface (Dark Obsidian / Light Warm Ivory) ─── */
+.etg-graph-void {
+  background: radial-gradient(circle at 50% 42%, #131622 0%, #0b0c10 72%, #07080c 100%);
+  color: var(--text-primary);
+}
+
+.light .etg-graph-void {
+  background: radial-gradient(circle at 50% 42%, #fcfbf8 0%, #f5f3ec 75%, #ece9df 100%);
+  color: var(--text-primary);
+}
+
+.etg-hud-pill {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45);
+}
+
+.light .etg-hud-pill {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 10px 28px -12px rgba(24, 24, 27, 0.16);
+}
+
+/* ─── Native Popover Overlays (Viewport-Aware Positioning) ─── */
+.etg-popover[popover] {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: var(--text-primary);
+  box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.55);
+  max-inline-size: min(25rem, calc(100dvw - 3rem));
+  max-block-size: min(76dvh, 36rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 1.25rem;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    display 150ms allow-discrete,
+    overlay 150ms allow-discrete;
+}
+
+.etg-popover[popover]:is(:popover-open, .\:popover-open) {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@starting-style {
+  .etg-popover[popover]:is(:popover-open, .\:popover-open) {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@supports (position-area: block-end) {
+  .etg-popover[popover] {
+    inset: auto;
+    margin: 0;
+    margin-block-start: 0.5rem;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks: flip-block, flip-inline;
+  }
+
+  .etg-popover[popover].etg-popover-end {
+    position-area: block-end span-inline-start;
+  }
+
+  .etg-popover[popover].etg-popover-up {
+    margin-block-start: 0;
+    margin-block-end: 0.625rem;
+    position-area: block-start span-inline-end;
+    position-try-fallbacks: flip-block, flip-inline;
+  }
+}
+
+@supports not (position-area: block-end) {
+  .etg-popover[popover] {
+    position: fixed;
+    inset-block-start: 4.5rem;
+    inset-inline-start: 1.25rem;
+    margin: 0;
+  }
+
+  .etg-popover[popover].etg-popover-end {
+    inset-inline-start: auto;
+    inset-inline-end: 1.25rem;
+  }
+
+  .etg-popover[popover].etg-popover-up {
+    inset-block-start: auto;
+    inset-block-end: 5.25rem;
+    inset-inline-start: 3.5rem;
+  }
+}
+
+/* ─── Timeline Scrubber Container Query ─── */
+.etg-scrubber-cq {
+  container: scrubber / inline-size;
+}
+
+@container scrubber (inline-size < 460px) {
+  .etg-scrubber-latest-label,
+  .etg-scrubber-count,
+  .etg-scrubber-play-label {
+    display: none;
+  }
+}
+
+/* ─── Accessible Tabs (Constant Dimensions + Border Underline) ─── */
+.etg-tablist {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-inline: 1.75rem;
+}
+
+.etg-tab {
+  position: relative;
+  padding: 0.9rem 0.75rem;
+  font-size: 0.84375rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 140ms ease;
+}
+
+.etg-tab:hover {
+  color: var(--text-primary);
+}
+
+.etg-tab[aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+.etg-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0.5rem;
+  inset-block-end: -1px;
+  border-bottom: 2px solid var(--accent-fg);
+}
+
+/* ─── Progressive Disclosure Details ─── */
+.etg-details {
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  background: color-mix(in srgb, var(--surface-band) 65%, transparent);
+}
+
+.etg-details > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.875rem 1.125rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.etg-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.etg-details > summary::after {
+  content: "+";
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-subtle);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.etg-details[open] > summary::after {
+  content: "−";
+}
+
+.etg-details[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+/* ─── Swipeable Horizontal Chip Scroller ─── */
+.etg-chip-scroller {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.375rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding-block: 0.125rem;
+}
+
+.etg-chip-scroller::-webkit-scrollbar {
+  display: none;
+}
+
+.etg-chip-scroller > * {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+}

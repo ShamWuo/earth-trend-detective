@@ -1,0 +1,65 @@
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+.ws-title {
+  font-size: clamp(1rem, 0.4vw + 0.88rem, 1.1875rem);
+  font-weight: 600;
+  line-height: 1.22;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.ws-subtitle {
+  font-size: 0.8125rem;
+  font-weight: 450;
+  line-height: 1.45;
+  color: var(--text-subtle);
+}
+
+.ws-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.ws-numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.ws-card {
+  position: relative;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background-color var(--dur-fast) var(--ease-standard);
+}
+
+.ws-card--interactive {
+  cursor: pointer;
+}
+
+.ws-card--interactive:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-elevated);
+}
+
+.ws-inset {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-inset);
+}
+
+.ws-rule {
+  height: 1px;
+  width: 100%;
+  background: var(--border);
+}

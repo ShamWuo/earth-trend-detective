@@ -1,0 +1,63 @@
+@theme inline {
+  --font-sans: var(--font-plus-jakarta), sans-serif;
+  --font-outfit: var(--font-outfit), sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-band: var(--surface-band);
+  --color-accent: var(--accent);
+  --color-accent-light: var(--accent-light);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-fg-strong: var(--accent-fg-strong);
+  --color-accent-hover: var(--accent-hover);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-subtle: var(--text-subtle);
+  --color-text-faint: var(--text-faint);
+
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+
+  --color-emerald-300: var(--fg-emerald-300);
+  --color-emerald-400: var(--fg-emerald-400);
+  --color-rose-300: var(--fg-rose-300);
+  --color-rose-400: var(--fg-rose-400);
+  --color-amber-300: var(--fg-amber-300);
+  --color-amber-400: var(--fg-amber-400);
+  --color-sky-300: var(--fg-sky-300);
+  --color-sky-400: var(--fg-sky-400);
+  --color-indigo-300: var(--fg-indigo-300);
+  --color-indigo-400: var(--fg-indigo-400);
+  --color-purple-300: var(--fg-purple-300);
+  --color-purple-400: var(--fg-purple-400);
+  --color-cyan-300: var(--fg-cyan-300);
+  --color-cyan-400: var(--fg-cyan-400);
+  --color-blue-300: var(--fg-blue-300);
+  --color-blue-400: var(--fg-blue-400);
+  --color-orange-300: var(--fg-orange-300);
+  --color-orange-400: var(--fg-orange-400);
+  --color-teal-300: var(--fg-teal-300);
+  --color-teal-400: var(--fg-teal-400);
+
+  --color-emerald-950: var(--fg-emerald-950);
+  --color-rose-950: var(--fg-rose-950);
+  --color-amber-950: var(--fg-amber-950);
+  --color-sky-950: var(--fg-sky-950);
+  --color-indigo-950: var(--fg-indigo-950);
+  --color-purple-950: var(--fg-purple-950);
+  --color-cyan-950: var(--fg-cyan-950);
+  --color-blue-950: var(--fg-blue-950);
+
+  --radius-xs: calc(var(--design-radius-base) * 0.5 * var(--design-radius-scale));
+  --radius-sm: calc(var(--design-radius-base) * 0.75 * var(--design-radius-scale));
+  --radius-md: calc(var(--design-radius-base) * 1 * var(--design-radius-scale));
+  --radius-lg: calc(var(--design-radius-base) * 1.25 * var(--design-radius-scale));
+  --radius-xl: calc(var(--design-radius-base) * 1.5 * var(--design-radius-scale));
+}

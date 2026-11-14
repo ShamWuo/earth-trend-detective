@@ -1,0 +1,177 @@
+:root {
+  /* Design Geometry & Motion Tokens */
+  --design-radius-base: 4px;
+  --design-radius-scale: 1;
+  --design-duration: 150ms;
+  --design-ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 150ms;
+  --dur-base: 200ms;
+  --dur-slow: 350ms;
+
+  /* Typography Tokens */
+  --font-sans: var(--font-plus-jakarta), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-outfit: var(--font-outfit), sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  /* Core Colors — Obsidian Dark Theme */
+  --bg: #161617;
+  --surface: #1f1f21;
+  --surface-hover: #2a2a2e;
+  --surface-elevated: #323237;
+  --surface-inset: color-mix(in srgb, var(--surface) 82%, #000000 18%);
+  --surface-band: color-mix(in srgb, var(--surface) 94%, #ffffff 6%);
+
+  --accent: #2563eb;
+  --accent-light: #60a5fa;
+  --accent-fg: #60a5fa;
+  --accent-fg-strong: #93c5fd;
+  --accent-hover: #1d4ed8;
+  --accent-glow: rgba(37, 99, 235, 0.18);
+
+  --text-primary: #f9fafb;
+  --text-secondary: #94a3b8;
+  --text-muted: #cbd5e1;
+  --text-subtle: #94a3b8;
+  --text-faint: #7e8da3;
+
+  --border: #333336;
+  --border-subtle: #27272a;
+  --border-strong: #45454b;
+
+  --header-bg: #1b1b1d;
+  --form-field-bg: #1c1c1e;
+  --form-field-border: #45454b;
+  --form-field-placeholder: #8c9bb1;
+  --button-primary-bg: #f9fafb;
+  --button-primary-text: #161617;
+  --blueprint-line: rgba(255, 255, 255, 0.045);
+
+  /* Chromatic Foregrounds (AA contrast on Obsidian Dark) */
+  --fg-emerald-300: #6ee7b7;  --fg-emerald-400: #34d399;
+  --fg-rose-300:    #fda4af;  --fg-rose-400:    #fb7185;
+  --fg-amber-300:   #fcd34d;  --fg-amber-400:   #fbbf24;
+  --fg-sky-300:     #7dd3fc;  --fg-sky-400:     #38bdf8;
+  --fg-indigo-300:  #c7d2fe;  --fg-indigo-400:  #a5b4fc;
+  --fg-purple-300:  #d8b4fe;  --fg-purple-400:  #c084fc;
+  --fg-cyan-300:    #67e8f9;  --fg-cyan-400:    #22d3ee;
+  --fg-blue-300:    #93c5fd;  --fg-blue-400:    #60a5fa;
+  --fg-orange-300:  #fdba74;  --fg-orange-400:  #fb923c;
+  --fg-teal-300:    #5eead4;  --fg-teal-400:    #2dd4bf;
+
+  --fg-emerald-950: #022c22;
+  --fg-rose-950: #4c0519;
+  --fg-amber-950: #451a03;
+  --fg-sky-950: #082f49;
+  --fg-indigo-950: #1e1b4b;
+  --fg-purple-950: #3b0764;
+  --fg-cyan-950: #083344;
+  --fg-blue-950: #172554;
+
+  --scrollbar-thumb: light-dark(rgba(63, 63, 70, 0.32), rgba(148, 163, 184, 0.28));
+}
+
+/* Light Theme Override Tokens — Warm Ivory / Crisp Neutral */
+@media (prefers-color-scheme: light) {
+  :root:not(:has(> head > meta[name="color-scheme"][content="dark"])) {
+    --bg: #fafafa;
+    --surface: #f4f4f5;
+    --surface-hover: #e4e4e7;
+    --surface-elevated: #ffffff;
+    --surface-inset: color-mix(in srgb, var(--surface) 92%, #000000 8%);
+    --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
+    --accent: #1d4ed8;
+    --accent-light: #2563eb;
+    --accent-fg: #1d4ed8;
+    --accent-fg-strong: #1e3a8a;
+    --accent-hover: #1e40af;
+    --accent-glow: rgba(29, 78, 216, 0.12);
+    --text-primary: #09090b;
+    --text-secondary: #52525b;
+    --text-muted: #3f3f46;
+    --text-subtle: #52525b;
+    --text-faint: #63636e;
+    --border: #e4e4e7;
+    --border-subtle: #ededf0;
+    --border-strong: #a1a1aa;
+    --header-bg: #fafafa;
+    --form-field-bg: #ffffff;
+    --form-field-border: #71717a;
+    --form-field-placeholder: #71717a;
+    --button-primary-bg: #09090b;
+    --button-primary-text: #ffffff;
+    --blueprint-line: rgba(29, 78, 216, 0.045);
+
+    --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
+    --fg-rose-300:    #881337;  --fg-rose-400:    #9f1239;
+    --fg-amber-300:   #78350f;  --fg-amber-400:   #92400e;
+    --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
+    --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
+    --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
+    --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
+    --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
+    --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
+    --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
+
+    --fg-emerald-950: #ecfdf5;
+    --fg-rose-950: #fff1f2;
+    --fg-amber-950: #fffbeb;
+    --fg-sky-950: #f0f9ff;
+    --fg-indigo-950: #eef2ff;
+    --fg-purple-950: #faf5ff;
+    --fg-cyan-950: #ecfeff;
+    --fg-blue-950: #eff6ff;
+  }
+}
+
+:root.light,
+:root:has(> head > meta[name="color-scheme"][content="light"]) {
+  --bg: #fafafa;
+  --surface: #f4f4f5;
+  --surface-hover: #e4e4e7;
+  --surface-elevated: #ffffff;
+  --surface-inset: color-mix(in srgb, var(--surface) 92%, #000000 8%);
+  --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
+  --accent: #1d4ed8;
+  --accent-light: #2563eb;
+  --accent-fg: #1d4ed8;
+  --accent-fg-strong: #1e3a8a;
+  --accent-hover: #1e40af;
+  --accent-glow: rgba(29, 78, 216, 0.12);
+  --text-primary: #09090b;
+  --text-secondary: #52525b;
+  --text-muted: #3f3f46;
+  --text-subtle: #52525b;
+  --text-faint: #63636e;
+  --border: #e4e4e7;
+  --border-subtle: #ededf0;
+  --border-strong: #a1a1aa;
+  --header-bg: #fafafa;
+  --form-field-bg: #ffffff;
+  --form-field-border: #71717a;
+  --form-field-placeholder: #71717a;
+  --button-primary-bg: #09090b;
+  --button-primary-text: #ffffff;
+  --blueprint-line: rgba(29, 78, 216, 0.045);
+
+  --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
+  --fg-rose-300:    #881337;  --fg-rose-400:    #9f1239;
+  --fg-amber-300:   #78350f;  --fg-amber-400:   #92400e;
+  --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
+  --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
+  --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
+  --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
+  --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
+  --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
+  --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
+
+  --fg-emerald-950: #ecfdf5;
+  --fg-rose-950: #fff1f2;
+  --fg-amber-950: #fffbeb;
+  --fg-sky-950: #f0f9ff;
+  --fg-indigo-950: #eef2ff;
+  --fg-purple-950: #faf5ff;
+  --fg-cyan-950: #ecfeff;
+  --fg-blue-950: #eff6ff;
+}

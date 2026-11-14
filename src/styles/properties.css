@@ -1,0 +1,128 @@
+/* ─── Root Color Scheme & Registered Custom Properties ─── */
+:root {
+  color-scheme: light dark;
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+  }
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+  }
+}
+
+@property --bg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #161617;
+}
+@property --surface {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #1f1f21;
+}
+@property --surface-hover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #2a2a2e;
+}
+@property --surface-elevated {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #323237;
+}
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #2563eb;
+}
+@property --accent-light {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #60a5fa;
+}
+@property --accent-fg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #60a5fa;
+}
+@property --accent-hover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #1d4ed8;
+}
+@property --text-primary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #f9fafb;
+}
+@property --text-muted {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #cbd5e1;
+}
+@property --text-subtle {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #94a3b8;
+}
+@property --text-faint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #7e8da3;
+}
+@property --border {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #333336;
+}
+@property --border-subtle {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #27272a;
+}
+@property --border-strong {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #45454b;
+}
+
+html {
+  overscroll-behavior-y: none;
+}
+
+html[data-theme-ready] {
+  transition:
+    --bg 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --surface 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --surface-hover 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --surface-elevated 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --accent 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --accent-light 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --accent-fg 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --accent-hover 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --text-primary 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --text-muted 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --text-subtle 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --text-faint 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --border 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --border-subtle 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    --border-strong 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─── View Transitions for Dual-View Earth <-> Graph Switches ─── */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme-ready] {
+    transition: none !important;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}
