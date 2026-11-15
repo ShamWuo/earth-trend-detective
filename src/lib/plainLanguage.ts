@@ -574,7 +574,7 @@ export const RELATION_CATEGORY_META: Record<
   opposite: {
     label: "Opposite Trends",
     shortLabel: "Opposite",
-    description: "Regions or variables moving in opposing directions from a shared driver",
+    description: "Regions or Earth parameters moving in opposing directions from a shared driver",
   },
   causal: {
     label: "Causal & Transport",

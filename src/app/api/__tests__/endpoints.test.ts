@@ -14,9 +14,12 @@ import { POST as postRevise } from "@/app/api/graph/revise/route";
 import { POST as postWebhook } from "@/app/api/graph/nodes/[nodeId]/webhook/route";
 import { POST as postDatasetImport } from "@/app/api/earth/dataset-import/route";
 import { POST as postOpenFeeds } from "@/app/api/earth/open-feeds/route";
+import { GET as getSolarGraph } from "@/app/api/earth/solar-graph/route";
 import { GET as getTimeSeries } from "@/app/api/earth/timeseries/route";
 import { POST as postDetective } from "@/app/api/ai/detective/route";
 import { POST as postMcp } from "@/app/api/mcp/route";
+import { GET as getOpenApi } from "@/app/api/mcp/openapi/route";
+import { GIBS_LAYERS } from "@/lib/earth/nasaGibsRegional";
 import { clearCurrentConditionsCache } from "@/lib/earth/currentConditionsClient";
 
 describe("Earth Trend Detective API & MCP Endpoints", () => {
@@ -476,7 +479,7 @@ describe("Earth Trend Detective API & MCP Endpoints", () => {
     expect(mlJson.schema_version).toBe("etg-ml-v1");
     expect(mlJson.edge_index[0].length).toBe(1);
 
-    // MCP 13 tools + etg_predict_from_graph + etg_scan_trend_microscope
+    // MCP 16 tools including open-feeds, GIBS imagery, and Denver Solar Graph parity
     const listRes = await postMcp(
       new NextRequest("http://localhost:3000/api/mcp", {
         method: "POST",
@@ -486,13 +489,16 @@ describe("Earth Trend Detective API & MCP Endpoints", () => {
     );
     const listJson = (await listRes.json()) as { result: { tools: Array<{ name: string }> } };
     const toolNames = listJson.result.tools.map((t) => t.name);
-    expect(toolNames.length).toBe(13);
+    expect(toolNames.length).toBe(16);
     expect(toolNames).toContain("etg_connect_nodes");
     expect(toolNames).toContain("etg_unlink_or_update");
     expect(toolNames).toContain("etg_traverse_subgraph");
     expect(toolNames).toContain("etg_discover_missing_links");
     expect(toolNames).toContain("etg_predict_from_graph");
     expect(toolNames).toContain("etg_scan_trend_microscope");
+    expect(toolNames).toContain("etg_ingest_open_feed");
+    expect(toolNames).toContain("etg_resolve_gibs_imagery");
+    expect(toolNames).toContain("etg_query_solar_graph");
 
     const mcpPredRes = await postMcp(
       new NextRequest("http://localhost:3000/api/mcp", {
@@ -784,7 +790,7 @@ describe("Earth Trend Detective API & MCP Endpoints", () => {
       expect(ledgerJson.summary.scored_count).toBe(1);
       expect(ledgerJson.summary.ci95_coverage_pct).toBe(100);
 
-      // Verify MCP tools/list stays at 13 tools & etg_predict_from_graph log_prospective works
+      // Verify MCP tools/list stays at 16 tools & etg_predict_from_graph log_prospective works
       const mcpListRes = await postMcp(
         new NextRequest("http://localhost:3000/api/mcp", {
           method: "POST",
@@ -795,7 +801,7 @@ describe("Earth Trend Detective API & MCP Endpoints", () => {
       const mcpListJson = (await mcpListRes.json()) as {
         result: { tools: Array<{ name: string }> };
       };
-      expect(mcpListJson.result.tools).toHaveLength(13);
+      expect(mcpListJson.result.tools).toHaveLength(16);
 
       const mcpLogRes = await postMcp(
         new NextRequest("http://localhost:3000/api/mcp", {
@@ -1335,5 +1341,282 @@ describe("GET /api/earth/timeseries partial survival & failure vs unavailable ta
       nodes: Array<{ uuid: string }>;
     };
     expect(excludeBody.nodes.some((n) => n.uuid === humanSignal.uuid)).toBe(false);
+
+    // MCP etg_traverse_subgraph honors include_superseded: false
+    const mcpTraverseRes = await postMcp(
+      new NextRequest("http://localhost:3000/api/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 210,
+          method: "tools/call",
+          params: {
+            name: "etg_traverse_subgraph",
+            arguments: {
+              root_uuid: revisedNode.uuid,
+              max_hops: 1,
+              include_superseded: false,
+            },
+          },
+        }),
+      })
+    );
+    expect(mcpTraverseRes.status).toBe(200);
+    const mcpTraverseRpc = (await mcpTraverseRes.json()) as {
+      result: { isError?: boolean; content: Array<{ text: string }> };
+    };
+    expect(mcpTraverseRpc.result.isError).toBeFalsy();
+    const mcpTraverseParsed = JSON.parse(mcpTraverseRpc.result.content[0].text) as {
+      nodes: Array<{ uuid: string }>;
+    };
+    expect(mcpTraverseParsed.nodes.some((n) => n.uuid === humanSignal.uuid)).toBe(false);
+  });
+
+  it("ensures OpenAPI 3.1.0 & MCP parity across all graph/Earth endpoints with strict scientific ontology", async () => {
+    const openapiRes = await getOpenApi(new NextRequest("http://localhost:3000/api/mcp/openapi"));
+    expect(openapiRes.status).toBe(200);
+    const spec = (await openapiRes.json()) as {
+      openapi: string;
+      paths: Record<string, Record<string, { parameters?: Array<{ name: string; schema?: { enum?: string[] } }> }>>;
+    };
+    expect(spec.openapi).toBe("3.1.0");
+
+    // Verify zero SaaS / Blueprint terms anywhere in OpenAPI spec or MCP tools list
+    const listRes = await postMcp(
+      new NextRequest("http://localhost:3000/api/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 301, method: "tools/list" }),
+      })
+    );
+    const listJson = (await listRes.json()) as {
+      result: { tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }> };
+    };
+    expect(listJson.result.tools).toHaveLength(16);
+
+    const combinedText = `${JSON.stringify(spec)}\n${JSON.stringify(listJson)}`;
+    expect(combinedText).not.toMatch(
+      /\b(BKN|Billing|Calendar|Variable|Task|Goal|Doc|Note|Project|Logic)\b/
+    );
+
+    // Every MCP tool has a corresponding /api/mcp/messages?tool=<name> POST operation
+    for (const tool of listJson.result.tools) {
+      expect(spec.paths[`/api/mcp/messages?tool=${tool.name}`]?.post).toBeDefined();
+    }
+
+    // Verify parity for all required active routes & methods
+    expect(spec.paths["/api/graph/traverse"]?.get).toBeDefined();
+    expect(spec.paths["/api/graph/traverse"]?.post).toBeDefined();
+    expect(spec.paths["/api/graph/predict"]?.get).toBeDefined();
+    expect(spec.paths["/api/graph/predict"]?.post).toBeDefined();
+    expect(spec.paths["/api/graph/microscope"]?.get).toBeDefined();
+    expect(spec.paths["/api/graph/microscope"]?.post).toBeDefined();
+    expect(spec.paths["/api/earth/open-feeds"]?.post).toBeDefined();
+    expect(spec.paths["/api/earth/gibs"]?.get).toBeDefined();
+    expect(spec.paths["/api/earth/solar-graph"]?.get).toBeDefined();
+
+    // Verify dynamic GIBS layer enum parity between OpenAPI and nasaGibsRegional GIBS_LAYERS
+    const gibsLayerParam = spec.paths["/api/earth/gibs"]?.get?.parameters?.find(
+      (p) => p.name === "layer"
+    );
+    expect(gibsLayerParam?.schema?.enum).toEqual([...Object.keys(GIBS_LAYERS), "borders"]);
+
+    // Execute etg_resolve_gibs_imagery for global + regional scopes offline
+    const gibsToolRes = await postMcp(
+      new NextRequest("http://localhost:3000/api/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 302,
+          method: "tools/call",
+          params: {
+            name: "etg_resolve_gibs_imagery",
+            arguments: {
+              layer: "sst_anomaly",
+              scope: "regional",
+              lat: 39.74,
+              lng: -104.99,
+              camera_radius: 1.5,
+            },
+          },
+        }),
+      })
+    );
+    expect(gibsToolRes.status).toBe(200);
+    const gibsRpc = (await gibsToolRes.json()) as {
+      result: { isError?: boolean; content: Array<{ text: string }> };
+    };
+    expect(gibsRpc.result.isError).toBeFalsy();
+    const gibsParsed = JSON.parse(gibsRpc.result.content[0].text) as {
+      globalSpec: { proxyUrl: string };
+      regionalSpec: { proxyUrl: string } | null;
+    };
+    expect(gibsParsed.globalSpec.proxyUrl).toContain("/api/earth/gibs?layer=sst_anomaly");
+    expect(gibsParsed.regionalSpec?.proxyUrl).toContain("layer=sst_anomaly");
+
+    // Mock Copernicus CAMS + NASA POWER + Open-Meteo and execute etg_ingest_open_feed + etg_query_solar_graph + /api/earth/solar-graph
+    const startMs = Date.UTC(2022, 0, 1);
+    const allsky: Record<string, number> = {};
+    const clrsky: Record<string, number> = {};
+    const t2m: Record<string, number> = {};
+    const rh2m: Record<string, number> = {};
+    const precip: Record<string, number> = {};
+    const ws10m: Record<string, number> = {};
+    const wd10m: Record<string, number> = {};
+    const ps: Record<string, number> = {};
+    const hourlyTime: string[] = [];
+    const hourlyCloud: number[] = [];
+    const hourlyPs: number[] = [];
+    const hourlyRh: number[] = [];
+    const hourlyWs: number[] = [];
+    const hourlyWd: number[] = [];
+    for (let i = 0; i < 900; i++) {
+      const dt = new Date(startMs + i * 86_400_000);
+      const iso = dt.toISOString().slice(0, 10);
+      const ymd = iso.replace(/-/g, "");
+      const clr = 5.3 + 2.1 * Math.sin(((i % 365) * 2 * Math.PI) / 365);
+      const kt = 0.72 + Math.sin(i * 0.3) * 0.16;
+      clrsky[ymd] = clr;
+      allsky[ymd] = clr * kt;
+      t2m[ymd] = 11;
+      rh2m[ymd] = 48;
+      precip[ymd] = kt < 0.6 ? 1.8 : 0;
+      ws10m[ymd] = 4.2;
+      wd10m[ymd] = 270;
+      ps[ymd] = 83;
+      for (const hr of ["18:00", "21:00", "23:00"]) {
+        hourlyTime.push(`${iso}T${hr}`);
+        hourlyCloud.push(kt < 0.6 ? 76 : 16);
+        hourlyPs.push(hr === "18:00" ? 830 : 828);
+        hourlyRh.push(kt < 0.6 ? 72 : 38);
+        hourlyWs.push(5.0);
+        hourlyWd.push(270);
+      }
+    }
+    const camsTimes: string[] = [];
+    const camsVals: number[] = [];
+    for (let idx = 0; idx < 12; idx++) {
+      const y = 2024;
+      const m = idx + 1;
+      for (let h = 0; h < 24; h++) {
+        camsTimes.push(`${y}-${String(m).padStart(2, "0")}-01T${String(h).padStart(2, "0")}:00`);
+        camsVals.push(8.5 + idx * 0.35);
+      }
+    }
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("air-quality-api.open-meteo.com")) {
+        return new Response(JSON.stringify({ hourly: { time: camsTimes, pm2_5: camsVals } }), {
+          status: 200,
+        });
+      }
+      if (url.includes("power.larc.nasa.gov")) {
+        return new Response(
+          JSON.stringify({
+            properties: {
+              parameter: {
+                ALLSKY_SFC_SW_DWN: allsky,
+                CLRSKY_SFC_SW_DWN: clrsky,
+                T2M: t2m,
+                RH2M: rh2m,
+                PRECTOTCORR: precip,
+                WS10M: ws10m,
+                WD10M: wd10m,
+                PS: ps,
+              },
+            },
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes("archive-api.open-meteo.com") && url.includes("hourly=")) {
+        const nodePayload = {
+          hourly: {
+            time: hourlyTime,
+            cloud_cover: hourlyCloud,
+            surface_pressure: hourlyPs,
+            relative_humidity_2m: hourlyRh,
+            wind_speed_10m: hourlyWs,
+            wind_direction_10m: hourlyWd,
+          },
+        };
+        return new Response(JSON.stringify(Array.from({ length: 7 }, () => nodePayload)), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({ daily: {} }), { status: 200 });
+    });
+
+    try {
+      const openFeedToolRes = await postMcp(
+        new NextRequest("http://localhost:3000/api/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 303,
+            method: "tools/call",
+            params: {
+              name: "etg_ingest_open_feed",
+              arguments: {
+                feed: "cams_pm25",
+                lat: 40.015,
+                lng: -105.2705,
+                granularity: "monthly",
+              },
+            },
+          }),
+        })
+      );
+      expect(openFeedToolRes.status).toBe(200);
+      const openFeedRpc = (await openFeedToolRes.json()) as {
+        result: { isError?: boolean; content: Array<{ text: string }> };
+      };
+      expect(openFeedRpc.result.isError).toBeFalsy();
+      expect(openFeedRpc.result.content[0].text).toContain("Copernicus CAMS PM2.5");
+
+      const solarToolRes = await postMcp(
+        new NextRequest("http://localhost:3000/api/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 304,
+            method: "tools/call",
+            params: {
+              name: "etg_query_solar_graph",
+              arguments: {
+                start_year: 2022,
+                end_year: 2025,
+                force_refresh: true,
+              },
+            },
+          }),
+        })
+      );
+      expect(solarToolRes.status).toBe(200);
+      const solarRpc = (await solarToolRes.json()) as {
+        result: { isError?: boolean; content: Array<{ text: string }> };
+      };
+      expect(solarRpc.result.isError).toBeFalsy();
+      const solarParsed = JSON.parse(solarRpc.result.content[0].text) as {
+        nodes: unknown[];
+        metrics: { graphAware: { rmse: number } };
+      };
+      expect(solarParsed.nodes.length).toBeGreaterThanOrEqual(4);
+      expect(Number.isFinite(solarParsed.metrics.graphAware.rmse)).toBe(true);
+
+      const solarRouteRes = await getSolarGraph(
+        new NextRequest("http://localhost:3000/api/earth/solar-graph?startYear=2022&endYear=2025")
+      );
+      expect(solarRouteRes.status).toBe(200);
+      const solarRouteJson = (await solarRouteRes.json()) as { nodes: unknown[] };
+      expect(solarRouteJson.nodes.length).toBe(solarParsed.nodes.length);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

@@ -91,7 +91,8 @@ function inferDeterministicActionsFromQuestion(
 function buildSystemInstruction(allowEdits: boolean): string {
   const base = [
     "You are the Earth Trend Detective AI inside an interactive NASA & Earth-system Knowledge Graph (ETG) workbench.",
-    "PROPORTIONALITY RULE: Match your tone and length to the user's message. If the user sends a typo/fragment (e.g. 'f'), a greeting ('hi'), or a quick question ('how many nodes?'), reply naturally in 1-2 short sentences — NEVER output a multi-paragraph telemetry report unless the user asks for analysis! When asked for scientific trend analysis, cite [uuid]s, Mann-Kendall p-values, and Theil-Sen slopes clearly.",
+    "STRICT SCIENTIFIC ONTOLOGY RULE: Use ONLY the four ETG node classes — Concept (regions, Earth systems, satellites, community hardware), Signal (geo-pinned scientific observations), Insight (detected trends, dipoles, teleconnections), and Rule (corroboration gates) — along with epistemic edges (`drives_opposite`, `supersedes`, `corroborates`, `teleconnects`, etc.) and ETG Trend Microscope (`etg-trend-microscope-v1`) metrics. NEVER use SaaS or productivity terms such as Variable, Logic, Task, Goal, Doc, Note, Project, Calendar, Billing, or BKN.",
+    "PROPORTIONALITY RULE: Match your tone and length to the user's message. If the user sends a typo/fragment (e.g. 'f'), a greeting ('hi'), or a brief question ('how many nodes?'), reply naturally in 1-2 short sentences — NEVER output a multi-paragraph telemetry report unless the user asks for analysis! When asked for scientific trend analysis, cite [uuid]s, Mann-Kendall p-values, and Theil-Sen slopes clearly.",
   ];
 
   if (!allowEdits) {
@@ -496,7 +497,7 @@ export async function POST(req: NextRequest) {
     if (casualPrompt && applied.length === 0 && blocked.length === 0) {
       const reply =
         userPrompt.length <= 3
-          ? `Hey! Looks like a quick note ("${userPrompt}"). Ask about an Earth trend or tell me to add a live signal, create a node, or connect links (${snapshot.stats.totalNodes}N · ${snapshot.stats.totalEdges}E).`
+          ? `Hey! Looks like a brief message ("${userPrompt}"). Ask about an Earth trend or tell me to add a live signal, create a node, or connect links (${snapshot.stats.totalNodes}N · ${snapshot.stats.totalEdges}E).`
           : `Hi! Ask about any region or tell me how to edit the Knowledge Graph — e.g., add a live Boulder signal, create an Insight, or wire latent connections (${snapshot.stats.totalNodes}N · ${snapshot.stats.totalEdges}E).`;
       return NextResponse.json({
         engine: "Deterministic ETG Reasoner + Integrity Guard",
@@ -596,8 +597,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const selectedSupersedesEdges = selectedNode
+      ? freshSnap.edges.filter(
+          (e) =>
+            e.type === "supersedes" &&
+            (e.source_uuid === selectedNode.uuid || e.target_uuid === selectedNode.uuid)
+        )
+      : [];
+    const nodeNameByUuid = new Map(freshSnap.nodes.map((n) => [n.uuid, n.properties.name]));
+    const lineageDetails = selectedSupersedesEdges
+      .map((e) => {
+        if (e.source_uuid === selectedNode?.uuid) {
+          return `supersedes [${e.target_uuid}] (${nodeNameByUuid.get(e.target_uuid) ?? e.target_uuid})`;
+        }
+        return `superseded by [${e.source_uuid}] (${nodeNameByUuid.get(e.source_uuid) ?? e.source_uuid})`;
+      })
+      .join("; ");
+
     lines.push(
-      `**Epistemic Integrity:** Multi-source corroboration enforces ≥2 independent observational systems, while historical revisions remain auditable via \`supersedes\` lineage (${freshSnap.stats.supersededCount} superseded assessment preserved).`
+      `**Epistemic Integrity:** Multi-source corroboration enforces ≥2 independent observational systems, while historical revisions remain auditable via \`supersedes\` lineage (${freshSnap.stats.supersededCount} superseded assessment${freshSnap.stats.supersededCount === 1 ? "" : "s"} preserved${lineageDetails ? `; selected lineage: ${lineageDetails}` : ""}).`
     );
 
     return NextResponse.json({

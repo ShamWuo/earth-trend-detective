@@ -940,6 +940,8 @@ export interface ScreenLabelCandidate {
   x: number;
   y: number;
   priority: number;
+  extraWidthPx?: number;
+  boxHeightPx?: number;
 }
 
 export interface PlacedScreenLabel extends ScreenLabelCandidate {
@@ -949,7 +951,7 @@ export interface PlacedScreenLabel extends ScreenLabelCandidate {
 
 /**
  * Selects a collision-free subset of screen-space pill labels in priority order
- * so 3D node pills never pile on top of each other.
+ * so 3D node pills and 2D zoom-out labels never pile on top of each other.
  */
 export function selectNonOverlappingLabels(
   candidates: ScreenLabelCandidate[],
@@ -962,8 +964,9 @@ export function selectNonOverlappingLabels(
 
   for (const cand of sorted) {
     if (placed.length >= maxLabels) break;
-    const textWidth = Math.min(188, Math.max(76, cand.title.length * 6.4 + 24));
-    const boxHeight = 22;
+    const extraW = cand.extraWidthPx ?? 0;
+    const textWidth = Math.min(188 + extraW, Math.max(76, cand.title.length * 6.4 + 24 + extraW));
+    const boxHeight = cand.boxHeightPx ?? 22;
 
     const left = cand.x - textWidth / 2;
     const right = cand.x + textWidth / 2;
@@ -990,6 +993,68 @@ export function selectNonOverlappingLabels(
         height: boxHeight,
       });
     }
+  }
+
+  return placed;
+}
+
+export interface ScreenEdgePillCandidate {
+  uuid: string;
+  x: number;
+  y: number;
+  label: string;
+  priority: number;
+  width?: number;
+  height?: number;
+}
+
+export interface PlacedEdgePill extends ScreenEdgePillCandidate {
+  width: number;
+  height: number;
+}
+
+/**
+ * De-overlaps 2D edge midpoint relationship pills against each other and node geometry
+ * so dense neighborhood bundles never render illegible stacked badges.
+ */
+export function selectNonOverlappingEdgePills(
+  candidates: ScreenEdgePillCandidate[],
+  avoidBoxes: Array<{ x: number; y: number; halfW: number; halfH: number }> = [],
+  maxPills = 14,
+  padX = 8,
+  padY = 6
+): PlacedEdgePill[] {
+  const sorted = [...candidates].sort((a, b) => b.priority - a.priority);
+  const placed: PlacedEdgePill[] = [];
+
+  for (const cand of sorted) {
+    if (placed.length >= maxPills) break;
+    const width = cand.width ?? Math.max(68, cand.label.length * 6.2 + 20);
+    const height = cand.height ?? 20;
+    const left = cand.x - width / 2;
+    const right = cand.x + width / 2;
+    const top = cand.y - height / 2;
+    const bottom = cand.y + height / 2;
+
+    const hitsNode = avoidBoxes.some((box) => {
+      const bLeft = box.x - box.halfW - 4;
+      const bRight = box.x + box.halfW + 4;
+      const bTop = box.y - box.halfH - 4;
+      const bBottom = box.y + box.halfH + 4;
+      return left < bRight && right > bLeft && top < bBottom && bottom > bTop;
+    });
+    if (hitsNode && cand.priority < 500) continue;
+
+    const hitsPill = placed.some((existing) => {
+      const exLeft = existing.x - existing.width / 2 - padX;
+      const exRight = existing.x + existing.width / 2 + padX;
+      const exTop = existing.y - existing.height / 2 - padY;
+      const exBottom = existing.y + existing.height / 2 + padY;
+      return left < exRight && right > exLeft && top < exBottom && bottom > exTop;
+    });
+    if (hitsPill) continue;
+
+    placed.push({ ...cand, width, height });
   }
 
   return placed;

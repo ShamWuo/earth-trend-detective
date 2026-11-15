@@ -799,7 +799,7 @@ export function DetectiveWorkspace({
     setActiveTopics([]);
   }, []);
 
-  // Switch primary view with View Transitions API + focus management
+  // Switch primary view with typed View Transitions API (coalesce-to-graph / expand-to-globe) + focus management
   const handleSwitchView = useCallback(
     (nextMode: WorkspaceViewMode) => {
       if (nextMode === viewMode) return;
@@ -809,15 +809,38 @@ export function DetectiveWorkspace({
       };
 
       const docWithTransition = document as Document & {
-        startViewTransition?: (cb: () => void) => { finished: Promise<void> };
+        startViewTransition?: (
+          arg:
+            | (() => void)
+            | {
+                update: () => void;
+                types?: string[];
+              }
+        ) => { finished: Promise<void> };
       };
 
+      const transitionType =
+        nextMode === "graph" ? "coalesce-to-graph" : "expand-to-globe";
+
       if (typeof docWithTransition.startViewTransition === "function") {
-        const transition = docWithTransition.startViewTransition(() => {
+        let updated = false;
+        const applyUpdate = () => {
+          updated = true;
           flushSync(() => {
             setViewMode(nextMode);
           });
-        });
+        };
+        let transition: { finished: Promise<void> };
+        try {
+          transition = docWithTransition.startViewTransition({
+            update: applyUpdate,
+            types: [transitionType],
+          });
+        } catch {
+          transition = updated
+            ? { finished: Promise.resolve() }
+            : docWithTransition.startViewTransition(applyUpdate);
+        }
         void transition.finished.finally(() => {
           focusStageHeading();
         });
@@ -2779,6 +2802,7 @@ export function DetectiveWorkspace({
             traversalFilter={traversalFilter}
             roleByNode={activeTraversal?.roleByNode ?? EMPTY_ROLE_BY_NODE}
             hopByNode={activeTraversal?.hopByNode ?? EMPTY_HOP_BY_NODE}
+            microscopeByNode={microscopeByNode}
             connectMode={connectMode}
             connectSourceUuid={connectSourceUuid}
             discoveringLinks={discoveringLinks}

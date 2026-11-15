@@ -134,7 +134,7 @@ export const CHALLENGE_SPACE_AGENCY_RESOURCES: readonly ChallengeAgencyResource[
     group: "NASA Data & Resources",
     title: "NASA Giovanni",
     url: "https://giovanni.gsfc.nasa.gov/",
-    summary: "NASA GES DISC web environment for multi-variable Earth time-series generation and CSV export.",
+    summary: "NASA GES DISC web environment for multi-parameter Earth time-series generation and CSV export.",
     integrationRole: "Import Parser Ready",
     integrationNote: "Supports direct coordinate deep-links and native Giovanni CSV preamble ingestion.",
   },

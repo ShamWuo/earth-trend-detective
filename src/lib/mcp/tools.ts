@@ -1,9 +1,27 @@
 import { discoverGlobalEarthTrends } from "@/lib/discovery/globalTrendPipeline";
+import {
+  GIBS_LAYERS,
+  computeGlobalBordersProxyUrl,
+  computeGlobalLayerSpec,
+  computeRegionalTileSpec,
+  type ActiveGibsLayerId,
+} from "@/lib/earth/nasaGibsRegional";
+import {
+  fetchCamsSurfacePm25Series,
+  fetchGlofasDischargeSeries,
+  fetchNearestUsgsGaugeAnnualSeries,
+  type OpenFeedSeriesResult,
+} from "@/lib/earth/openFeedsClient";
 import { getEtgStore, type TemporalBucket } from "@/lib/graph/etgStore";
-import { predictFromGraph, predictRegion } from "@/lib/graph/graphPredictor";
+import {
+  materializeDenverSolarGraphIntoEtg,
+  predictFromGraph,
+  predictRegion,
+} from "@/lib/graph/graphPredictor";
 import { scanTrendMicroscopeAsync } from "@/lib/graph/trendMicroscope";
 import { fetchEarthTimeSeries } from "@/lib/nasa/nasaPowerClient";
-import { compareRegionalSeries } from "@/lib/stats/trendEngine";
+import { fetchDenverSolarClimateGraph } from "@/lib/solar/denverClimateGraph";
+import { analyzeTimeSeries, compareRegionalSeries } from "@/lib/stats/trendEngine";
 import type {
   ETGDatasetId,
   ETGEdgeProperties,
@@ -256,7 +274,16 @@ export const ETG_MCP_TOOLS: readonly EtgMcpToolDefinition[] = [
         },
         max_hops: { type: "number", description: "Neighborhood depth 1..6 (default 2)." },
         direction: { type: "string", enum: ["upstream", "downstream", "both"] },
+        edge_types: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional relationship types to traverse (e.g., leads, drives_opposite, supersedes).",
+        },
         min_weight: { type: "number", description: "Minimum edge weight filter (0..1)." },
+        include_superseded: {
+          type: "boolean",
+          description: "Whether to include superseded historical assessments (default true).",
+        },
       },
       required: ["root_uuid"],
     },
@@ -371,6 +398,80 @@ export const ETG_MCP_TOOLS: readonly EtgMcpToolDefinition[] = [
         },
       },
       required: [],
+    },
+  },
+  {
+    name: "etg_ingest_open_feed",
+    description:
+      "Fetch live open physical Earth feeds (Copernicus CAMS surface PM2.5, USGS river gauge discharge, or Copernicus GloFAS discharge) at lat/lng, compute Mann-Kendall & Theil-Sen statistics, and ingest into the ETG.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        feed: {
+          type: "string",
+          enum: ["cams_pm25", "usgs_gauge", "glofas_discharge"],
+          description: "Open physical Earth observation feed ID.",
+        },
+        lat: { type: "number", description: "Latitude (-90..90)." },
+        lng: { type: "number", description: "Longitude (-180..180)." },
+        start_year: { type: "number", description: "Start year (defaults to 2022 for cams_pm25, 1995 for hydrology)." },
+        end_year: { type: "number", description: "End year (defaults to 2025)." },
+        granularity: {
+          type: "string",
+          enum: ["annual", "monthly"],
+          description: "Series aggregation granularity.",
+        },
+        label: { type: "string", description: "Optional human-readable station or observation title." },
+      },
+      required: ["feed", "lat", "lng"],
+    },
+  },
+  {
+    name: "etg_resolve_gibs_imagery",
+    description:
+      "Resolve NASA GIBS satellite WMS imagery layer metadata, temporal cadence ISO dates, and same-origin proxy URLs globally or zoomed around a regional coordinate.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        layer: {
+          type: "string",
+          enum: [...Object.keys(GIBS_LAYERS), "borders"],
+          description: "NASA GIBS satellite layer identifier or 'borders'.",
+        },
+        scope: {
+          type: "string",
+          enum: ["global", "regional"],
+          description: "Equirectangular global globe overlay or zoomed regional swatch (default global).",
+        },
+        lat: { type: "number", description: "Center latitude (-90..90) when scope='regional'." },
+        lng: { type: "number", description: "Center longitude (-180..180) when scope='regional'." },
+        camera_radius: {
+          type: "number",
+          description: "Optional regional camera orbital radius (1.05..3.2, default 1.65).",
+        },
+        cutoff_iso: {
+          type: "string",
+          description: "Optional timeline scrubber ISO date or year for historical satellite swath resolution.",
+        },
+      },
+      required: ["layer"],
+    },
+  },
+  {
+    name: "etg_query_solar_graph",
+    description:
+      "Evaluate the Front Range / Denver Solar Climate Graph using NASA POWER & Open-Meteo irradiance/advection telemetry with 3-way forecasting, optionally materializing the station Concept/Signal nodes into the live ETG.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        start_year: { type: "number", description: "Start year (2015..2023, default 2019)." },
+        end_year: { type: "number", description: "End year (default current UTC year)." },
+        force_refresh: { type: "boolean", description: "Bypass cached evaluation and fetch fresh telemetry." },
+        materialize_into_etg: {
+          type: "boolean",
+          description: "If true, materialize the Front Range station nodes and causal edges into the ETG store.",
+        },
+      },
     },
   },
 ];
@@ -681,7 +782,11 @@ export async function executeEtgMcpTool(
         rootUuid,
         maxHops: typeof args.max_hops === "number" ? args.max_hops : 2,
         direction: (args.direction as TraversalDirection) || "both",
+        edgeTypes: Array.isArray(args.edge_types)
+          ? (args.edge_types.filter((t): t is ETGRelationshipType => typeof t === "string"))
+          : undefined,
         minWeight: typeof args.min_weight === "number" ? args.min_weight : undefined,
+        includeSuperseded: args.include_superseded !== false,
       });
     }
 
@@ -803,6 +908,190 @@ export async function executeEtgMcpTool(
         };
       }
       return scan;
+    }
+
+    case "etg_ingest_open_feed": {
+      const feed = String(args.feed ?? "");
+      const lat = Number(args.lat);
+      const lng = Number(args.lng);
+      if (feed !== "cams_pm25" && feed !== "usgs_gauge" && feed !== "glofas_discharge") {
+        throw new Error(
+          "Unsupported feed. Choose one of: cams_pm25, usgs_gauge, glofas_discharge."
+        );
+      }
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lng) ||
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+      ) {
+        throw new Error("Valid lat (-90..90) and lng (-180..180) coordinates are required.");
+      }
+
+      const startYear = Number.isFinite(Number(args.start_year))
+        ? Number(args.start_year)
+        : feed === "cams_pm25"
+          ? 2022
+          : 1995;
+      const endYear = Number.isFinite(Number(args.end_year)) ? Number(args.end_year) : 2025;
+      const granularity: "annual" | "monthly" =
+        args.granularity === "annual" || args.granularity === "monthly"
+          ? args.granularity
+          : feed === "cams_pm25"
+            ? "monthly"
+            : "annual";
+
+      let feedResult: OpenFeedSeriesResult | null = null;
+      if (feed === "cams_pm25") {
+        feedResult = await fetchCamsSurfacePm25Series(lat, lng, startYear, endYear, granularity);
+      } else if (feed === "usgs_gauge") {
+        feedResult = await fetchNearestUsgsGaugeAnnualSeries(lat, lng, startYear, endYear);
+      } else {
+        feedResult = await fetchGlofasDischargeSeries(lat, lng, startYear, endYear, granularity);
+      }
+
+      if (!feedResult || feedResult.points.length < 6) {
+        throw new Error(
+          feed === "usgs_gauge"
+            ? `No active USGS river gauge with >= 6 years of annual discharge data found near (${lat.toFixed(2)}, ${lng.toFixed(2)}).`
+            : `No sufficient observations returned from ${feed} near (${lat.toFixed(2)}, ${lng.toFixed(2)}).`
+        );
+      }
+
+      const dataset: ETGDatasetId = feed === "cams_pm25" ? "air_quality" : "hydrology";
+      const summaryStats = analyzeTimeSeries(feedResult.points, {
+        lat: feedResult.siteInfo?.lat ?? lat,
+        lng: feedResult.siteInfo?.lng ?? lng,
+        dataset,
+        parameter: feedResult.metricName,
+        unit: feedResult.unit,
+        slopeUnit: `${feedResult.unit}/yr`,
+        provenance: feedResult.provenanceSource,
+      });
+
+      const latest = feedResult.points[feedResult.points.length - 1];
+      const cleanLabel =
+        typeof args.label === "string" && args.label.trim().length > 0
+          ? args.label.trim()
+          : feedResult.siteInfo
+            ? `${feedResult.siteInfo.siteName} (USGS ${feedResult.siteInfo.siteNo})`
+            : `${feedResult.metricName} (${lat.toFixed(2)}, ${lng.toFixed(2)})`;
+
+      const nodeSlug = `${feed}-${lat.toFixed(2)}_${lng.toFixed(2)}-${granularity}`;
+      const webhookResult = store.ingestHardwareWebhook(`openfeed-${nodeSlug}`, {
+        device_id: feedResult.siteInfo?.siteNo
+          ? `USGS-${feedResult.siteInfo.siteNo}`
+          : `${feedResult.parameterCode}-${lat.toFixed(2)}_${lng.toFixed(2)}`,
+        device_name: cleanLabel,
+        title: cleanLabel,
+        description: `${feedResult.provenanceSource} · ${feedResult.points.length} ${granularity} observations (${feedResult.points[0].date}..${latest.date}). ${summaryStats.verdict}. Source: ${feedResult.sourceUrl}`,
+        lat: feedResult.siteInfo?.lat ?? lat,
+        lng: feedResult.siteInfo?.lng ?? lng,
+        dataset,
+        producer_type: feed === "usgs_gauge" ? "iot_sensor" : "nasa_satellite",
+        value: latest.value,
+        unit: feedResult.unit,
+        observed_at: latest.date,
+        confidence: feed === "usgs_gauge" ? 0.96 : 0.9,
+        series: feedResult.points,
+      });
+
+      return {
+        status: "ingested",
+        feed,
+        provenance: feedResult.provenanceSource,
+        sourceUrl: feedResult.sourceUrl,
+        pointCount: feedResult.points.length,
+        summaryStats,
+        hardwareNode: webhookResult.hardwareNode,
+        signalNode: webhookResult.signalNode,
+        discoveredConnectionsCount: webhookResult.discoveredConnections.length,
+        linkedInsightsCount: webhookResult.linkedInsights.length,
+      };
+    }
+
+    case "etg_resolve_gibs_imagery": {
+      const rawLayer = String(args.layer ?? "");
+      if (rawLayer === "borders") {
+        return {
+          layer: "borders",
+          scope: "global",
+          wmsLayers: "Coastlines,Reference_Features",
+          format: "image/png",
+          proxyUrl: computeGlobalBordersProxyUrl(),
+        };
+      }
+      if (!Object.prototype.hasOwnProperty.call(GIBS_LAYERS, rawLayer)) {
+        throw new Error(
+          `Unsupported NASA GIBS layer '${rawLayer}'. Valid layers: ${[...Object.keys(GIBS_LAYERS), "borders"].join(", ")}.`
+        );
+      }
+      const layerId = rawLayer as ActiveGibsLayerId;
+      let cutoffMs: number | undefined;
+      if (typeof args.cutoff_iso === "string" && args.cutoff_iso.trim()) {
+        const trimmed = args.cutoff_iso.trim();
+        if (/^\d{4}$/.test(trimmed)) {
+          cutoffMs = Date.UTC(Number(trimmed), 6, 1);
+        } else {
+          const parsed = Date.parse(trimmed);
+          if (Number.isFinite(parsed)) cutoffMs = parsed;
+        }
+      }
+      const globalSpec = computeGlobalLayerSpec({ layerId, cutoffMs });
+      const scope = args.scope === "regional" ? "regional" : "global";
+      let regionalSpec = null;
+      if (scope === "regional" || (typeof args.lat === "number" && typeof args.lng === "number")) {
+        const lat = Number(args.lat);
+        const lng = Number(args.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          throw new Error("Regional GIBS imagery resolution requires finite lat and lng coordinates.");
+        }
+        regionalSpec = computeRegionalTileSpec({
+          lat,
+          lng,
+          cameraRadius: typeof args.camera_radius === "number" ? args.camera_radius : 1.65,
+          layerId,
+          cutoffMs,
+        });
+      }
+      const meta = GIBS_LAYERS[layerId];
+      return {
+        layer: layerId,
+        label: meta.label,
+        shortLabel: meta.shortLabel,
+        resolutionLabel: meta.resolutionLabel,
+        wmsLayers: scope === "global" ? meta.globalWmsLayers : meta.wmsLayers,
+        scope,
+        globalSpec,
+        regionalSpec,
+      };
+    }
+
+    case "etg_query_solar_graph": {
+      const currentYear = new Date().getUTCFullYear();
+      const startYear = Math.max(2015, Math.min(2023, Number(args.start_year) || 2019));
+      const endYear = Math.max(
+        startYear + 2,
+        Math.min(currentYear, Number(args.end_year) || currentYear)
+      );
+      const forceRefresh = Boolean(args.force_refresh);
+      const solarResult = await fetchDenverSolarClimateGraph(startYear, endYear, {
+        forceRefresh,
+      });
+      if (args.materialize_into_etg === true) {
+        const materialized = await materializeDenverSolarGraphIntoEtg(store);
+        return {
+          ...solarResult,
+          materialized: {
+            hubUuid: materialized.hubUuid,
+            createdNodesCount: materialized.createdNodes.length,
+            createdEdgesCount: materialized.createdEdges.length,
+          },
+        };
+      }
+      return solarResult;
     }
 
     default:

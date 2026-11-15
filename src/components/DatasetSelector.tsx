@@ -11,7 +11,7 @@ interface VariableGuidePopoverButtonProps {
 }
 
 export function VariableGuidePopoverButton({
-  label = "? Variable Guide",
+  label = "? Parameter Guide",
   compact = false,
 }: VariableGuidePopoverButtonProps) {
   const guideId = useId();
@@ -23,7 +23,7 @@ export function VariableGuidePopoverButton({
         type="button"
         popoverTarget={guideId}
         aria-expanded={guideOpen}
-        title="Plain-English guide to every NASA satellite and physical Earth variable"
+        title="Plain-English guide to every NASA satellite and physical Earth parameter"
         className={
           compact
             ? "etg-guide-trigger inline-flex items-center gap-1 rounded-sm border border-border bg-surface-elevated px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
@@ -48,7 +48,7 @@ export function VariableGuidePopoverButton({
         <div className="mb-2.5 flex items-center justify-between gap-2 border-b border-border pb-2">
           <div>
             <h3 id={`${guideId}-title`} className="text-xs font-semibold text-text-primary">
-              Student Variable Guide
+              Student Parameter Guide
             </h3>
             <p className="text-[11px] text-text-subtle">
               Plain-English guide to every satellite &amp; sensor metric
@@ -58,7 +58,7 @@ export function VariableGuidePopoverButton({
             type="button"
             popoverTarget={guideId}
             popoverTargetAction="hide"
-            aria-label="Close variable guide"
+            aria-label="Close parameter guide"
             className="rounded-sm p-1 text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />

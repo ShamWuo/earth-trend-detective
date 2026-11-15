@@ -6,6 +6,7 @@ import {
   computeLayout3D,
   filterEtgGraphData,
   resolveDetailTier,
+  selectNonOverlappingEdgePills,
   selectNonOverlappingLabels,
 } from "@/lib/graph/graphVisuals";
 import type { ETGEdge, ETGNode } from "@/types/etg";
@@ -233,5 +234,56 @@ describe("graphVisuals layout and readability helpers", () => {
     const withOpposite = filterEtgGraphData(nodes, oppositeEdges, true, true);
     expect(withOpposite.visibleNodes.map((n) => n.uuid)).toEqual(["node-2", "node-3"]);
     expect(withOpposite.visibleEdges.map((e) => e.properties.uuid)).toEqual(["e-opp"]);
+  });
+
+  it("accounts for extra badge width in selectNonOverlappingLabels and de-overlaps edge midpoint pills", () => {
+    const labels = selectNonOverlappingLabels(
+      [
+        {
+          uuid: "primary",
+          title: "Arctic Warming",
+          label: "Insight",
+          color: "#fbbf24",
+          x: 200,
+          y: 200,
+          priority: 900,
+          extraWidthPx: 80,
+        },
+        {
+          uuid: "crowded-neighbor",
+          title: "Barents Anomaly",
+          label: "Signal",
+          color: "#38bdf8",
+          x: 295,
+          y: 200,
+          priority: 500,
+        },
+        {
+          uuid: "distant-node",
+          title: "Humboldt Upwelling",
+          label: "Concept",
+          color: "#34d399",
+          x: 520,
+          y: 360,
+          priority: 400,
+        },
+      ],
+      10,
+      10,
+      8
+    );
+    expect(labels.map((l) => l.uuid)).toEqual(["primary", "distant-node"]);
+
+    const edgePills = selectNonOverlappingEdgePills(
+      [
+        { uuid: "e-opposite", x: 100, y: 100, label: "⇄ Drives Opposite · r=-0.81", priority: 450 },
+        { uuid: "e-overlap", x: 112, y: 103, label: "Correlates · r=0.55", priority: 240 },
+        { uuid: "e-on-node", x: 420, y: 100, label: "Leads", priority: 240 },
+        { uuid: "e-focused-on-node", x: 425, y: 100, label: "Selected Edge", priority: 900 },
+        { uuid: "e-clear", x: 520, y: 260, label: "Supersedes", priority: 380 },
+      ],
+      [{ x: 422, y: 100, halfW: 124, halfH: 20 }]
+    );
+    expect(edgePills.map((p) => p.uuid)).toEqual(["e-focused-on-node", "e-opposite", "e-clear"]);
   });
 });

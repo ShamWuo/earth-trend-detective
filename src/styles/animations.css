@@ -8,6 +8,26 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes etg-coalesce-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+
+@keyframes etg-coalesce-in {
+  from { opacity: 0; transform: scale(1.035); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes etg-expand-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.035); }
+}
+
+@keyframes etg-expand-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .animate-fade-in {
   animation: fade-in var(--dur-base) var(--ease-out-expo) both;
 }
@@ -16,9 +36,37 @@
   animation: pulse-subtle 2.2s ease-in-out infinite;
 }
 
+/* View 1 (Globe) <-> View 2 (Coalesced ETG) directional stage transition */
+::view-transition-group(etg-stage) {
+  animation-duration: 280ms;
+  animation-timing-function: var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+html:active-view-transition-type(coalesce-to-graph)::view-transition-old(etg-stage) {
+  animation: etg-coalesce-out 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html:active-view-transition-type(coalesce-to-graph)::view-transition-new(etg-stage) {
+  animation: etg-coalesce-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+html:active-view-transition-type(expand-to-globe)::view-transition-old(etg-stage) {
+  animation: etg-expand-out 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html:active-view-transition-type(expand-to-globe)::view-transition-new(etg-stage) {
+  animation: etg-expand-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
   .animate-pulse-subtle {
+    animation: none !important;
+  }
+
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
     animation: none !important;
   }
 }

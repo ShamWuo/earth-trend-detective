@@ -41,6 +41,7 @@ import type {
   ETGPhenomenonType,
   ETGRelationshipType,
   GraphPredictionResult,
+  LinkTrendMicroscopeCue,
   NodeTrendMicroscopeCue,
   ProspectiveForecastRecord,
   ProspectiveLedgerSummary,
@@ -478,6 +479,48 @@ export function GraphNodeWorkbenchPanel({
       .filter((item): item is { edge: ETGEdge; node: ETGNode } => Boolean(item.node));
   }, [allEdges, selectedNode, nodeById]);
 
+  const { supersededByItems, supersedesPriorItems } = useMemo(() => {
+    if (!selectedNode) {
+      return {
+        supersededByItems: [] as Array<{ node: ETGNode; rationale?: string }>,
+        supersedesPriorItems: [] as Array<{ node: ETGNode; rationale?: string }>,
+      };
+    }
+    const supersededBy: Array<{ node: ETGNode; rationale?: string }> = [];
+    const seenBy = new Set<string>();
+    const supersedesPrior: Array<{ node: ETGNode; rationale?: string }> = [];
+    const seenPrior = new Set<string>();
+
+    for (const edge of allEdges) {
+      if (edge.type !== "supersedes") continue;
+      if (edge.target_uuid === selectedNode.uuid) {
+        const newer = nodeById.get(edge.source_uuid);
+        if (newer && !seenBy.has(newer.uuid)) {
+          seenBy.add(newer.uuid);
+          supersededBy.push({ node: newer, rationale: edge.properties.rationale });
+        }
+      }
+      if (edge.source_uuid === selectedNode.uuid) {
+        const prior = nodeById.get(edge.target_uuid);
+        if (prior && !seenPrior.has(prior.uuid)) {
+          seenPrior.add(prior.uuid);
+          supersedesPrior.push({ node: prior, rationale: edge.properties.rationale });
+        }
+      }
+    }
+
+    if (selectedNode.properties.superseded_by && !seenBy.has(selectedNode.properties.superseded_by)) {
+      const replacement = nodeById.get(selectedNode.properties.superseded_by);
+      if (replacement) {
+        supersededBy.push({ node: replacement });
+      }
+    }
+
+    return { supersededByItems: supersededBy, supersedesPriorItems: supersedesPrior };
+  }, [allEdges, selectedNode, nodeById]);
+
+  const [wiringMicroscopeKey, setWiringMicroscopeKey] = useState<string | null>(null);
+
   const nodeCandidates = useMemo(() => {
     if (!selectedNode) return candidateLinks;
     const anchored = candidateLinks.filter(
@@ -832,6 +875,50 @@ export function GraphNodeWorkbenchPanel({
       setLocalError(err instanceof Error ? err.message : "Failed to reconcile forecasts");
     } finally {
       setLedgerBusy(false);
+    }
+  };
+
+  const handleWireMicroscopeCoupling = async (coupling: LinkTrendMicroscopeCue) => {
+    const key = `${coupling.sourceUuid}->${coupling.targetUuid}`;
+    setWiringMicroscopeKey(key);
+    setLocalError(null);
+    try {
+      const relType: ETGRelationshipType =
+        coupling.polarity === "drives_opposite"
+          ? "drives_opposite"
+          : coupling.optimalLagSteps > 0
+            ? "leads"
+            : "correlates_with";
+      const res = await fetch("/api/graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "connect",
+          source_uuid: coupling.sourceUuid,
+          target_uuid: coupling.targetUuid,
+          type: relType,
+          optimal_lag_steps: coupling.optimalLagSteps,
+          lag_unit: "years",
+          weight: Number(coupling.trueCouplingProb.toFixed(3)),
+          correlation_r: Number(coupling.cleanPeakR.toFixed(3)),
+          mechanism: coupling.aiCue,
+          rationale: `Wired from ETG Trend Microscope (${microscopeScan?.engineUsed ?? "calibrated"}, lag=${coupling.optimalLagSteps}, clean r=${coupling.cleanPeakR.toFixed(2)}, P=${Math.round(coupling.trueCouplingProb * 100)}%).`,
+          authored_by: "ai",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to wire microscope coupling");
+      onSnapshotChange(
+        data.snapshot,
+        `Wired ${coupling.sourceName} → ${coupling.targetName} via Trend Microscope.`
+      );
+      setLocalStatus(
+        `Wired ${relType} link (${coupling.sourceName} → ${coupling.targetName}).`
+      );
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : "Failed to wire coupling");
+    } finally {
+      setWiringMicroscopeKey(null);
     }
   };
 
@@ -1485,6 +1572,12 @@ export function GraphNodeWorkbenchPanel({
                   {selectedNode.properties.phenomenon_type.replaceAll("_", " ")}
                 </span>
               )}
+              {(selectedNode.properties.status === "Superseded" ||
+                Boolean(selectedNode.properties.superseded_by)) && (
+                <span className="rounded-sm border border-purple-400 bg-purple-950 px-2 py-0.5 font-mono text-[10px] font-semibold text-purple-300">
+                  Superseded Assessment
+                </span>
+              )}
             </div>
             <h2 className="truncate text-sm font-semibold text-text-primary">
               {selectedNode.properties.name}
@@ -1597,22 +1690,44 @@ export function GraphNodeWorkbenchPanel({
               const secPct = Math.round(cue.dealiasing.secularShare * 100);
               const cycPct = Math.round(cue.dealiasing.oscillationShare * 100);
               const artPct = Math.max(0, 100 - secPct - cycPct);
-              const relCoupling = microscopeScan?.verifiedCouplings.find(
-                (c) => c.sourceUuid === selectedNode.uuid || c.targetUuid === selectedNode.uuid
-              );
-              const relIllusion = microscopeScan?.suppressedIllusions.find(
-                (c) => c.sourceUuid === selectedNode.uuid || c.targetUuid === selectedNode.uuid
-              );
+              const engineLabel =
+                microscopeScan?.engineUsed === "l4_microscope"
+                  ? "L4 Microscope"
+                  : microscopeScan?.engineUsed === "local_microscope_weights"
+                    ? "Local Weights"
+                    : "Calibrated";
+              const anchoredCouplings = (microscopeScan?.verifiedCouplings ?? [])
+                .filter(
+                  (c) => c.sourceUuid === selectedNode.uuid || c.targetUuid === selectedNode.uuid
+                )
+                .slice(0, 3);
+              const anchoredIllusions = (microscopeScan?.suppressedIllusions ?? [])
+                .filter(
+                  (c) => c.sourceUuid === selectedNode.uuid || c.targetUuid === selectedNode.uuid
+                )
+                .slice(0, 2);
+              const dirLabel =
+                cue.emergingDirection === "increasing"
+                  ? "↑ rising"
+                  : cue.emergingDirection === "decreasing"
+                    ? "↓ falling"
+                    : "→ stable";
+
               return (
-                <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2.5">
+                <div className="space-y-2 rounded-md border border-border bg-surface-inset p-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-1.5">
-                    <span className="ws-eyebrow flex items-center gap-1 text-sky-300">
-                      <Sparkles className="h-3 w-3" />
-                      AI Trend Microscope
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="ws-eyebrow flex items-center gap-1 text-sky-400">
+                        <Sparkles className="h-3 w-3" />
+                        ETG Trend Microscope
+                      </span>
+                      <span className="rounded-xs border border-border bg-surface px-1 py-0.5 font-mono text-[9px] text-text-subtle">
+                        {engineLabel}
+                      </span>
+                    </div>
                     <div className="flex items-center gap-1">
                       {cue.preMannKendallAlert && (
-                        <span className="rounded-xs border border-amber-400 bg-amber-950 px-1.5 py-0.5 font-mono text-[9px] font-bold text-amber-300">
+                        <span className="rounded-xs border border-sky-400 bg-sky-950 px-1.5 py-0.5 font-mono text-[9px] font-bold text-sky-300">
                           PRE-MK
                         </span>
                       )}
@@ -1623,39 +1738,175 @@ export function GraphNodeWorkbenchPanel({
                       </span>
                     </div>
                   </div>
+
+                  {/* Head 1: Early Inflection Radar */}
                   <div className="ws-numeric flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[10px] text-text-muted">
                     <span>Onset {Math.round(cue.onsetProb * 100)}%</span>
+                    <span>{dirLabel}</span>
                     {cue.leadStepsAhead > 0 && (
-                      <span>Lead ~{cue.leadStepsAhead.toFixed(1)} steps</span>
+                      <span>Lead +{cue.leadStepsAhead.toFixed(1)} steps</span>
                     )}
+                    <span>|Z| {cue.mkAbsZ.toFixed(2)}</span>
                     <span>Trust {Math.round(cue.trustGate * 100)}%</span>
                   </div>
-                  <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface">
-                    <div className="bg-emerald-400" style={{ width: `${secPct}%` }} />
-                    <div className="bg-purple-400" style={{ width: `${cycPct}%` }} />
-                    <div className="bg-rose-400" style={{ width: `${artPct}%` }} />
+
+                  {/* Head 3: 3-Simplex Cycle / Artifact De-Aliasing */}
+                  <div className="space-y-1">
+                    <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface">
+                      <div className="bg-emerald-400" style={{ width: `${secPct}%` }} />
+                      <div className="bg-purple-400" style={{ width: `${cycPct}%` }} />
+                      <div className="bg-rose-400" style={{ width: `${artPct}%` }} />
+                    </div>
+                    <div className="ws-numeric flex flex-wrap justify-between gap-x-2 font-mono text-[9.5px] text-text-subtle">
+                      <span>Secular {secPct}%</span>
+                      <span>Cycle {cycPct}%</span>
+                      <span>Artifact {artPct}%</span>
+                      <span>False Risk {Math.round(cue.dealiasing.falseTrendProb * 100)}%</span>
+                    </div>
+                    {cue.aiCue && (
+                      <p className="text-[10.5px] leading-snug text-text-muted">{cue.aiCue}</p>
+                    )}
                   </div>
-                  <div className="ws-numeric flex justify-between font-mono text-[9px] text-text-subtle">
-                    <span>Secular {secPct}%</span>
-                    <span>Cycle {cycPct}%</span>
-                    <span>Noise/Drift {artPct}%</span>
-                  </div>
-                  {relCoupling && (
-                    <div className="text-[10px] text-emerald-300">
-                      Coupling: {relCoupling.sourceName} → {relCoupling.targetName} (
-                      {relCoupling.polarity}, lag={relCoupling.optimalLagSteps}, P=
-                      {Math.round(relCoupling.trueCouplingProb * 100)}%)
+
+                  {/* Head 2: Verified Lead-Lag Couplings vs Suppressed Illusions */}
+                  {anchoredCouplings.length > 0 && (
+                    <div className="space-y-1 border-t border-border/70 pt-1.5">
+                      <div className="font-mono text-[9px] font-semibold uppercase tracking-wide text-emerald-400">
+                        Verified Lead-Lag Couplings ({anchoredCouplings.length})
+                      </div>
+                      {anchoredCouplings.map((c) => {
+                        const peerUuid =
+                          c.sourceUuid === selectedNode.uuid ? c.targetUuid : c.sourceUuid;
+                        const peerNode = nodeById.get(peerUuid);
+                        const isWired =
+                          c.alreadyWired ||
+                          allEdges.some(
+                            (e) =>
+                              (e.source_uuid === c.sourceUuid && e.target_uuid === c.targetUuid) ||
+                              (e.source_uuid === c.targetUuid && e.target_uuid === c.sourceUuid)
+                          );
+                        const key = `${c.sourceUuid}->${c.targetUuid}`;
+                        return (
+                          <div
+                            key={key}
+                            className="flex items-center justify-between gap-2 rounded-sm border border-border/80 bg-surface px-2 py-1"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1 text-[10px]">
+                                <span
+                                  className={`font-semibold ${
+                                    c.polarity === "drives_opposite"
+                                      ? "text-rose-400"
+                                      : "text-emerald-400"
+                                  }`}
+                                >
+                                  {c.polarity === "drives_opposite" ? "⇄ Opposite" : "→ Co-trend"}
+                                </span>
+                                {peerNode ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onSelectNode(peerNode)}
+                                    className="truncate font-medium text-text-primary hover:text-accent-fg hover:underline cursor-pointer text-left"
+                                  >
+                                    {peerNode.properties.name}
+                                  </button>
+                                ) : (
+                                  <span className="truncate text-text-primary">
+                                    {c.sourceUuid === selectedNode.uuid
+                                      ? c.targetName
+                                      : c.sourceName}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="ws-numeric font-mono text-[9px] text-text-subtle">
+                                lag={c.optimalLagSteps} · P={Math.round(c.trueCouplingProb * 100)}% · r=
+                                {c.rawPeakR.toFixed(2)}→{c.cleanPeakR.toFixed(2)}
+                              </div>
+                            </div>
+                            {isWired ? (
+                              <span className="shrink-0 rounded-xs border border-emerald-400 bg-emerald-950 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-emerald-300">
+                                Wired
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={wiringMicroscopeKey === key}
+                                onClick={() => void handleWireMicroscopeCoupling(c)}
+                                className="shrink-0 rounded-xs border border-amber-400 bg-amber-950 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-300 hover:border-amber-300 disabled:opacity-50 cursor-pointer"
+                              >
+                                {wiringMicroscopeKey === key ? "Wiring…" : "+ Wire"}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                  {relIllusion && (
-                    <div className="text-[10px] text-amber-300">
-                      Suppressed Illusion: {relIllusion.sourceName} ↔ {relIllusion.targetName}{" "}
-                      (P_illusion={Math.round(relIllusion.confounderProb * 100)}%)
+
+                  {anchoredIllusions.length > 0 && (
+                    <div className="space-y-1 border-t border-border/70 pt-1.5">
+                      <div className="font-mono text-[9px] font-semibold uppercase tracking-wide text-amber-400">
+                        Suppressed Seasonal / Drift Illusions ({anchoredIllusions.length})
+                      </div>
+                      {anchoredIllusions.map((ill) => (
+                        <div
+                          key={`${ill.sourceUuid}--${ill.targetUuid}`}
+                          className="rounded-sm border border-dashed border-amber-400/50 bg-amber-950/35 px-2 py-1 text-[10px]"
+                        >
+                          <div className="font-medium text-amber-300">
+                            {ill.sourceName} ↔ {ill.targetName}
+                          </div>
+                          <div className="ws-numeric font-mono text-[9px] text-text-muted">
+                            raw r={ill.rawPeakR.toFixed(2)} → clean r={ill.cleanPeakR.toFixed(2)} · P_illusion=
+                            {Math.round(ill.confounderProb * 100)}%
+                          </div>
+                          {ill.aiCue && <div className="text-[9.5px] text-text-subtle">{ill.aiCue}</div>}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
               );
             })()}
+
+            {(supersededByItems.length > 0 || supersedesPriorItems.length > 0) && (
+              <div className="space-y-1.5 rounded-md border border-purple-400/50 bg-purple-950/30 p-2.5">
+                <div className="ws-eyebrow flex items-center gap-1 text-purple-300">
+                  <Waypoints className="h-3 w-3" />
+                  Epistemic Belief-Revision Lineage (supersedes)
+                </div>
+                {supersededByItems.map(({ node: newerNode, rationale }) => (
+                  <div key={`by-${newerNode.uuid}`} className="space-y-0.5 text-[10.5px]">
+                    <div className="flex flex-wrap items-center gap-1 text-text-muted">
+                      <span className="font-semibold text-amber-300">Superseded by →</span>
+                      <button
+                        type="button"
+                        onClick={() => onSelectNode(newerNode)}
+                        className="font-medium text-text-primary underline decoration-purple-400/60 hover:text-accent-fg cursor-pointer text-left"
+                      >
+                        {newerNode.properties.name}
+                      </button>
+                    </div>
+                    {rationale && <div className="text-[10px] text-text-subtle">{rationale}</div>}
+                  </div>
+                ))}
+                {supersedesPriorItems.map(({ node: priorNode, rationale }) => (
+                  <div key={`prior-${priorNode.uuid}`} className="space-y-0.5 text-[10.5px]">
+                    <div className="flex flex-wrap items-center gap-1 text-text-muted">
+                      <span className="font-semibold text-emerald-300">Supersedes prior →</span>
+                      <button
+                        type="button"
+                        onClick={() => onSelectNode(priorNode)}
+                        className="font-medium text-text-primary underline decoration-purple-400/60 hover:text-accent-fg cursor-pointer text-left"
+                      >
+                        {priorNode.properties.name}
+                      </button>
+                    </div>
+                    {rationale && <div className="text-[10px] text-text-subtle">{rationale}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {traversalHistory.length > 1 && (
               <div className="space-y-1">
@@ -2276,22 +2527,74 @@ export function GraphNodeWorkbenchPanel({
                   </button>
                 </div>
 
+                {(localStatus || localError) && (
+                  <div
+                    role="status"
+                    className={`rounded-sm border px-2.5 py-1.5 text-[10.5px] ${
+                      localError
+                        ? "border-rose-400 bg-rose-950 text-rose-300"
+                        : "border-emerald-400 bg-emerald-950 text-emerald-300"
+                    }`}
+                  >
+                    {localError ?? localStatus}
+                  </div>
+                )}
+
                 {/* Prospective Verification Ledger */}
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <h4 id={`${baseId}-ledger-heading`} className="ws-eyebrow">
                       Prospective Verification Ledger ({ledgerSummary?.total_logged ?? ledgerRecords.length})
                     </h4>
-                    {ledgerSummary && ledgerSummary.scored_count > 0 && (
-                      <span className="font-mono text-[10px] text-emerald-300">
-                        MAE {ledgerSummary.mean_abs_error?.toFixed(3)} · CI95 {ledgerSummary.ci95_coverage_pct}%
+                    {ledgerSummary && (
+                      <span className="ws-numeric font-mono text-[10px] text-text-muted">
+                        {ledgerSummary.pending_count} pending · {ledgerSummary.scored_count} scored
                       </span>
                     )}
                   </div>
 
+                  {ledgerSummary && ledgerSummary.scored_count > 0 && (
+                    <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                      <div className="rounded-sm border border-border bg-surface-inset px-2 py-1.5">
+                        <div className="text-[9px] text-text-subtle">Graph MAE</div>
+                        <div className="ws-numeric font-mono text-[11px] font-semibold text-sky-400">
+                          {ledgerSummary.mean_abs_error?.toFixed(3) ?? "—"}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-border bg-surface-inset px-2 py-1.5">
+                        <div className="text-[9px] text-text-subtle">Self-AR MAE</div>
+                        <div className="ws-numeric font-mono text-[11px] font-semibold text-text-muted">
+                          {ledgerSummary.self_mean_abs_error?.toFixed(3) ?? "—"}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-border bg-surface-inset px-2 py-1.5">
+                        <div className="text-[9px] text-text-subtle">Skill vs Self</div>
+                        <div
+                          className={`ws-numeric font-mono text-[11px] font-semibold ${
+                            (ledgerSummary.skill_vs_self_pct ?? 0) >= 0
+                              ? "text-emerald-400"
+                              : "text-amber-400"
+                          }`}
+                        >
+                          {ledgerSummary.skill_vs_self_pct !== null
+                            ? `${ledgerSummary.skill_vs_self_pct >= 0 ? "+" : ""}${ledgerSummary.skill_vs_self_pct.toFixed(1)}%`
+                            : "—"}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-border bg-surface-inset px-2 py-1.5">
+                        <div className="text-[9px] text-text-subtle">95% CI Cov</div>
+                        <div className="ws-numeric font-mono text-[11px] font-semibold text-emerald-400">
+                          {ledgerSummary.ci95_coverage_pct !== null
+                            ? `${ledgerSummary.ci95_coverage_pct.toFixed(0)}%`
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {ledgerRecords.length === 0 ? (
                     <div className="rounded-sm border border-dashed border-border p-2 text-[11px] text-text-muted">
-                      Log a forecast now; when new readings arrive for that period, the store automatically scores MAE and 95% CI coverage.
+                      Log a forecast now; when new readings arrive for that period, the store automatically scores MAE, Self-AR baseline lift, and 95% CI coverage.
                     </div>
                   ) : (
                     <div
@@ -2326,7 +2629,12 @@ export function GraphNodeWorkbenchPanel({
                                 {rec.target_period}
                               </th>
                               <td className="font-mono text-text-primary">
-                                {rec.predicted_value.toFixed(2)} ± {rec.ci95_half_width.toFixed(2)}
+                                <div>
+                                  {rec.predicted_value.toFixed(2)} ± {rec.ci95_half_width.toFixed(2)}
+                                </div>
+                                <div className="text-[9px] text-text-subtle">
+                                  Self AR {rec.self_only_pred.toFixed(2)}
+                                </div>
                               </td>
                               <td className="font-mono text-text-muted">
                                 {rec.status === "scored" && typeof rec.actual_value === "number"
@@ -2335,16 +2643,23 @@ export function GraphNodeWorkbenchPanel({
                               </td>
                               <td>
                                 {rec.status === "scored" ? (
-                                  <span
-                                    className={`inline-flex items-center rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
-                                      rec.covered_by_ci95
-                                        ? "border-emerald-400 bg-emerald-950 text-emerald-300"
-                                        : "border-amber-400 bg-amber-950 text-amber-300"
-                                    }`}
-                                  >
-                                    {rec.covered_by_ci95 ? "✓ " : "Miss "}
-                                    MAE {rec.abs_error?.toFixed(2)}
-                                  </span>
+                                  <div className="space-y-0.5">
+                                    <span
+                                      className={`inline-flex items-center rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
+                                        rec.covered_by_ci95
+                                          ? "border-emerald-400 bg-emerald-950 text-emerald-300"
+                                          : "border-amber-400 bg-amber-950 text-amber-300"
+                                      }`}
+                                    >
+                                      {rec.covered_by_ci95 ? "✓ " : "Miss "}
+                                      MAE {rec.abs_error?.toFixed(2)}
+                                    </span>
+                                    {typeof rec.self_abs_error === "number" && (
+                                      <div className="font-mono text-[9px] text-text-subtle">
+                                        Self {rec.self_abs_error.toFixed(2)}
+                                      </div>
+                                    )}
+                                  </div>
                                 ) : (
                                   <span className="inline-flex items-center rounded-sm border border-border bg-surface px-1.5 py-0.5 text-[9px] font-semibold text-text-muted">
                                     Pending

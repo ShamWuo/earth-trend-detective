@@ -77,8 +77,12 @@ export function GraphCameraDock({
           type="button"
           tabIndex={nextTabIndex()}
           onClick={onToggleOrbit}
-          title={isOrbiting ? "Pause slow orbit" : "Resume slow orbit"}
-          aria-label={isOrbiting ? "Pause slow orbit" : "Resume slow orbit"}
+          title={
+            isOrbiting
+              ? "Slow camera orbit (active — click to pause)"
+              : "Slow camera orbit (paused — click to resume)"
+          }
+          aria-label="Slow camera orbit"
           aria-pressed={isOrbiting}
           className={`${btnBase} aria-pressed:border-accent-fg aria-pressed:bg-amber-100 aria-pressed:text-amber-900 dark:aria-pressed:bg-amber-950 dark:aria-pressed:text-amber-300`}
         >
@@ -88,9 +92,7 @@ export function GraphCameraDock({
             <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
           )}
           {isVertical && (
-            <span className="font-mono text-[9px] leading-none">
-              {isOrbiting ? "Pause" : "Spin"}
-            </span>
+            <span className="font-mono text-[9px] leading-none">Orbit</span>
           )}
         </button>
       )}

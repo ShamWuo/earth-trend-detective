@@ -34,7 +34,9 @@ import {
   resolveDetailTier,
   resolveEtgEdgeColor,
   resolveEtgNodeColor,
+  type ScreenEdgePillCandidate,
   type ScreenLabelCandidate,
+  selectNonOverlappingEdgePills,
   selectNonOverlappingLabels,
   wheelZoomStep,
 } from "@/lib/graph/graphVisuals";
@@ -44,6 +46,7 @@ import type {
   CandidateLinkSuggestion,
   ETGEdge,
   ETGNode,
+  NodeTrendMicroscopeCue,
   RelationCategory,
   SubgraphNodeRole,
   TraversalDirection,
@@ -71,6 +74,7 @@ interface EarthTrendGraphViewProps {
   traversalFilter?: TraversalFilterState;
   roleByNode?: Record<string, SubgraphNodeRole>;
   hopByNode?: Record<string, number>;
+  microscopeByNode?: Record<string, NodeTrendMicroscopeCue>;
   connectMode?: boolean;
   connectSourceUuid?: string | null;
   discoveringLinks?: boolean;
@@ -101,6 +105,41 @@ const DEFAULT_TRAVERSAL_FILTER: TraversalFilterState = {
   direction: "both",
   layoutMode: "force",
 };
+
+function resolveMicroscopeNodeBadge(
+  cue: NodeTrendMicroscopeCue | undefined,
+  isLightTheme: boolean
+): { text: string; title: string; pillClass: string; bg: string; fg: string } | null {
+  if (!cue) return null;
+  if (cue.dealiasing.falseTrendProb >= 0.55 || cue.radarBadge === "FALSE_TREND_CYCLE") {
+    return {
+      text: "CYCLE",
+      title: `Possible seasonal/oscillatory cycle (${Math.round(cue.dealiasing.oscillationShare * 100)}% cycle share, P_false=${Math.round(cue.dealiasing.falseTrendProb * 100)}%)`,
+      pillClass: isLightTheme ? "bg-amber-100 text-amber-900" : "bg-amber-950 text-amber-300",
+      bg: isLightTheme ? "#fef3c7" : "#451a03",
+      fg: isLightTheme ? "#92400e" : "#fcd34d",
+    };
+  }
+  if (cue.radarBadge === "SENSOR_GLITCH_RISK") {
+    return {
+      text: "GLITCH",
+      title: `Step-shift or sensor artifact risk (${Math.round(cue.dealiasing.artifactShare * 100)}% artifact share)`,
+      pillClass: isLightTheme ? "bg-rose-100 text-rose-900" : "bg-rose-950 text-rose-300",
+      bg: isLightTheme ? "#ffe4e6" : "#4c0519",
+      fg: isLightTheme ? "#be123c" : "#fda4af",
+    };
+  }
+  if (cue.preMannKendallAlert || cue.radarBadge === "EARLY_ONSET") {
+    return {
+      text: "PRE-MK",
+      title: `Pre-Mann-Kendall early inflection (${Math.round(cue.onsetProb * 100)}% onset prob, +${cue.leadStepsAhead} step lead)`,
+      pillClass: isLightTheme ? "bg-sky-100 text-sky-900" : "bg-sky-950 text-sky-300",
+      bg: isLightTheme ? "#e0f2fe" : "#082f49",
+      fg: isLightTheme ? "#075985" : "#38bdf8",
+    };
+  }
+  return null;
+}
 
 function formatTrendStat(
   node: ETGNode,
@@ -541,6 +580,7 @@ export function EarthTrendGraphView({
   traversalFilter = DEFAULT_TRAVERSAL_FILTER,
   roleByNode = {},
   hopByNode = {},
+  microscopeByNode = {},
   connectMode = false,
   connectSourceUuid = null,
   discoveringLinks = false,
@@ -694,6 +734,7 @@ export function EarthTrendGraphView({
           traversalFilter={traversalFilter}
           roleByNode={roleByNode}
           hopByNode={hopByNode}
+          microscopeByNode={microscopeByNode}
           connectMode={connectMode}
           connectSourceUuid={connectSourceUuid}
           selectedRegionScope={selectedRegionScope}
@@ -720,6 +761,7 @@ export function EarthTrendGraphView({
           traversalFilter={traversalFilter}
           roleByNode={roleByNode}
           hopByNode={hopByNode}
+          microscopeByNode={microscopeByNode}
           connectMode={connectMode}
           connectSourceUuid={connectSourceUuid}
           selectedRegionScope={selectedRegionScope}
@@ -754,6 +796,7 @@ interface GraphCanvasProps {
   traversalFilter?: TraversalFilterState;
   roleByNode?: Record<string, SubgraphNodeRole>;
   hopByNode?: Record<string, number>;
+  microscopeByNode?: Record<string, NodeTrendMicroscopeCue>;
   connectMode?: boolean;
   connectSourceUuid?: string | null;
   selectedRegionScope?: string | null;
@@ -780,6 +823,7 @@ function GraphCanvas3D({
   inspectorOpen = false,
   candidateLinks = [],
   roleByNode = {},
+  microscopeByNode = {},
   connectMode = false,
   connectSourceUuid = null,
   selectedRegionScope = null,
@@ -968,6 +1012,16 @@ function GraphCanvas3D({
   }, [nodes, searchQuery]);
 
   const cascadeEdgeSet = useMemo(() => new Set(cascadeEdgeUuids), [cascadeEdgeUuids]);
+  const dipoleNodeUuids = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of edges) {
+      if (e.type === "drives_opposite") {
+        set.add(e.source_uuid);
+        set.add(e.target_uuid);
+      }
+    }
+    return set;
+  }, [edges]);
 
   // Refreshed state refs so Three.js RAF never uses stale closures
   const focusStateRef = useRef({
@@ -982,6 +1036,9 @@ function GraphCanvas3D({
     isLightTheme,
     connectMode,
     connectSourceUuid,
+    roleByNode,
+    microscopeByNode,
+    dipoleNodeUuids,
   });
   focusStateRef.current = {
     selectedNodeUuid,
@@ -995,6 +1052,9 @@ function GraphCanvas3D({
     isLightTheme,
     connectMode,
     connectSourceUuid,
+    roleByNode,
+    microscopeByNode,
+    dipoleNodeUuids,
   };
 
   const prefersReducedMotionRef = useRef(prefersReducedMotion);
@@ -1020,7 +1080,7 @@ function GraphCanvas3D({
   interface SceneEdgeObject3D {
     edge: ETGEdge;
     line: THREE.Line;
-    material: THREE.LineBasicMaterial;
+    material: THREE.LineBasicMaterial | THREE.LineDashedMaterial;
     baseColorHex: string;
     midPoint: THREE.Vector3;
   }
@@ -1564,6 +1624,10 @@ function GraphCanvas3D({
         hoveredEdgeUuid: hovEdgeUuid,
         matchingUuids: matchSet,
         neighborMap: nbrMap,
+        isLightTheme: lightThemeNow,
+        roleByNode: rolesMap,
+        microscopeByNode: microMap,
+        dipoleNodeUuids: dipoleSet,
       } = focusStateRef.current;
 
       const hasEdgeOrCascadeFocus = selEdgeUuid !== null || cascSet.size > 0;
@@ -1645,10 +1709,29 @@ function GraphCanvas3D({
           const sy = (-projVec.y * 0.5 + 0.5) * h - 18;
           if (sx > leftLabelEdge && sx < rightLabelEdge && sy > topLabelEdge && sy < h - 42) {
             const depthRatio = (camera.position.distanceTo(item.worldPos) - minCamDist) / distSpan;
+            const cleanTitle = humanizeNodeText(item.node.properties.name);
+            const displayTitle =
+              cleanTitle.length > 32 ? `${cleanTitle.slice(0, 30)}…` : cleanTitle;
+            const nodeRole = rolesMap[uuid];
+            const microCue = microMap[uuid];
+            const isSupersededNode =
+              item.node.properties.status === "Superseded" ||
+              Boolean(item.node.properties.superseded_by);
+            const microBadge = resolveMicroscopeNodeBadge(microCue, lightThemeNow);
+
+            let extraWidthPx = 0;
+            if (nodeRole === "upstream" || nodeRole === "downstream") extraWidthPx += 44;
+            if (isSupersededNode) extraWidthPx += 62;
+            if (microBadge) extraWidthPx += 50;
+            if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 14;
+
             let priority = (1 - depthRatio) * 120;
             if (item.node.label === "Insight") priority += 120;
             else if (item.node.label === "Concept") priority += 80;
             else if (item.node.label === "Rule") priority += 40;
+            if (dipoleSet.has(uuid)) priority += 55;
+            if (microBadge) priority += 65;
+            if (isSupersededNode) priority -= 35;
             if (isRegionLocal) priority += 180;
             else if (isRegionBridge) priority += 95;
             if (isNeighbor) priority += 260;
@@ -1658,12 +1741,13 @@ function GraphCanvas3D({
 
             labelCandidates.push({
               uuid,
-              title: item.node.properties.name,
+              title: displayTitle,
               label: item.node.label,
               color: resolveEtgNodeColor(item.node),
               x: sx,
               y: sy,
               priority,
+              extraWidthPx,
             });
           }
         }
@@ -1680,32 +1764,39 @@ function GraphCanvas3D({
         const edgeMatchesSearch =
           hasSearchFilter &&
           (matchSet.has(eo.edge.source_uuid) || matchSet.has(eo.edge.target_uuid));
+        const isOpposite = eo.edge.type === "drives_opposite";
+        const isSupersedes = eo.edge.type === "supersedes";
 
         eo.material.color.set(
           isEdgeSelected ? "#fef08a" : isCascade ? "#fbbf24" : eo.baseColorHex
         );
 
         if (isEdgeSelected || isCascade) {
-          eo.material.opacity = 0.96;
+          eo.material.opacity = 0.98;
         } else if (activeFocusUuid) {
-          eo.material.opacity = isConnected ? 0.88 : 0.07;
+          eo.material.opacity = isConnected ? (isOpposite ? 0.95 : 0.88) : 0.07;
         } else if (hasEdgeOrCascadeFocus) {
           eo.material.opacity = 0.08;
         } else if (hasSearchFilter) {
-          eo.material.opacity = edgeMatchesSearch ? 0.72 : 0.06;
+          eo.material.opacity = edgeMatchesSearch ? 0.78 : 0.06;
         } else if (spotlight) {
           eo.material.opacity = spotlight.spotlightEdgeSet.has(edgeUuid)
-            ? eo.edge.type === "drives_opposite" || eo.edge.type === "teleconnects"
-              ? 0.86
-              : 0.68
+            ? isOpposite || eo.edge.type === "teleconnects"
+              ? 0.9
+              : 0.7
             : 0.05;
         } else {
           const d = (camera.position.distanceTo(eo.midPoint) - minCamDist) / distSpan;
           const tier = Math.min(7, Math.max(0, Math.floor(d * 8)));
           const baseOpacity = 0.28 - tier * 0.028;
-          const typeBoost =
-            eo.edge.type === "drives_opposite" || eo.edge.type === "teleconnects" ? 0.14 : 0;
-          eo.material.opacity = Math.min(0.48, Math.max(0.06, baseOpacity + typeBoost));
+          const typeBoost = isOpposite
+            ? 0.26
+            : eo.edge.type === "teleconnects"
+              ? 0.16
+              : isSupersedes
+                ? 0.1
+                : 0;
+          eo.material.opacity = Math.min(0.62, Math.max(0.06, baseOpacity + typeBoost));
         }
       }
 
@@ -1767,7 +1858,10 @@ function GraphCanvas3D({
         if (cand.uuid === focusStateRef.current.selectedNodeUuid || cand.uuid === focusStateRef.current.hoveredUuid) {
           return true;
         }
-        const halfW = Math.min(100, Math.max(52, cand.title.length * 3.4));
+        const halfW = Math.min(
+          132,
+          Math.max(52, cand.title.length * 3.3 + (cand.extraWidthPx ?? 0) * 0.5)
+        );
         const cLeft = cand.x - halfW;
         const cRight = cand.x + halfW;
         const cTop = cand.y - 24;
@@ -1776,7 +1870,7 @@ function GraphCanvas3D({
           (b) => !(cRight < b.left || cLeft > b.right || cBottom < b.top || cTop > b.bottom)
         );
       });
-      const placed = selectNonOverlappingLabels(freeLabelCandidates, 12, 20, 14);
+      const placed = selectNonOverlappingLabels(freeLabelCandidates, 14, 18, 12);
       const placedById = new Map(placed.map((p) => [p.uuid, p]));
 
       for (const [uuid, el] of labelElsRef.current.entries()) {
@@ -1952,14 +2046,28 @@ function GraphCanvas3D({
       ]);
 
       const baseColor = resolveEtgEdgeColor(edge.type);
-      const material = new THREE.LineBasicMaterial({
-        color: new THREE.Color(baseColor),
-        transparent: true,
-        opacity: 0.28,
-        depthWrite: false,
-      });
+      const isSupersedesOrHypothesis =
+        edge.type === "supersedes" || edge.type === "hypothesized_link";
+      const material = isSupersedesOrHypothesis
+        ? new THREE.LineDashedMaterial({
+            color: new THREE.Color(baseColor),
+            transparent: true,
+            opacity: 0.36,
+            dashSize: 3.4,
+            gapSize: 2.2,
+            depthWrite: false,
+          })
+        : new THREE.LineBasicMaterial({
+            color: new THREE.Color(baseColor),
+            transparent: true,
+            opacity: 0.28,
+            depthWrite: false,
+          });
 
       const line = new THREE.Line(geometry, material);
+      if (isSupersedesOrHypothesis) {
+        line.computeLineDistances();
+      }
       line.userData = { edge };
       graphGroup.add(line);
       addedChildren.push(line);
@@ -2134,12 +2242,21 @@ function GraphCanvas3D({
           const cleanName = humanizeNodeText(node.properties.name);
           const displayName =
             cleanName.length > 32 ? `${cleanName.slice(0, 30)}…` : cleanName;
+          const isSuperseded =
+            node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
+          const microBadge = resolveMicroscopeNodeBadge(microscopeByNode[node.uuid], isLightTheme);
 
           return (
             <button
               key={node.uuid}
               type="button"
-              title={cleanName}
+              title={
+                microBadge
+                  ? `${cleanName} · ${microBadge.title}`
+                  : isSuperseded
+                    ? `${cleanName} (Superseded assessment)`
+                    : cleanName
+              }
               ref={(el) => {
                 if (el) labelElsRef.current.set(node.uuid, el);
                 else labelElsRef.current.delete(node.uuid);
@@ -2167,6 +2284,8 @@ function GraphCanvas3D({
                 borderColor: isSelected ? color : undefined,
               }}
               className={`absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shadow-md transition-opacity duration-150 cursor-pointer ${
+                isSuperseded ? "border-dashed opacity-85" : ""
+              } ${
                 isSelected
                   ? "border-accent-fg bg-surface text-text-primary"
                   : isLightTheme
@@ -2179,7 +2298,9 @@ function GraphCanvas3D({
                 style={{ backgroundColor: color }}
                 aria-hidden="true"
               />
-              <span>{displayName}</span>
+              <span className={isSuperseded ? "line-through decoration-1 opacity-80" : undefined}>
+                {displayName}
+              </span>
               {role === "upstream" && (
                 <span
                   className={`rounded-xs px-1 font-mono text-[9px] ${
@@ -2196,6 +2317,22 @@ function GraphCanvas3D({
                   }`}
                 >
                   impact
+                </span>
+              )}
+              {isSuperseded && (
+                <span
+                  className={`rounded-xs px-1 font-mono text-[8.5px] uppercase ${
+                    isLightTheme ? "bg-zinc-100 text-zinc-700" : "bg-zinc-800 text-zinc-300"
+                  }`}
+                >
+                  superseded
+                </span>
+              )}
+              {microBadge && (
+                <span
+                  className={`rounded-xs px-1 font-mono text-[8.5px] font-semibold ${microBadge.pillClass}`}
+                >
+                  {microBadge.text}
                 </span>
               )}
               {node.properties.theil_sen_slope !== undefined && (
@@ -2249,10 +2386,33 @@ function GraphCanvas3D({
           <div className="etg-hud-pill pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md bg-surface px-3.5 py-2 text-xs shadow-lg">
             <div
               className={`flex items-center gap-2 font-semibold ${
-                isLightTheme ? "text-amber-800" : "text-amber-300"
+                activeEdge.type === "drives_opposite"
+                  ? isLightTheme
+                    ? "text-rose-700"
+                    : "text-rose-300"
+                  : activeEdge.type === "supersedes"
+                    ? isLightTheme
+                      ? "text-purple-700"
+                      : "text-purple-300"
+                    : isLightTheme
+                      ? "text-amber-800"
+                      : "text-amber-300"
               }`}
             >
-              <span>{formatEdgeRelationLabel(activeEdge.type)}</span>
+              <span>
+                {activeEdge.type === "drives_opposite"
+                  ? `⇄ ${formatEdgeRelationLabel(activeEdge.type)}`
+                  : activeEdge.type === "supersedes"
+                    ? `↻ Epistemic Revision (${formatEdgeRelationLabel(activeEdge.type)})`
+                    : formatEdgeRelationLabel(activeEdge.type)}
+              </span>
+              {typeof activeEdge.properties.optimal_lag_steps === "number" &&
+                activeEdge.properties.optimal_lag_steps > 0 && (
+                  <span className="ws-numeric font-mono">
+                    Δt={activeEdge.properties.optimal_lag_steps}
+                    {activeEdge.properties.lag_unit?.[0] ?? ""}
+                  </span>
+                )}
               {activeEdge.properties.correlation_r !== undefined && (
                 <span className="ws-numeric font-mono">
                   r={activeEdge.properties.correlation_r.toFixed(2)}
@@ -2303,6 +2463,7 @@ function GraphCanvas2D({
   traversalFilter,
   roleByNode = {},
   hopByNode = {},
+  microscopeByNode = {},
   connectMode = false,
   connectSourceUuid = null,
   selectedRegionScope = null,
@@ -2772,6 +2933,280 @@ function GraphCanvas2D({
     };
   };
 
+  const dipoleNodeUuids2D = new Set<string>();
+  for (const e of edges) {
+    if (e.type === "drives_opposite") {
+      dipoleNodeUuids2D.add(e.source_uuid);
+      dipoleNodeUuids2D.add(e.target_uuid);
+    }
+  }
+
+  // De-overlap 2D regional headers and ensure generous clearance above top node cards
+  const headerBaseOffset = detailTier === "dots" ? 30 * Math.min(1.8, dotScale2D) : CARD_HEIGHT / 2 + 28;
+  const headerPillScale = 1 / Math.max(0.28, Math.min(1, camera.zoom));
+  const placedHeaderRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+  const placedRegionHeaders2D =
+    layoutMode === "force"
+      ? [...regionClusters2D]
+          .sort((a, b) => {
+            const aSel = selectedRegionScope === a.id ? 1 : 0;
+            const bSel = selectedRegionScope === b.id ? 1 : 0;
+            if (aSel !== bSel) return bSel - aSel;
+            return b.count - a.count;
+          })
+          .map((cluster) => {
+            const shortLabel =
+              cluster.label.length > 26 ? `${cluster.label.slice(0, 24)}…` : cluster.label;
+            const labelText = `${shortLabel.toUpperCase()} · ${cluster.count}`;
+            const pillW = Math.max(110, labelText.length * 6.8 + 26);
+            const worldWHeader = pillW * headerPillScale;
+            const worldHHeader = 26 * headerPillScale;
+            const x = cluster.centroid.x;
+            let y = cluster.minY - headerBaseOffset;
+            for (let step = 0; step < 4; step++) {
+              const box = {
+                left: x - worldWHeader / 2 - 8,
+                right: x + worldWHeader / 2 + 8,
+                top: y - worldHHeader / 2 - 4,
+                bottom: y + worldHHeader / 2 + 4,
+              };
+              const overlaps = placedHeaderRects.some(
+                (b) => !(box.right < b.left || box.left > b.right || box.bottom < b.top || box.top > b.bottom)
+              );
+              if (!overlaps) {
+                placedHeaderRects.push(box);
+                break;
+              }
+              y -= worldHHeader + 6;
+            }
+            return { cluster, labelText, pillW, x, y, pillScale: headerPillScale };
+          })
+      : [];
+
+  // Precompute visible zoomed-out ("dots") labels using collision avoidance in screen coordinates
+  const placedDotLabelUuids2D = new Set<string>();
+  if (detailTier === "dots") {
+    const dotCandidates: ScreenLabelCandidate[] = [];
+    for (const node of nodes) {
+      const p = positions.get(node.uuid);
+      if (!p) continue;
+      const isSelected = node.uuid === selectedNodeUuid;
+      const isHovered = node.uuid === hoveredNodeUuid;
+      const isSearchHit = matchingUuids.has(node.uuid);
+      const isNeighbor = activeNeighbors ? activeNeighbors.has(node.uuid) : false;
+      const isSuperseded =
+        node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
+      const microBadge = resolveMicroscopeNodeBadge(microscopeByNode[node.uuid], isLightTheme);
+
+      let priority = 20;
+      if (node.label === "Insight") priority += 120;
+      else if (node.label === "Concept") priority += 80;
+      else if (node.label === "Rule") priority += 30;
+      if (dipoleNodeUuids2D.has(node.uuid)) priority += 70;
+      if (microBadge) priority += 65;
+      if (isSuperseded) priority -= 30;
+      if (regionSpotlight?.localNodeSet.has(node.uuid)) priority += 140;
+      if (isNeighbor) priority += 240;
+      if (isSearchHit) priority += 420;
+      if (isHovered) priority += 750;
+      if (isSelected) priority += 1000;
+
+      const clean = humanizeNodeText(node.properties.name);
+      const trunc = clean.length > 28 ? `${clean.slice(0, 26)}…` : clean;
+      const r = dotRadiusFor2D(node);
+      dotCandidates.push({
+        uuid: node.uuid,
+        title: trunc,
+        label: node.label,
+        color: resolveEtgNodeColor(node),
+        x: p.x * camera.zoom,
+        y: (p.y + r + 14 * Math.min(2, dotScale2D)) * camera.zoom,
+        priority,
+      });
+    }
+    for (const item of selectNonOverlappingLabels(dotCandidates, 28, 12, 8)) {
+      placedDotLabelUuids2D.add(item.uuid);
+    }
+  }
+
+  // Precompute 2D Bezier edges & de-overlap midpoint pills
+  const nodeAvoidBoxes2D = nodes
+    .map((node) => {
+      const p = positions.get(node.uuid);
+      if (!p) return null;
+      const r = dotRadiusFor2D(node);
+      return {
+        x: p.x,
+        y: p.y,
+        halfW: detailTier === "dots" ? r + 6 : CARD_WIDTH / 2,
+        halfH: detailTier === "dots" ? r + 6 : CARD_HEIGHT / 2,
+      };
+    })
+    .filter((b): b is { x: number; y: number; halfW: number; halfH: number } => b !== null);
+
+  interface PreparedEdge2D {
+    edge: ETGEdge;
+    edgePath: string;
+    strokeColor: string;
+    strokeWidth: number;
+    opacity: number;
+    isOpposite: boolean;
+    isSupersedes: boolean;
+    markerEndId: string;
+    markerStartId?: string;
+    pillX: number;
+    pillY: number;
+    pillLabel: string;
+    showPillCandidate: boolean;
+    pillPriority: number;
+  }
+
+  const preparedEdges2D: PreparedEdge2D[] = [];
+  const edgePillCandidates2D: ScreenEdgePillCandidate[] = [];
+
+  edges.forEach((edge, idx) => {
+    const p1 = positions.get(edge.source_uuid);
+    const p2 = positions.get(edge.target_uuid);
+    if (!p1 || !p2) return;
+
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const nx = -dy / dist;
+    const ny = dx / dist;
+    const bend = (idx % 2 === 0 ? 1 : -1) * Math.min(42, dist * 0.14);
+    const cx = (p1.x + p2.x) / 2 + nx * bend;
+    const cy = (p1.y + p2.y) / 2 + ny * bend;
+
+    const { startPt, endPt } = computeEdgeEndpoints2D(
+      p1,
+      p2,
+      { x: cx, y: cy },
+      edge.source_uuid,
+      edge.target_uuid
+    );
+
+    const isEdgeHovered = hoveredEdgeUuid === edge.properties.uuid;
+    const isEdgeSelected = selectedEdgeUuid === edge.properties.uuid;
+    const isCascadeEdge = cascadeEdgeSet.has(edge.properties.uuid);
+    const isConnectedToFocus =
+      activeFocusUuid !== null &&
+      (edge.source_uuid === activeFocusUuid || edge.target_uuid === activeFocusUuid);
+    const matchesSearch =
+      hasSearch &&
+      (matchingUuids.has(edge.source_uuid) || matchingUuids.has(edge.target_uuid));
+    const hasEdgeOrCascadeFocus = selectedEdgeUuid !== null || cascadeEdgeSet.size > 0;
+    const isOpposite = edge.type === "drives_opposite";
+    const isSupersedes = edge.type === "supersedes";
+
+    let opacity = isLightTheme ? 0.74 : 0.5;
+    let strokeWidth = isOpposite ? 2.0 : isSupersedes ? 1.55 : 1.35;
+    if (isEdgeHovered || isEdgeSelected || isCascadeEdge || isConnectedToFocus) {
+      opacity = 0.96;
+      strokeWidth = isEdgeSelected ? 2.8 : isCascadeEdge ? 2.4 : isOpposite ? 2.35 : 2.15;
+    } else if (activeFocusUuid || hasSearch) {
+      opacity = matchesSearch ? 0.78 : isLightTheme ? 0.22 : 0.12;
+    } else if (hasEdgeOrCascadeFocus) {
+      opacity = isLightTheme ? 0.24 : 0.14;
+    } else if (regionSpotlight) {
+      if (regionSpotlight.spotlightEdgeSet.has(edge.properties.uuid)) {
+        opacity = isLightTheme ? 0.88 : 0.82;
+        strokeWidth += 0.35;
+      } else {
+        opacity = isLightTheme ? 0.12 : 0.07;
+      }
+    }
+
+    const rawStrokeColor = resolveEtgEdgeColor(edge.type);
+    const baseStrokeColor =
+      isLightTheme && rawStrokeColor.toLowerCase() === "#94a3b8"
+        ? "#52525b"
+        : isLightTheme && isOpposite
+          ? "#e11d48"
+          : isLightTheme && isSupersedes
+            ? "#9333ea"
+            : rawStrokeColor;
+    const strokeColor = isEdgeSelected
+      ? isLightTheme
+        ? "#b45309"
+        : "#fef08a"
+      : isCascadeEdge
+        ? isLightTheme
+          ? "#d97706"
+          : "#fbbf24"
+        : baseStrokeColor;
+
+    const midLabelX = 0.25 * startPt.x + 0.5 * cx + 0.25 * endPt.x;
+    const midLabelY = 0.25 * startPt.y + 0.5 * cy + 0.25 * endPt.y;
+    const relationPrefix = isOpposite ? "⇄ " : isSupersedes ? "↻ " : "";
+    const relationLabel = `${relationPrefix}${formatEdgeRelationLabel(edge.type, edge.properties.custom_label)}`;
+    const lagSuffix =
+      typeof edge.properties.optimal_lag_steps === "number" &&
+      edge.properties.optimal_lag_steps > 0
+        ? ` · Δt=${edge.properties.optimal_lag_steps}${edge.properties.lag_unit?.[0] ?? ""}`
+        : "";
+    const corrSuffix =
+      edge.properties.correlation_r !== undefined
+        ? ` · r=${edge.properties.correlation_r.toFixed(2)}`
+        : "";
+    const pillLabel = `${relationLabel}${lagSuffix}${corrSuffix}`;
+    const showPillCandidate =
+      isEdgeHovered || isEdgeSelected || isCascadeEdge || isConnectedToFocus;
+    const pillPriority = isEdgeSelected
+      ? 1000
+      : isEdgeHovered
+        ? 900
+        : isCascadeEdge
+          ? 700
+          : isOpposite
+            ? 450
+            : isSupersedes
+              ? 380
+              : 240;
+
+    const markerEndId = isEdgeSelected || isCascadeEdge
+      ? "url(#etg-arrow-selected)"
+      : isOpposite
+        ? "url(#etg-arrow-opposite)"
+        : isSupersedes
+          ? "url(#etg-arrow-supersedes)"
+          : "url(#etg-arrow-causal)";
+    const markerStartId = isOpposite ? "url(#etg-dot-opposite)" : undefined;
+
+    preparedEdges2D.push({
+      edge,
+      edgePath: `M ${startPt.x} ${startPt.y} Q ${cx} ${cy} ${endPt.x} ${endPt.y}`,
+      strokeColor,
+      strokeWidth,
+      opacity,
+      isOpposite,
+      isSupersedes,
+      markerEndId,
+      markerStartId,
+      pillX: midLabelX,
+      pillY: midLabelY,
+      pillLabel,
+      showPillCandidate,
+      pillPriority,
+    });
+
+    if (showPillCandidate) {
+      edgePillCandidates2D.push({
+        uuid: edge.properties.uuid,
+        x: midLabelX,
+        y: midLabelY,
+        label: pillLabel,
+        priority: pillPriority,
+      });
+    }
+  });
+
+  const placedEdgePillIds2D = new Set(
+    selectNonOverlappingEdgePills(edgePillCandidates2D, nodeAvoidBoxes2D, 14, 10, 6).map(
+      (p) => p.uuid
+    )
+  );
+
   return (
     <div className="etg-graph-void relative h-full w-full overflow-hidden select-none">
       <svg
@@ -2815,6 +3250,88 @@ function GraphCanvas2D({
               height={CARD_HEIGHT}
             />
           </clipPath>
+          <clipPath id="etg-card-clip-double">
+            <rect
+              x={-CARD_WIDTH / 2 + 24}
+              y={-CARD_HEIGHT / 2}
+              width={CARD_WIDTH - 128}
+              height={CARD_HEIGHT}
+            />
+          </clipPath>
+          <marker
+            id="etg-arrow-causal"
+            viewBox="0 0 10 10"
+            refX="8.5"
+            refY="5"
+            markerWidth="6.5"
+            markerHeight="6.5"
+            orient="auto"
+          >
+            <path
+              d="M 1.5 1.8 L 8.5 5 L 1.5 8.2 z"
+              fill={isLightTheme ? "#52525b" : "#94a3b8"}
+              opacity="0.85"
+            />
+          </marker>
+          <marker
+            id="etg-arrow-opposite"
+            viewBox="0 0 10 10"
+            refX="8.5"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto"
+          >
+            <path
+              d="M 1.2 1.5 L 8.8 5 L 1.2 8.5 z"
+              fill={isLightTheme ? "#e11d48" : "#fb7185"}
+            />
+          </marker>
+          <marker
+            id="etg-dot-opposite"
+            viewBox="0 0 10 10"
+            refX="5"
+            refY="5"
+            markerWidth="5.5"
+            markerHeight="5.5"
+          >
+            <circle
+              cx="5"
+              cy="5"
+              r="3"
+              fill={isLightTheme ? "#ffffff" : "#0b0c10"}
+              stroke={isLightTheme ? "#e11d48" : "#fb7185"}
+              strokeWidth="2"
+            />
+          </marker>
+          <marker
+            id="etg-arrow-supersedes"
+            viewBox="0 0 10 10"
+            refX="8.5"
+            refY="5"
+            markerWidth="6.8"
+            markerHeight="6.8"
+            orient="auto"
+          >
+            <path
+              d="M 1.2 1.8 L 8.5 5 L 1.2 8.2 z"
+              fill={isLightTheme ? "#9333ea" : "#c084fc"}
+            />
+          </marker>
+          <marker
+            id="etg-arrow-selected"
+            viewBox="0 0 10 10"
+            refX="8.5"
+            refY="5"
+            markerWidth="7.5"
+            markerHeight="7.5"
+            orient="auto"
+          >
+            <path
+              d="M 1.2 1.5 L 8.8 5 L 1.2 8.5 z"
+              fill={isLightTheme ? "#b45309" : "#fbbf24"}
+            />
+          </marker>
         </defs>
 
         {/* Dot-matrix canvas background */}
@@ -2826,226 +3343,156 @@ function GraphCanvas2D({
             viewportSize.height / 2 + camera.panY
           }) scale(${camera.zoom})`}
         >
-          {/* Regional area headers (clickable to pan/zoom to region) */}
-          {layoutMode === "force" &&
-            regionClusters2D.map((cluster) => {
-              const isFocused = selectedRegionScope === cluster.id;
-              const shortLabel =
-                cluster.label.length > 26
-                  ? `${cluster.label.slice(0, 24)}…`
-                  : cluster.label;
-              const labelText = `${shortLabel.toUpperCase()} · ${cluster.count}`;
-              const pillW = Math.max(110, labelText.length * 6.8 + 26);
-              const pillScale = 1 / Math.max(0.28, Math.min(1, camera.zoom));
-              return (
-                <g
-                  key={`reg2d-${cluster.id}`}
-                  transform={`translate(${cluster.centroid.x}, ${cluster.minY - 48}) scale(${pillScale})`}
-                  className="cursor-pointer"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    panToRegion2D(cluster.id);
-                    onChangeRegionScope?.(cluster.id);
-                  }}
-                >
-                  <title>{cluster.label}</title>
-                  <rect
-                    x={-pillW / 2}
-                    y={-12}
-                    width={pillW}
-                    height={24}
-                    rx={12}
-                    fill={
-                      isFocused
-                        ? isLightTheme
-                          ? "#fef3c7"
-                          : "#451a03"
-                        : isLightTheme
-                          ? "rgba(255,255,255,0.9)"
-                          : "rgba(15,19,29,0.88)"
-                    }
-                    stroke={
-                      isFocused
-                        ? isLightTheme
-                          ? "#d97706"
-                          : "#fbbf24"
-                        : isLightTheme
-                          ? "#d4d4d8"
-                          : "rgba(255,255,255,0.16)"
-                    }
-                    strokeWidth={1}
-                  />
-                  <circle
-                    cx={-pillW / 2 + 12}
-                    cy={0}
-                    r={3}
-                    fill={isLightTheme ? "#d97706" : "#fbbf24"}
-                  />
-                  <text
-                    x={5}
-                    y={0}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    fontSize={9.5}
-                    fontWeight={700}
-                    letterSpacing="0.06em"
-                    fill={
-                      isFocused
-                        ? isLightTheme
-                          ? "#92400e"
-                          : "#fde68a"
-                        : isLightTheme
-                          ? "#27272a"
-                          : "#e4e4e7"
-                    }
-                  >
-                    {labelText}
-                  </text>
-                </g>
-              );
-            })}
-
-          {/* Curved Bezier edges */}
-          {edges.map((edge, idx) => {
-            const p1 = positions.get(edge.source_uuid);
-            const p2 = positions.get(edge.target_uuid);
-            if (!p1 || !p2) return null;
-
-            const dx = p2.x - p1.x;
-            const dy = p2.y - p1.y;
-            const dist = Math.hypot(dx, dy) || 1;
-            const nx = -dy / dist;
-            const ny = dx / dist;
-            const bend = (idx % 2 === 0 ? 1 : -1) * Math.min(42, dist * 0.14);
-            const cx = (p1.x + p2.x) / 2 + nx * bend;
-            const cy = (p1.y + p2.y) / 2 + ny * bend;
-
-            const { startPt, endPt } = computeEdgeEndpoints2D(
-              p1,
-              p2,
-              { x: cx, y: cy },
-              edge.source_uuid,
-              edge.target_uuid
-            );
-
-            const isEdgeHovered = hoveredEdgeUuid === edge.properties.uuid;
-            const isEdgeSelected = selectedEdgeUuid === edge.properties.uuid;
-            const isCascadeEdge = cascadeEdgeSet.has(edge.properties.uuid);
-            const isConnectedToFocus =
-              activeFocusUuid !== null &&
-              (edge.source_uuid === activeFocusUuid || edge.target_uuid === activeFocusUuid);
-            const matchesSearch =
-              hasSearch &&
-              (matchingUuids.has(edge.source_uuid) || matchingUuids.has(edge.target_uuid));
-            const hasEdgeOrCascadeFocus = selectedEdgeUuid !== null || cascadeEdgeSet.size > 0;
-
-            let opacity = isLightTheme ? 0.74 : 0.5;
-            let strokeWidth = edge.type === "drives_opposite" ? 1.85 : 1.35;
-            if (isEdgeHovered || isEdgeSelected || isCascadeEdge || isConnectedToFocus) {
-              opacity = 0.96;
-              strokeWidth = isEdgeSelected ? 2.8 : isCascadeEdge ? 2.4 : 2.15;
-            } else if (activeFocusUuid || hasSearch) {
-              opacity = matchesSearch ? 0.78 : isLightTheme ? 0.22 : 0.12;
-            } else if (hasEdgeOrCascadeFocus) {
-              opacity = isLightTheme ? 0.24 : 0.14;
-            } else if (regionSpotlight) {
-              if (regionSpotlight.spotlightEdgeSet.has(edge.properties.uuid)) {
-                opacity = isLightTheme ? 0.88 : 0.82;
-                strokeWidth += 0.35;
-              } else {
-                opacity = isLightTheme ? 0.12 : 0.07;
-              }
-            }
-
-            const rawStrokeColor = resolveEtgEdgeColor(edge.type);
-            const baseStrokeColor =
-              isLightTheme && rawStrokeColor.toLowerCase() === "#94a3b8"
-                ? "#52525b"
-                : rawStrokeColor;
-            const strokeColor = isEdgeSelected
-              ? isLightTheme
-                ? "#b45309"
-                : "#fef08a"
-              : isCascadeEdge
-                ? isLightTheme
-                  ? "#d97706"
-                  : "#fbbf24"
-                : baseStrokeColor;
-            const midLabelX = 0.25 * startPt.x + 0.5 * cx + 0.25 * endPt.x;
-            const midLabelY = 0.25 * startPt.y + 0.5 * cy + 0.25 * endPt.y;
-            const showEdgePill =
-              isEdgeHovered || isEdgeSelected || isCascadeEdge || isConnectedToFocus;
-            const relationLabel = formatEdgeRelationLabel(edge.type, edge.properties.custom_label);
-            const lagSuffix =
-              typeof edge.properties.optimal_lag_steps === "number" &&
-              edge.properties.optimal_lag_steps > 0
-                ? ` · Δt=${edge.properties.optimal_lag_steps}${edge.properties.lag_unit?.[0] ?? ""}`
-                : "";
-            const corrSuffix =
-              edge.properties.correlation_r !== undefined
-                ? ` · r=${edge.properties.correlation_r.toFixed(2)}`
-                : "";
-            const pillLabel = `${relationLabel}${lagSuffix}${corrSuffix}`;
-            const edgePath = `M ${startPt.x} ${startPt.y} Q ${cx} ${cy} ${endPt.x} ${endPt.y}`;
-
+          {/* Regional area headers (de-overlapped & clickable to pan/zoom to region) */}
+          {placedRegionHeaders2D.map(({ cluster, labelText, pillW, x, y, pillScale }) => {
+            const isFocused = selectedRegionScope === cluster.id;
             return (
               <g
-                key={edge.properties.uuid}
+                key={`reg2d-${cluster.id}`}
+                transform={`translate(${x}, ${y}) scale(${pillScale})`}
                 className="cursor-pointer"
-                onPointerEnter={() => setHoveredEdgeUuid(edge.properties.uuid)}
-                onPointerLeave={() => setHoveredEdgeUuid(null)}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectEdge?.(edge);
+                  panToRegion2D(cluster.id);
+                  onChangeRegionScope?.(cluster.id);
                 }}
               >
-                {/* Invisible wider hit corridor for easy edge hovering and clicking */}
-                <path
-                  d={edgePath}
-                  fill="none"
-                  stroke="transparent"
-                  strokeWidth={14}
-                  vectorEffect="non-scaling-stroke"
-                />
-                <path
-                  d={edgePath}
-                  fill="none"
-                  stroke={strokeColor}
-                  strokeWidth={strokeWidth}
-                  strokeDasharray={
-                    edge.type === "supersedes" || edge.type === "hypothesized_link"
-                      ? "5 4"
-                      : undefined
+                <title>{cluster.label}</title>
+                <rect
+                  x={-pillW / 2}
+                  y={-12}
+                  width={pillW}
+                  height={24}
+                  rx={12}
+                  fill={
+                    isFocused
+                      ? isLightTheme
+                        ? "#fef3c7"
+                        : "#451a03"
+                      : isLightTheme
+                        ? "rgba(255,255,255,0.92)"
+                        : "rgba(15,19,29,0.9)"
                   }
-                  strokeOpacity={opacity}
-                  vectorEffect="non-scaling-stroke"
+                  stroke={
+                    isFocused
+                      ? isLightTheme
+                        ? "#d97706"
+                        : "#fbbf24"
+                      : isLightTheme
+                        ? "#d4d4d8"
+                        : "rgba(255,255,255,0.16)"
+                  }
+                  strokeWidth={1}
                 />
+                <circle
+                  cx={-pillW / 2 + 12}
+                  cy={0}
+                  r={3}
+                  fill={isLightTheme ? "#d97706" : "#fbbf24"}
+                />
+                <text
+                  x={5}
+                  y={0}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={9.5}
+                  fontWeight={700}
+                  letterSpacing="0.06em"
+                  fill={
+                    isFocused
+                      ? isLightTheme
+                        ? "#92400e"
+                        : "#fde68a"
+                      : isLightTheme
+                        ? "#27272a"
+                        : "#e4e4e7"
+                  }
+                >
+                  {labelText}
+                </text>
+              </g>
+            );
+          })}
 
-                {showEdgePill && (
-                  <g transform={`translate(${midLabelX}, ${midLabelY})`} pointerEvents="none">
-                    <rect
-                      x={-(pillLabel.length * 3.1 + 10)}
-                      y={-10}
-                      width={pillLabel.length * 6.2 + 20}
-                      height={20}
-                      rx={3}
-                      fill={isLightTheme ? "#ffffff" : "#11141d"}
-                      stroke={strokeColor}
-                      strokeWidth={1}
-                    />
-                    <text
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fontSize={9}
-                      fontWeight={600}
-                      letterSpacing="0.05em"
-                      fill={strokeColor}
-                    >
-                      {pillLabel}
-                    </text>
-                  </g>
-                )}
+          {/* Curved Bezier edges with directional arrows & dipole emphasis */}
+          {preparedEdges2D.map((item) => (
+            <g
+              key={item.edge.properties.uuid}
+              className="cursor-pointer"
+              onPointerEnter={() => setHoveredEdgeUuid(item.edge.properties.uuid)}
+              onPointerLeave={() => setHoveredEdgeUuid(null)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectEdge?.(item.edge);
+              }}
+            >
+              {/* Invisible wider hit corridor for easy edge hovering and clicking */}
+              <path
+                d={item.edgePath}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={14}
+                vectorEffect="non-scaling-stroke"
+              />
+              {item.isOpposite && (
+                <path
+                  d={item.edgePath}
+                  fill="none"
+                  stroke={isLightTheme ? "#fda4af" : "#fb7185"}
+                  strokeWidth={item.strokeWidth + 4}
+                  strokeOpacity={Math.min(0.28, item.opacity * 0.25)}
+                  vectorEffect="non-scaling-stroke"
+                  pointerEvents="none"
+                />
+              )}
+              <path
+                d={item.edgePath}
+                fill="none"
+                stroke={item.strokeColor}
+                strokeWidth={item.strokeWidth}
+                strokeDasharray={
+                  item.isSupersedes || item.edge.type === "hypothesized_link"
+                    ? "5 4"
+                    : undefined
+                }
+                strokeOpacity={item.opacity}
+                markerStart={item.markerStartId}
+                markerEnd={item.markerEndId}
+                vectorEffect="non-scaling-stroke"
+              />
+            </g>
+          ))}
+
+          {/* De-overlapped edge midpoint relationship pills rendered cleanly above edges */}
+          {preparedEdges2D.map((item) => {
+            if (!placedEdgePillIds2D.has(item.edge.properties.uuid)) return null;
+            return (
+              <g
+                key={`pill-${item.edge.properties.uuid}`}
+                transform={`translate(${item.pillX}, ${item.pillY})`}
+                pointerEvents="none"
+              >
+                <rect
+                  x={-(item.pillLabel.length * 3.1 + 10)}
+                  y={-10}
+                  width={item.pillLabel.length * 6.2 + 20}
+                  height={20}
+                  rx={3}
+                  fill={isLightTheme ? "#ffffff" : "#11141d"}
+                  stroke={item.strokeColor}
+                  strokeWidth={1}
+                />
+                <text
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={9}
+                  fontWeight={600}
+                  letterSpacing="0.05em"
+                  fill={item.strokeColor}
+                >
+                  {item.pillLabel}
+                </text>
               </g>
             );
           })}
@@ -3177,11 +3624,19 @@ function GraphCanvas2D({
 
             if (detailTier === "dots") {
               const r = dotRadiusFor2D(node);
+              const isSupersededDot =
+                node.properties.status === "Superseded" ||
+                Boolean(node.properties.superseded_by);
+              const showDotLabel =
+                isSelected ||
+                isHovered ||
+                isSearchHit ||
+                placedDotLabelUuids2D.has(node.uuid);
               return (
                 <g
                   key={node.uuid}
                   transform={`translate(${p.x}, ${p.y})`}
-                  opacity={nodeOpacity}
+                  opacity={isSupersededDot && !isSelected && !isHovered ? nodeOpacity * 0.68 : nodeOpacity}
                   className="cursor-pointer"
                   onPointerDown={(e) => handleNodePointerDown(e, node)}
                   onPointerEnter={() => setHoveredNodeUuid(node.uuid)}
@@ -3202,26 +3657,35 @@ function GraphCanvas2D({
                     r={r}
                     fill={color}
                     stroke={isLightTheme ? "#ffffff" : "#0b0c10"}
+                    strokeDasharray={isSupersededDot ? "3 2" : undefined}
                     strokeWidth={1.8 * Math.min(2, dotScale2D)}
                   />
-                  <text
-                    y={r + 14 * Math.min(2, dotScale2D)}
-                    textAnchor="middle"
-                    fontSize={10.5 * Math.min(2, dotScale2D)}
-                    fontWeight={500}
-                    fill={cardTitle}
-                  >
-                    {(() => {
-                      const clean = humanizeNodeText(node.properties.name);
-                      return clean.length > 28 ? `${clean.slice(0, 26)}…` : clean;
-                    })()}
-                  </text>
+                  {showDotLabel && (
+                    <text
+                      y={r + 14 * Math.min(2, dotScale2D)}
+                      textAnchor="middle"
+                      fontSize={10.5 * Math.min(2, dotScale2D)}
+                      fontWeight={500}
+                      fill={cardTitle}
+                    >
+                      {(() => {
+                        const clean = humanizeNodeText(node.properties.name);
+                        return clean.length > 28 ? `${clean.slice(0, 26)}…` : clean;
+                      })()}
+                    </text>
+                  )}
                 </g>
               );
             }
 
             const role = roleByNode[node.uuid];
             const hop = hopByNode[node.uuid];
+            const isSuperseded =
+              node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
+            const microBadge = resolveMicroscopeNodeBadge(
+              microscopeByNode[node.uuid],
+              isLightTheme
+            );
             const roleBadge =
               role === "root"
                 ? {
@@ -3243,8 +3707,23 @@ function GraphCanvas2D({
                       }
                     : null;
 
+            const statusOrMicroBadge = isSuperseded
+              ? {
+                  text: "OLD",
+                  bg: isLightTheme ? "#f4f4f5" : "#27272a",
+                  fg: isLightTheme ? "#52525b" : "#a1a1aa",
+                }
+              : microBadge
+                ? {
+                    text: microBadge.text,
+                    bg: microBadge.bg,
+                    fg: microBadge.fg,
+                  }
+                : null;
+
+            const badgeCount = (roleBadge ? 1 : 0) + (statusOrMicroBadge ? 1 : 0);
             const cleanName = humanizeNodeText(node.properties.name);
-            const maxChars = roleBadge ? 20 : 28;
+            const maxChars = badgeCount === 2 ? 14 : badgeCount === 1 ? 20 : 28;
             const titleText =
               cleanName.length > maxChars ? `${cleanName.slice(0, maxChars - 2)}…` : cleanName;
 
@@ -3252,7 +3731,7 @@ function GraphCanvas2D({
               <g
                 key={node.uuid}
                 transform={`translate(${p.x}, ${p.y})`}
-                opacity={nodeOpacity}
+                opacity={isSuperseded && !isSelected && !isHovered ? nodeOpacity * 0.72 : nodeOpacity}
                 className="cursor-pointer"
                 onPointerDown={(e) => handleNodePointerDown(e, node)}
                 onPointerEnter={() => setHoveredNodeUuid(node.uuid)}
@@ -3284,6 +3763,7 @@ function GraphCanvas2D({
                   rx={8}
                   fill={cardBg}
                   stroke={isConnectSource ? "#fbbf24" : isSelected || isHovered ? color : cardBorder}
+                  strokeDasharray={isSuperseded ? "5 3" : undefined}
                   strokeWidth={isSelected || isConnectSource ? 1.6 : 1}
                 />
 
@@ -3296,10 +3776,45 @@ function GraphCanvas2D({
                   fontSize={12}
                   fontWeight={600}
                   fill={cardTitle}
-                  clipPath={roleBadge ? "url(#etg-card-clip-badged)" : "url(#etg-card-clip-full)"}
+                  textDecoration={isSuperseded ? "line-through" : undefined}
+                  clipPath={
+                    badgeCount === 2
+                      ? "url(#etg-card-clip-double)"
+                      : badgeCount === 1
+                        ? "url(#etg-card-clip-badged)"
+                        : "url(#etg-card-clip-full)"
+                  }
                 >
                   {titleText}
                 </text>
+
+                {statusOrMicroBadge && (
+                  <g
+                    transform={`translate(${
+                      roleBadge ? CARD_WIDTH / 2 - 98 : CARD_WIDTH / 2 - 52
+                    }, 0)`}
+                  >
+                    <rect
+                      x={0}
+                      y={-8}
+                      width={42}
+                      height={16}
+                      rx={4}
+                      fill={statusOrMicroBadge.bg}
+                    />
+                    <text
+                      x={21}
+                      y={0}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fontSize={7.5}
+                      fontWeight={700}
+                      fill={statusOrMicroBadge.fg}
+                    >
+                      {statusOrMicroBadge.text}
+                    </text>
+                  </g>
+                )}
 
                 {roleBadge && (
                   <g transform={`translate(${CARD_WIDTH / 2 - 52}, 0)`}>
