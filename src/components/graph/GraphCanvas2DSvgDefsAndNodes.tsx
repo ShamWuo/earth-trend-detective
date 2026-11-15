@@ -221,6 +221,7 @@ export function Graph2DNodeItem({
 
     return (
       <g
+        data-node-uuid={node.uuid}
         transform={`translate(${position.x}, ${position.y})`}
         opacity={isSupersededDot && !isSelected && !isHovered ? nodeOpacity * 0.68 : nodeOpacity}
         className="cursor-pointer"
@@ -307,6 +308,7 @@ export function Graph2DNodeItem({
 
   return (
     <g
+      data-node-uuid={node.uuid}
       transform={`translate(${position.x}, ${position.y})`}
       opacity={isSuperseded && !isSelected && !isHovered ? nodeOpacity * 0.72 : nodeOpacity}
       className="cursor-pointer"

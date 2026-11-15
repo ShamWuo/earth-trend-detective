@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Bot, Trash2, TrendingUp, Waypoints } from "lucide-react";
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import type { ETGNode, ETGPhenomenonType } from "@/types/etg";
@@ -42,8 +42,11 @@ export function WorkbenchEvidenceTab({
   const [reviseDesc, setReviseDesc] = useState("");
   const [reviseRationale, setReviseRationale] = useState("");
   const [reviseOpen, setReviseOpen] = useState(false);
+  const lastNodeUuidRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (lastNodeUuidRef.current === selectedNode.uuid) return;
+    lastNodeUuidRef.current = selectedNode.uuid;
     setEditName(selectedNode.properties.name);
     setEditPhenom(selectedNode.properties.phenomenon_type ?? "climate_trend");
     setEditRegion(selectedNode.properties.region ?? "");

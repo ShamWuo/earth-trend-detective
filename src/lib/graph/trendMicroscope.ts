@@ -17,7 +17,7 @@ import {
   inferNodeTemporalScale,
   isCommunityContributorNode,
   type TemporalBucket,
-} from "@/lib/graph/etgStore";
+} from "@/lib/graph/store/etgSeriesAndTrustUtils";
 import { fetchRegionalMultiScaleSeries } from "@/lib/nasa/nasaPowerClient";
 
 export interface LinearLayerWeights {

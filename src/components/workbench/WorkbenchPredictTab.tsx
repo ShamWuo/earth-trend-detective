@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -62,62 +62,90 @@ export function WorkbenchPredictTab({
   const [ledgerSummary, setLedgerSummary] = useState<ProspectiveLedgerSummary | null>(null);
   const [ledgerBusy, setLedgerBusy] = useState(false);
 
+  const lastNodeUuidRef = useRef<string | null>(null);
+
   useEffect(() => {
+    if (lastNodeUuidRef.current === selectedNode.uuid) return;
+    lastNodeUuidRef.current = selectedNode.uuid;
     setCandidatePreviewUuid("");
     setHorizonSteps(1);
-  }, [selectedNode]);
-
-  const loadLedger = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/graph/predict?format=ledger&targetUuid=${encodeURIComponent(selectedNode.uuid)}`,
-        { cache: "no-store" }
-      );
-      if (res.ok) {
-        const data = (await res.json()) as {
-          records?: ProspectiveForecastRecord[];
-          summary?: ProspectiveLedgerSummary;
-        };
-        setLedgerRecords(Array.isArray(data.records) ? data.records : []);
-        setLedgerSummary(data.summary ?? null);
-      }
-    } catch {
-      // Non-fatal ledger fetch
-    }
-  }, [selectedNode]);
-
-  const loadPrediction = useCallback(async () => {
-    setPredictLoading(true);
+    setPrediction(null);
     setPredictError(null);
-    try {
-      const params = new URLSearchParams({
-        targetUuid: selectedNode.uuid,
-        maxHops: String(Math.max(1, maxHops)),
-        horizonSteps: String(horizonSteps),
-      });
-      if (candidatePreviewUuid) {
-        params.set("candidateNeighborUuid", candidatePreviewUuid);
+  }, [selectedNode.uuid]);
+
+  const loadLedger = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const res = await fetch(
+          `/api/graph/predict?format=ledger&targetUuid=${encodeURIComponent(selectedNode.uuid)}`,
+          { cache: "no-store", signal }
+        );
+        if (signal?.aborted) return;
+        if (res.ok) {
+          const data = (await res.json()) as {
+            records?: ProspectiveForecastRecord[];
+            summary?: ProspectiveLedgerSummary;
+          };
+          if (signal?.aborted) return;
+          setLedgerRecords(Array.isArray(data.records) ? data.records : []);
+          setLedgerSummary(data.summary ?? null);
+        }
+      } catch (err) {
+        if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+        // Non-fatal ledger fetch
       }
-      const res = await fetch(`/api/graph/predict?${params.toString()}`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) {
-        setPrediction(null);
-        setPredictError(data.error || "Unable to fit graph predictor on this node.");
-      } else {
-        setPrediction(data as GraphPredictionResult);
+    },
+    [selectedNode.uuid]
+  );
+
+  const loadPrediction = useCallback(
+    async (signal?: AbortSignal) => {
+      setPredictLoading(true);
+      setPredictError(null);
+      try {
+        const params = new URLSearchParams({
+          targetUuid: selectedNode.uuid,
+          maxHops: String(Math.max(1, maxHops)),
+          horizonSteps: String(horizonSteps),
+        });
+        if (candidatePreviewUuid) {
+          params.set("candidateNeighborUuid", candidatePreviewUuid);
+        }
+        const res = await fetch(`/api/graph/predict?${params.toString()}`, {
+          cache: "no-store",
+          signal,
+        });
+        if (signal?.aborted) return;
+        const data = await res.json();
+        if (signal?.aborted) return;
+        if (!res.ok) {
+          setPrediction(null);
+          setPredictError(data.error || "Unable to fit graph predictor on this node.");
+        } else {
+          setPrediction(data as GraphPredictionResult);
+        }
+      } catch (err) {
+        if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
+        setPredictError(err instanceof Error ? err.message : "Prediction request failed");
+      } finally {
+        if (!signal?.aborted) {
+          setPredictLoading(false);
+        }
       }
-    } catch (err) {
-      setPredictError(err instanceof Error ? err.message : "Prediction request failed");
-    } finally {
-      setPredictLoading(false);
-    }
-    await loadLedger();
-  }, [selectedNode, maxHops, horizonSteps, candidatePreviewUuid, loadLedger]);
+      if (!signal?.aborted) {
+        await loadLedger(signal);
+      }
+    },
+    [selectedNode.uuid, maxHops, horizonSteps, candidatePreviewUuid, loadLedger]
+  );
 
   useEffect(() => {
-    if (active) {
-      void loadPrediction();
-    }
+    if (!active) return;
+    const controller = new AbortController();
+    void loadPrediction(controller.signal);
+    return () => {
+      controller.abort();
+    };
   }, [active, loadPrediction]);
 
   const handleLogProspectiveForecast = async () => {

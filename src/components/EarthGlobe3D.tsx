@@ -165,6 +165,7 @@ export function EarthGlobe3D({
   onToggleCompareMode,
 }: EarthGlobe3DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [containerWidth, setContainerWidth] = useState(600);
   const [autoRotate, setAutoRotate] = useState(true);
   const [sunPreset, setSunPreset] = useState<SunPreset>(initialSunPreset ?? "live");
   const [liveUtcTime, setLiveUtcTime] = useState<string>(
@@ -719,12 +720,16 @@ export function EarthGlobe3D({
         if (w > 0 && h > 0) {
           currentW = w;
           currentH = h;
+          setContainerWidth(Math.round(w));
           camera.aspect = w / h;
           camera.updateProjectionMatrix();
           renderer.setSize(w, h);
         }
       }
     });
+    if (container.clientWidth > 0) {
+      setContainerWidth(Math.round(container.clientWidth));
+    }
     resizeObs.observe(container);
 
     let animId = 0;
@@ -1179,7 +1184,7 @@ export function EarthGlobe3D({
         projectedProbeLabel={projectedProbeLabel}
         projectedNodeLabels={projectedNodeLabels}
         hoveredInfo={hoveredInfo}
-        containerWidth={containerRef.current?.clientWidth ?? 600}
+        containerWidth={containerWidth}
         resetCamera={resetCamera}
         zoomIn={() => adjustCameraRadius(-1)}
         zoomOut={() => adjustCameraRadius(32)}
