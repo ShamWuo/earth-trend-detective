@@ -814,6 +814,48 @@ function fisherPValue(r: number, n: number): number {
   return twoTailedNormalPValue(fisherZ);
 }
 
+function computeSeriesLag1Autocorrelation(values: readonly number[]): number {
+  const n = values.length;
+  if (n < 4) return 0;
+  const mean = values.reduce((acc, v) => acc + v, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const d = values[i] - mean;
+    den += d * d;
+    if (i > 0) {
+      num += d * (values[i - 1] - mean);
+    }
+  }
+  if (den <= 1e-12) return 0;
+  // Bretherton et al. (1999): clamp positive autocorrelation to [0, 0.99] so negative AR1 never inflates N_eff above N
+  return Math.max(0, Math.min(0.99, num / den));
+}
+
+/**
+ * Bretherton et al. (1999) effective sample size N_eff = N * (1 - r1_A * r1_B) / (1 + r1_A * r1_B)
+ * computed on stationary/detrended residual series to prevent red-noise autocorrelation from inflating significance.
+ */
+export function computePairEffectiveSampleSize(a: readonly number[], b: readonly number[]): number {
+  const n = Math.min(a.length, b.length);
+  if (n <= 4) return n;
+  const r1a = computeSeriesLag1Autocorrelation(a.slice(0, n));
+  const r1b = computeSeriesLag1Autocorrelation(b.slice(0, n));
+  const prod = r1a * r1b;
+  const rawNeff = Math.round(n * ((1 - prod) / Math.max(1e-6, 1 + prod)));
+  return Math.max(4, Math.min(n, rawNeff));
+}
+
+function applySidakCorrection(pRaw: number, numTests: number): number {
+  if (!Number.isFinite(pRaw) || pRaw >= 1) return 1;
+  if (pRaw <= 0) return 0;
+  const k = Math.max(1, Math.round(numTests));
+  if (k === 1) return pRaw;
+  const clampedP = Math.min(0.999999999999, pRaw);
+  const adjusted = -Math.expm1(k * Math.log1p(-clampedP));
+  return Math.max(0, Math.min(1, adjusted));
+}
+
 /**
  * Benjamini & Hochberg (1995) step-up False Discovery Rate (FDR) adjustment.
  * Maps raw two-tailed p-values to adjusted q-values in [0, 1] preserving input order.
@@ -1151,7 +1193,8 @@ export function compareRegionalSeries(
 
   const hasResidualVariance = stdResA > 1e-9 && stdResB > 1e-9;
   const detrendedR = hasResidualVariance ? pearsonCorrelation(resA, resB) : 0;
-  const detrendedPValue = hasResidualVariance ? fisherPValue(detrendedR, n) : 1;
+  const effectiveN = hasResidualVariance ? computePairEffectiveSampleSize(resA, resB) : n;
+  const detrendedPValue = hasResidualVariance ? fisherPValue(detrendedR, effectiveN) : 1;
 
   const alignedPoints = paired.map((p, i) => ({
     date: p.date,
@@ -1180,10 +1223,14 @@ export function compareRegionalSeries(
       sliceB.push(activeB[i + k]);
     }
     const r = sliceA.length >= 4 ? pearsonCorrelation(sliceA, sliceB) : 0;
+    const effSliceN =
+      sliceA.length >= 4 && hasResidualVariance
+        ? computePairEffectiveSampleSize(sliceA, sliceB)
+        : sliceA.length;
     lagProfile.push({
       lagSteps: k,
       r,
-      pValue: fisherPValue(r, sliceA.length),
+      pValue: fisherPValue(r, effSliceN),
       n: sliceA.length,
     });
   }
@@ -1195,8 +1242,10 @@ export function compareRegionalSeries(
     n,
   };
   let bestLagPt = zeroLagPt;
+  let testedLagCount = 0;
   for (const pt of lagProfile) {
     if (pt.n < 6) continue;
+    testedLagCount++;
     const absBest = Math.abs(bestLagPt.r);
     const absCurr = Math.abs(pt.r);
     if (absCurr > absBest + 0.03) {
@@ -1208,7 +1257,13 @@ export function compareRegionalSeries(
 
   const optimalLagSteps = bestLagPt.lagSteps;
   const optimalLagR = bestLagPt.r;
-  const optimalLagPValue = bestLagPt.pValue;
+  // Apply Šidák multiplicity correction when selecting optimal lead/lag across multiple candidate shifts
+  const optimalLagPValue =
+    testedLagCount > 1 && bestLagPt.lagSteps !== 0
+      ? applySidakCorrection(bestLagPt.pValue, testedLagCount)
+      : bestLagPt.lagSteps === 0 && testedLagCount > 1
+        ? applySidakCorrection(bestLagPt.pValue, Math.max(1, testedLagCount))
+        : bestLagPt.pValue;
 
   // Rolling window coupling stability
   const rollingCorrelations: RollingCorrelationPoint[] = [];
@@ -1285,9 +1340,13 @@ export function compareRegionalSeries(
     stdB > 1e-9 &&
     stdResA / stdA > 0.05 &&
     stdResB / stdB > 0.05;
+  const sameSignDetrended = pearsonR * detrendedR > 0;
   const hasPhysicalVariabilityCoupling =
-    (Math.abs(detrendedR) >= 0.3 && detrendedPValue < 0.08) ||
-    (Math.abs(optimalLagR) >= 0.35 && optimalLagPValue < 0.05);
+    (sameSignDetrended && Math.abs(detrendedR) >= 0.3 && detrendedPValue < 0.08) ||
+    (optimalLagSteps !== 0 &&
+      Math.abs(optimalLagR) >= 0.35 &&
+      optimalLagPValue < 0.05 &&
+      Math.abs(optimalLagR) > Math.abs(detrendedR) + 0.05);
   const isSecularDriftOnly =
     hasInterannualVariability &&
     Math.abs(pearsonR) >= 0.45 &&
@@ -1314,6 +1373,645 @@ export function compareRegionalSeries(
     couplingRegime,
     classification,
     isSecularDriftOnly,
+    effectiveN,
     alignedPoints,
+  };
+}
+
+/**
+ * Remove recurring monthly seasonal cycles (climatology) from monthly or sub-monthly series,
+ * yielding monthly anomalies centered on each calendar month's mean (optionally scoped to `baselineRange`).
+ * Series without monthly resolution are returned sorted as-is.
+ */
+export function deseasonalizeMonthlySeries(
+  points: readonly TimeSeriesPoint[],
+  baselineRange?: [number, number]
+): TimeSeriesPoint[] {
+  const finite = points
+    .filter((p) => Number.isFinite(p.value) && typeof p.date === "string" && p.date.trim().length > 0)
+    .map((p) => ({ ...p }))
+    .sort((a, b) => a.t - b.t);
+  if (finite.length === 0) return [];
+
+  const monthlyMap = aggregateByCalendarBucket(finite, "yearMonth");
+  const monthlyKeys = [...monthlyMap.keys()].sort();
+  if (monthlyKeys.length < 12) {
+    return finite;
+  }
+
+  const byMonthAll = Array.from({ length: 12 }, () => [] as number[]);
+  const byMonthBaseline = Array.from({ length: 12 }, () => [] as number[]);
+
+  for (const key of monthlyKeys) {
+    const [yStr, mStr] = key.split("-");
+    const year = Number(yStr);
+    const monthIdx = Number(mStr) - 1;
+    if (monthIdx < 0 || monthIdx > 11 || !Number.isFinite(year)) continue;
+    const entry = monthlyMap.get(key)!;
+    byMonthAll[monthIdx].push(entry.value);
+    if (baselineRange && year >= baselineRange[0] && year <= baselineRange[1]) {
+      byMonthBaseline[monthIdx].push(entry.value);
+    }
+  }
+
+  const climatology = byMonthAll.map((vals, monthIdx) => {
+    const src = byMonthBaseline[monthIdx].length > 0 ? byMonthBaseline[monthIdx] : vals;
+    if (src.length === 0) return 0;
+    return src.reduce((s, v) => s + v, 0) / src.length;
+  });
+
+  return monthlyKeys.map((key) => {
+    const [, mStr] = key.split("-");
+    const monthIdx = Number(mStr) - 1;
+    const entry = monthlyMap.get(key)!;
+    const baselineMean = monthIdx >= 0 && monthIdx < 12 ? climatology[monthIdx] : 0;
+    return {
+      date: key,
+      t: entry.t,
+      value: Number((entry.value - baselineMean).toFixed(6)),
+    };
+  });
+}
+
+function regressOutConfounder(target: readonly number[], confounder: readonly number[]): number[] {
+  const n = Math.min(target.length, confounder.length);
+  if (n < 3) return target.slice(0, n);
+  let meanT = 0;
+  let meanZ = 0;
+  for (let i = 0; i < n; i++) {
+    meanT += target[i];
+    meanZ += confounder[i];
+  }
+  meanT /= n;
+  meanZ /= n;
+  let cov = 0;
+  let varZ = 0;
+  for (let i = 0; i < n; i++) {
+    const dt = target[i] - meanT;
+    const dz = confounder[i] - meanZ;
+    cov += dt * dz;
+    varZ += dz * dz;
+  }
+  if (varZ <= 1e-12) {
+    return target.slice(0, n).map((v) => v - meanT);
+  }
+  const beta = cov / varZ;
+  const alpha = meanT - beta * meanZ;
+  return target.slice(0, n).map((v, i) => v - (alpha + beta * confounder[i]));
+}
+
+export interface PartialCorrelationResult {
+  partialR: number;
+  partialPValue: number;
+  effectiveN: number;
+  optimalLagSteps: number;
+  optimalLagPartialR: number;
+  optimalLagPValue: number;
+}
+
+/**
+ * Compute partial detrended Pearson correlation between two series after linearly detrending both
+ * and partialling out a global confounder (e.g. GISTEMP global warming trajectory).
+ */
+export function computePartialDetrendedCorrelation(
+  seriesA: readonly TimeSeriesPoint[],
+  seriesB: readonly TimeSeriesPoint[],
+  confounder: readonly TimeSeriesPoint[],
+  options?: { maxLag?: number }
+): PartialCorrelationResult {
+  const empty: PartialCorrelationResult = {
+    partialR: 0,
+    partialPValue: 1,
+    effectiveN: 0,
+    optimalLagSteps: 0,
+    optimalLagPartialR: 0,
+    optimalLagPValue: 1,
+  };
+  const cleanA = seriesA.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  const cleanB = seriesB.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  const cleanZ = confounder.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  if (cleanA.length < 6 || cleanB.length < 6 || cleanZ.length < 6) return empty;
+
+  const monthA = aggregateByCalendarBucket(cleanA, "yearMonth");
+  const monthB = aggregateByCalendarBucket(cleanB, "yearMonth");
+  const monthZ = aggregateByCalendarBucket(cleanZ, "yearMonth");
+  const yearZ = aggregateByCalendarBucket(cleanZ, "year");
+
+  const hasMonthA = monthA.size / cleanA.length >= 0.6;
+  const hasMonthB = monthB.size / cleanB.length >= 0.6;
+  const aligned: Array<{ t: number; a: number; b: number; z: number }> = [];
+
+  if (hasMonthA && hasMonthB) {
+    const keys = [...monthA.keys()].filter((k) => monthB.has(k)).sort();
+    for (const ym of keys) {
+      const zPt = monthZ.get(ym) ?? yearZ.get(ym.slice(0, 4));
+      if (!zPt) continue;
+      const aPt = monthA.get(ym)!;
+      const bPt = monthB.get(ym)!;
+      aligned.push({ t: aPt.t, a: aPt.value, b: bPt.value, z: zPt.value });
+    }
+  }
+
+  if (aligned.length < 6) {
+    aligned.length = 0;
+    const yearA = aggregateByCalendarBucket(cleanA, "year");
+    const yearB = aggregateByCalendarBucket(cleanB, "year");
+    const keys = [...yearA.keys()].filter((k) => yearB.has(k) && yearZ.has(k)).sort();
+    for (const y of keys) {
+      const aPt = yearA.get(y)!;
+      const bPt = yearB.get(y)!;
+      const zPt = yearZ.get(y)!;
+      aligned.push({ t: aPt.t, a: aPt.value, b: bPt.value, z: zPt.value });
+    }
+  }
+
+  const n = aligned.length;
+  if (n < 6) return { ...empty, effectiveN: n };
+
+  const ptsA = aligned.map((p) => ({ date: "", t: p.t, value: p.a }));
+  const ptsB = aligned.map((p) => ({ date: "", t: p.t, value: p.b }));
+  const ptsZ = aligned.map((p) => ({ date: "", t: p.t, value: p.z }));
+  const senA = theilSenEstimator(ptsA);
+  const senB = theilSenEstimator(ptsB);
+  const senZ = theilSenEstimator(ptsZ);
+
+  const detA = ptsA.map((p) => p.value - (senA.slope * p.t + senA.intercept));
+  const detB = ptsB.map((p) => p.value - (senB.slope * p.t + senB.intercept));
+  const detZ = ptsZ.map((p) => p.value - (senZ.slope * p.t + senZ.intercept));
+
+  const residA = regressOutConfounder(detA, detZ);
+  const residB = regressOutConfounder(detB, detZ);
+
+  const varA = residA.reduce((s, v) => s + v * v, 0);
+  const varB = residB.reduce((s, v) => s + v * v, 0);
+  if (varA <= 1e-12 || varB <= 1e-12) {
+    return { ...empty, effectiveN: n };
+  }
+
+  return summarizePartialResiduals(residA, residB, 1, options?.maxLag);
+}
+
+function summarizePartialResiduals(
+  residA: readonly number[],
+  residB: readonly number[],
+  confounderCount: number,
+  maxLagOpt?: number
+): PartialCorrelationResult {
+  const n = residA.length;
+  const partialR = pearsonCorrelation(residA, residB);
+  const effectiveN = computePairEffectiveSampleSize(residA, residB);
+  const dof = Math.max(4, effectiveN - Math.max(1, confounderCount));
+  const partialPValue = fisherPValue(partialR, dof);
+
+  const maxLag = n >= 8 ? Math.min(maxLagOpt ?? 6, Math.max(1, Math.floor((n - 4) / 2))) : 0;
+  let bestLagSteps = 0;
+  let bestLagR = partialR;
+  let bestRawLagP = partialPValue;
+  let testedLags = 0;
+
+  for (let k = -maxLag; k <= maxLag; k++) {
+    const startI = Math.max(0, -k);
+    const endI = Math.min(n - 1, n - 1 - k);
+    const len = endI - startI + 1;
+    if (len < 6) continue;
+    testedLags++;
+    const sliceA: number[] = [];
+    const sliceB: number[] = [];
+    for (let i = startI; i <= endI; i++) {
+      sliceA.push(residA[i]);
+      sliceB.push(residB[i + k]);
+    }
+    const r = pearsonCorrelation(sliceA, sliceB);
+    const effSliceN = computePairEffectiveSampleSize(sliceA, sliceB);
+    const rawP = fisherPValue(r, Math.max(4, effSliceN - Math.max(1, confounderCount)));
+    if (
+      Math.abs(r) > Math.abs(bestLagR) + 0.03 ||
+      (Math.abs(Math.abs(r) - Math.abs(bestLagR)) <= 0.03 && Math.abs(k) < Math.abs(bestLagSteps))
+    ) {
+      bestLagSteps = k;
+      bestLagR = r;
+      bestRawLagP = rawP;
+    }
+  }
+
+  return {
+    partialR,
+    partialPValue,
+    effectiveN,
+    optimalLagSteps: bestLagSteps,
+    optimalLagPartialR: bestLagR,
+    optimalLagPValue: testedLags > 1 ? applySidakCorrection(bestRawLagP, testedLags) : bestRawLagP,
+  };
+}
+
+/**
+ * Computes multivariate partial detrended Pearson correlation between two series after
+ * linearly Theil-Sen detrending and jointly regressing out multiple confounders
+ * (e.g. GISTEMP global warming plus ENSO Niño 3.4, AMO, PDO, NAO).
+ */
+export function computeMultivariatePartialDetrendedCorrelation(
+  seriesA: readonly TimeSeriesPoint[],
+  seriesB: readonly TimeSeriesPoint[],
+  confounders: ReadonlyArray<readonly TimeSeriesPoint[]>,
+  options?: { maxLag?: number }
+): PartialCorrelationResult {
+  const empty: PartialCorrelationResult = {
+    partialR: 0,
+    partialPValue: 1,
+    effectiveN: 0,
+    optimalLagSteps: 0,
+    optimalLagPartialR: 0,
+    optimalLagPValue: 1,
+  };
+  const validConfounders = confounders.filter((c) => Array.isArray(c) && c.length >= 6);
+  if (validConfounders.length === 0) return empty;
+  if (validConfounders.length === 1) {
+    return computePartialDetrendedCorrelation(seriesA, seriesB, validConfounders[0], options);
+  }
+
+  const cleanA = seriesA.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  const cleanB = seriesB.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  if (cleanA.length < 6 || cleanB.length < 6) return empty;
+
+  const monthA = aggregateByCalendarBucket(cleanA, "yearMonth");
+  const monthB = aggregateByCalendarBucket(cleanB, "yearMonth");
+  const confBuckets = validConfounders.map((c) => {
+    const clean = c.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+    return {
+      month: aggregateByCalendarBucket(clean, "yearMonth"),
+      year: aggregateByCalendarBucket(clean, "year"),
+    };
+  });
+
+  let useMonthly = monthA.size / cleanA.length >= 0.6 && monthB.size / cleanB.length >= 0.6;
+  let alignedDates: string[] = [];
+  let alignedA: TimeSeriesPoint[] = [];
+  let alignedB: TimeSeriesPoint[] = [];
+
+  if (useMonthly) {
+    alignedDates = [...monthA.keys()].filter((k) => monthB.has(k)).sort();
+    if (alignedDates.length < 8) {
+      useMonthly = false;
+    } else {
+      alignedA = alignedDates.map((k) => monthA.get(k)!);
+      alignedB = alignedDates.map((k) => monthB.get(k)!);
+    }
+  }
+
+  if (!useMonthly) {
+    const yearA = aggregateByCalendarBucket(cleanA, "year");
+    const yearB = aggregateByCalendarBucket(cleanB, "year");
+    alignedDates = [...yearA.keys()].filter((k) => yearB.has(k)).sort();
+    if (alignedDates.length < 8) return { ...empty, effectiveN: alignedDates.length };
+    alignedA = alignedDates.map((k) => yearA.get(k)!);
+    alignedB = alignedDates.map((k) => yearB.get(k)!);
+  }
+
+  // Select confounders with >= 75% temporal overlap over the intersection dates
+  const activeConfSeries: number[][] = [];
+  for (const cb of confBuckets) {
+    const vals: Array<number | null> = alignedDates.map((d) => {
+      const pt = useMonthly ? (cb.month.get(d) ?? cb.year.get(d.slice(0, 4))) : cb.year.get(d);
+      return pt && Number.isFinite(pt.value) ? pt.value : null;
+    });
+    const presentCount = vals.filter((v) => v !== null).length;
+    if (presentCount < Math.max(6, Math.ceil(alignedDates.length * 0.75))) continue;
+    const meanVal =
+      vals.reduce<number>((s, v) => s + (v ?? 0), 0) / Math.max(1, presentCount);
+    const pts = vals.map((v, idx) => ({
+      date: alignedDates[idx],
+      t: alignedA[idx].t,
+      value: v ?? meanVal,
+    }));
+    const sen = theilSenEstimator(pts);
+    const det = pts.map((p) => p.value - (sen.slope * p.t + sen.intercept));
+    const m = det.reduce((s, v) => s + v, 0) / det.length;
+    const sd = Math.sqrt(det.reduce((s, v) => s + (v - m) ** 2, 0) / Math.max(1, det.length - 1));
+    if (sd > 1e-9) {
+      activeConfSeries.push(det.map((v) => (v - m) / sd));
+    }
+  }
+
+  if (activeConfSeries.length === 0) return { ...empty, effectiveN: alignedDates.length };
+  if (activeConfSeries.length === 1) {
+    // Only 1 overlapping confounder found; fallback cleanly using standardized residuals
+    const senA = theilSenEstimator(alignedA);
+    const senB = theilSenEstimator(alignedB);
+    const detA = alignedA.map((p) => p.value - (senA.slope * p.t + senA.intercept));
+    const detB = alignedB.map((p) => p.value - (senB.slope * p.t + senB.intercept));
+    const residA = regressOutConfounder(detA, activeConfSeries[0]);
+    const residB = regressOutConfounder(detB, activeConfSeries[0]);
+    return summarizePartialResiduals(residA, residB, 1, options?.maxLag);
+  }
+
+  const senA = theilSenEstimator(alignedA);
+  const senB = theilSenEstimator(alignedB);
+  const detA = alignedA.map((p) => p.value - (senA.slope * p.t + senA.intercept));
+  const detB = alignedB.map((p) => p.value - (senB.slope * p.t + senB.intercept));
+
+  const n = alignedDates.length;
+  const designRows = Array.from({ length: n }, (_, i) => [
+    1,
+    ...activeConfSeries.map((col) => col[i]),
+  ]);
+
+  const wA = fitRegularizedLinearWeights(designRows, detA, 0.05);
+  const wB = fitRegularizedLinearWeights(designRows, detB, 0.05);
+  const dotRow = (w: readonly number[], row: readonly number[]) =>
+    w.reduce((acc, wi, idx) => acc + wi * (row[idx] ?? 0), 0);
+
+  const residA = detA.map((val, i) => val - dotRow(wA, designRows[i]));
+  const residB = detB.map((val, i) => val - dotRow(wB, designRows[i]));
+  const varA = residA.reduce((s, v) => s + v * v, 0);
+  const varB = residB.reduce((s, v) => s + v * v, 0);
+  if (varA <= 1e-12 || varB <= 1e-12) {
+    return { ...empty, effectiveN: n };
+  }
+
+  return summarizePartialResiduals(residA, residB, activeConfSeries.length, options?.maxLag);
+}
+
+function solveSmallLinearSystem(matrix: number[][], rhs: number[]): number[] {
+  const m = rhs.length;
+  const a = matrix.map((row, idx) => [...row, rhs[idx]]);
+  for (let col = 0; col < m; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < m; r++) {
+      if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r;
+    }
+    [a[col], a[pivot]] = [a[pivot], a[col]];
+    const diag = a[col][col];
+    if (Math.abs(diag) < 1e-10) continue;
+    for (let j = col; j <= m; j++) a[col][j] /= diag;
+    for (let r = 0; r < m; r++) {
+      if (r === col) continue;
+      const factor = a[r][col];
+      for (let j = col; j <= m; j++) a[r][j] -= factor * a[col][j];
+    }
+  }
+  return a.map((row) => (Number.isFinite(row[m]) ? row[m] : 0));
+}
+
+function fitRegularizedLinearWeights(rows: readonly number[][], targets: readonly number[], ridge = 0.25): number[] {
+  const cols = rows[0]?.length ?? 0;
+  if (cols === 0 || rows.length === 0) return [];
+  const xtx = Array.from({ length: cols }, () => new Array<number>(cols).fill(0));
+  const xty = new Array<number>(cols).fill(0);
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    const y = targets[r];
+    for (let i = 0; i < cols; i++) {
+      xty[i] += row[i] * y;
+      for (let j = 0; j < cols; j++) {
+        xtx[i][j] += row[i] * row[j];
+      }
+    }
+  }
+  // Regularize feature slopes (indices >= 1), leave intercept (index 0) unpenalized
+  for (let i = 1; i < cols; i++) {
+    xtx[i][i] += ridge;
+  }
+  xtx[0][0] += 1e-8;
+  return solveSmallLinearSystem(xtx, xty);
+}
+
+export interface PairwisePredictiveSkillResult {
+  skillLiftPct: number;
+  baselineRmse: number;
+  modelRmse: number;
+  nEvaluated: number;
+}
+
+/**
+ * Walk-forward chronological out-of-sample forecast validation:
+ * compares target[t] ~ target[t-1] + driver[t-lag] against AR(1) baseline target[t] ~ target[t-1]
+ * over an expanding training window and returns percentage RMSE reduction (`skillLiftPct`).
+ */
+export function computePairwisePredictiveSkillLift(
+  driverSeries: readonly TimeSeriesPoint[],
+  targetSeries: readonly TimeSeriesPoint[],
+  lagSteps = 0
+): PairwisePredictiveSkillResult {
+  const cleanA = driverSeries.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  const cleanB = targetSeries.filter((p) => Number.isFinite(p.value) && typeof p.date === "string");
+  if (cleanA.length < 8 || cleanB.length < 8) {
+    return { skillLiftPct: 0, baselineRmse: 0, modelRmse: 0, nEvaluated: 0 };
+  }
+
+  const monthA = aggregateByCalendarBucket(cleanA, "yearMonth");
+  const monthB = aggregateByCalendarBucket(cleanB, "yearMonth");
+  const paired: Array<{ t: number; x: number; y: number }> = [];
+
+  if (monthA.size / cleanA.length >= 0.7 && monthB.size / cleanB.length >= 0.7) {
+    const keys = [...monthA.keys()].filter((k) => monthB.has(k)).sort();
+    for (const k of keys) {
+      const a = monthA.get(k)!;
+      const b = monthB.get(k)!;
+      paired.push({ t: b.t, x: a.value, y: b.value });
+    }
+  }
+
+  if (paired.length < 8) {
+    paired.length = 0;
+    const yearA = aggregateByCalendarBucket(cleanA, "year");
+    const yearB = aggregateByCalendarBucket(cleanB, "year");
+    const keys = [...yearA.keys()].filter((k) => yearB.has(k)).sort();
+    for (const k of keys) {
+      const a = yearA.get(k)!;
+      const b = yearB.get(k)!;
+      paired.push({ t: b.t, x: a.value, y: b.value });
+    }
+  }
+
+  paired.sort((u, v) => u.t - v.t);
+  const n = paired.length;
+  if (n < 8) {
+    return { skillLiftPct: 0, baselineRmse: 0, modelRmse: 0, nEvaluated: 0 };
+  }
+
+  const effLag = Math.max(0, Math.min(Math.round(Math.abs(lagSteps)), Math.max(0, Math.floor((n - 6) / 2))));
+  const minIdx = Math.max(1, effLag);
+  const firstTestIdx = Math.max(minIdx + 4, Math.floor(n * 0.5));
+  if (firstTestIdx >= n) {
+    return { skillLiftPct: 0, baselineRmse: 0, modelRmse: 0, nEvaluated: 0 };
+  }
+
+  let baseSqErr = 0;
+  let modelSqErr = 0;
+  let count = 0;
+
+  for (let testIdx = firstTestIdx; testIdx < n; testIdx++) {
+    const trainIndices: number[] = [];
+    for (let i = minIdx; i < testIdx; i++) {
+      trainIndices.push(i);
+    }
+    if (trainIndices.length < 4) continue;
+
+    // Standardize predictors on causal training fold [minIdx .. testIdx - 1]
+    const prevVals = trainIndices.map((i) => paired[i - 1].y);
+    const drvVals = trainIndices.map((i) => paired[i - effLag].x);
+    const yTrain = trainIndices.map((i) => paired[i].y);
+
+    const meanPrev = prevVals.reduce((s, v) => s + v, 0) / prevVals.length;
+    const meanDrv = drvVals.reduce((s, v) => s + v, 0) / drvVals.length;
+    const stdPrev = Math.sqrt(
+      prevVals.reduce((s, v) => s + (v - meanPrev) ** 2, 0) / Math.max(1, prevVals.length - 1)
+    ) || 1;
+    const stdDrv = Math.sqrt(
+      drvVals.reduce((s, v) => s + (v - meanDrv) ** 2, 0) / Math.max(1, drvVals.length - 1)
+    ) || 1;
+
+    const baseRows = trainIndices.map((i) => [1, (paired[i - 1].y - meanPrev) / stdPrev]);
+    const modelRows = trainIndices.map((i) => [
+      1,
+      (paired[i - 1].y - meanPrev) / stdPrev,
+      (paired[i - effLag].x - meanDrv) / stdDrv,
+    ]);
+
+    const wBase = fitRegularizedLinearWeights(baseRows, yTrain, 0.25);
+    const wModel = fitRegularizedLinearWeights(modelRows, yTrain, 0.35);
+
+    const zPrevTest = (paired[testIdx - 1].y - meanPrev) / stdPrev;
+    const zDrvTest = (paired[testIdx - effLag].x - meanDrv) / stdDrv;
+
+    const predBase = wBase[0] + wBase[1] * zPrevTest;
+    const predModel = wModel[0] + wModel[1] * zPrevTest + wModel[2] * zDrvTest;
+    const actual = paired[testIdx].y;
+
+    baseSqErr += (actual - predBase) ** 2;
+    modelSqErr += (actual - predModel) ** 2;
+    count++;
+  }
+
+  if (count === 0) {
+    return { skillLiftPct: 0, baselineRmse: 0, modelRmse: 0, nEvaluated: 0 };
+  }
+
+  const baselineRmse = Math.sqrt(baseSqErr / count);
+  const modelRmse = Math.sqrt(modelSqErr / count);
+  const rawLift = baselineRmse > 1e-12 ? ((baselineRmse - modelRmse) / baselineRmse) * 100 : 0;
+  const skillLiftPct = Number(Math.max(-100, Math.min(100, rawLift)).toFixed(2));
+  return {
+    skillLiftPct,
+    baselineRmse: Number(baselineRmse.toFixed(4)),
+    modelRmse: Number(modelRmse.toFixed(4)),
+    nEvaluated: count,
+  };
+}
+
+export interface SpatialMoransIResult {
+  moransI: number;
+  expectedI: number;
+  zScore: number;
+  pValue: number;
+  effectiveSpatialDof: number;
+  nLocations: number;
+}
+
+/**
+ * Computes Global Moran's I spatial autocorrelation with exponential distance-decay weights
+ * `w_ij = exp(-d_ij / bandwidthKm)` and estimates effective independent spatial degrees of freedom.
+ */
+export function computeSpatialMoransI(
+  observations: ReadonlyArray<{ lat: number; lng: number; value: number }>,
+  bandwidthKm = 2500
+): SpatialMoransIResult {
+  const valid = observations.filter(
+    (o) => Number.isFinite(o.lat) && Number.isFinite(o.lng) && Number.isFinite(o.value)
+  );
+  const n = valid.length;
+  if (n < 4) {
+    return {
+      moransI: 0,
+      expectedI: 0,
+      zScore: 0,
+      pValue: 1,
+      effectiveSpatialDof: n,
+      nLocations: n,
+    };
+  }
+
+  const mean = valid.reduce((s, o) => s + o.value, 0) / n;
+  const devs = valid.map((o) => o.value - mean);
+  const denomVar = devs.reduce((s, d) => s + d * d, 0);
+  if (denomVar <= 1e-12) {
+    return {
+      moransI: 0,
+      expectedI: Number((-1 / (n - 1)).toFixed(4)),
+      zScore: 0,
+      pValue: 1,
+      effectiveSpatialDof: n,
+      nLocations: n,
+    };
+  }
+
+  const bw = Math.max(100, bandwidthKm);
+  const w: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    let rowSum = 0;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const dist = haversineKm(valid[i].lat, valid[i].lng, valid[j].lat, valid[j].lng);
+      const wt = Math.exp(-dist / bw);
+      w[i][j] = wt;
+      rowSum += wt;
+    }
+    if (rowSum > 1e-12) {
+      for (let j = 0; j < n; j++) w[i][j] /= rowSum;
+    }
+  }
+
+  let s0 = 0;
+  let num = 0;
+  let s1 = 0;
+  let s2 = 0;
+
+  for (let i = 0; i < n; i++) {
+    let rowSum = 0;
+    let colSum = 0;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const wij = w[i][j];
+      const wji = w[j][i];
+      s0 += wij;
+      num += wij * devs[i] * devs[j];
+      s1 += 0.5 * (wij + wji) * (wij + wji);
+      rowSum += wij;
+      colSum += wji;
+    }
+    s2 += (rowSum + colSum) * (rowSum + colSum);
+  }
+
+  if (s0 <= 1e-12) {
+    return {
+      moransI: 0,
+      expectedI: Number((-1 / (n - 1)).toFixed(4)),
+      zScore: 0,
+      pValue: 1,
+      effectiveSpatialDof: n,
+      nLocations: n,
+    };
+  }
+
+  const moransI = (n / s0) * (num / denomVar);
+  const expectedI = -1 / (n - 1);
+  // Classical normal-assumption analytical variance for Moran's I
+  const s0sq = s0 * s0;
+  const eIsq =
+    (n * n * s1 - n * s2 + 3 * s0sq) / ((n * n - 1) * s0sq);
+  const varI = Math.max(1e-9, eIsq - expectedI * expectedI);
+  const zScore = (moransI - expectedI) / Math.sqrt(varI);
+  const pValue = 2 * (1 - normalCdf(Math.abs(zScore)));
+  const effectiveSpatialDof = Number(
+    Math.max(1, Math.min(n, n / (1 + Math.max(0, moransI) * Math.min(n - 1, 4)))).toFixed(2)
+  );
+
+  return {
+    moransI: Number(moransI.toFixed(4)),
+    expectedI: Number(expectedI.toFixed(4)),
+    zScore: Number(zScore.toFixed(3)),
+    pValue: Number(Math.max(0, Math.min(1, pValue)).toFixed(6)),
+    effectiveSpatialDof,
+    nLocations: n,
   };
 }

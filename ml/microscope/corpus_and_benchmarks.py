@@ -578,3 +578,105 @@ def train_and_export_microscope(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(weights, indent=2), encoding="utf-8")
     return {"model": model, "weights": weights, "benchmarks": bench, "path": str(out)}
+
+
+_EMBEDDED_REAL_HISTORICAL_SERIES: Dict[str, List[float]] = {
+    # NOAA Mauna Loa Annual CO2 (ppm, 1995-2025)
+    "signal-noaa-global-co2": [
+        360.18, 361.93, 363.04, 365.7, 367.79, 368.96, 370.57, 372.58, 375.14, 376.95,
+        378.98, 381.15, 382.9, 385.02, 386.5, 388.75, 390.62, 392.65, 395.4, 397.34,
+        399.65, 403.07, 405.22, 407.61, 410.07, 412.45, 414.7, 417.08, 419.35, 422.79, 425.62,
+    ],
+    # NASA GISTEMP v4 Global Mean Surface Temp Anomaly (degC, 1995-2025)
+    "signal-gistemp-global": [
+        0.44, 0.33, 0.46, 0.61, 0.38, 0.39, 0.53, 0.63, 0.61, 0.53,
+        0.68, 0.64, 0.66, 0.54, 0.66, 0.72, 0.61, 0.64, 0.67, 0.75,
+        0.9, 1.01, 0.91, 0.85, 0.98, 1.01, 0.85, 0.89, 1.17, 1.28, 1.19,
+    ],
+    # NASA GISTEMP v4 24N-44N Mid-Latitude Belt (degC, 1995-2025)
+    "signal-gistemp-24n-44n": [
+        0.32, 0.11, 0.23, 0.66, 0.74, 0.55, 0.68, 0.58, 0.54, 0.66,
+        0.57, 0.7, 0.69, 0.61, 0.68, 0.74, 0.58, 0.74, 0.69, 0.73,
+        0.99, 1.06, 1.03, 1.05, 0.99, 1.18, 1.26, 1.26, 1.46, 1.65, 1.53,
+    ],
+    # NASA GISTEMP v4 44N-64N Northern Mid-Latitude Belt (degC, 1995-2025)
+    "signal-gistemp-44n-64n": [
+        0.98, 0.17, 0.9, 0.94, 0.8, 0.8, 0.86, 1.0, 0.98, 0.95,
+        1.22, 1.06, 1.31, 1.07, 0.6, 0.87, 0.93, 0.92, 1.04, 1.14,
+        1.47, 1.42, 1.37, 1.09, 1.43, 1.8, 1.35, 1.49, 1.86, 1.95, 1.94,
+    ],
+    # NSIDC September Arctic Sea Ice Extent (million km^2, 1995-2025; post-2012 plateau)
+    "signal-nsidc-arctic-seaice": [
+        6.08, 7.58, 6.69, 6.54, 6.12, 6.25, 6.73, 5.83, 6.12, 5.98,
+        5.5, 5.86, 4.27, 4.69, 5.26, 4.87, 4.56, 3.57, 5.21, 5.22,
+        4.62, 4.53, 4.82, 4.79, 4.36, 4.0, 4.95, 4.9, 4.38, 4.35, 4.75,
+    ],
+    # KNMI NAO Index (1995-2023)
+    "signal-knmi-nao": [
+        -0.61, -1.01, -0.178, 0.255, 0.044, -0.039, -0.455, -0.042, -0.303, 0.006,
+        -0.256, -0.177, -0.382, -0.68, -0.379, -2.345, 0.463, -0.629, 0.59, 0.095,
+        1.164, 0.395, 0.574, 0.716, -0.03, 0.336, -0.673, -0.063, -0.567,
+    ],
+}
+
+
+def evaluate_real_historical_microscope(
+    model: PortableTrendMicroscope,
+    series_json_path: Optional[Union[str, Path]] = None,
+) -> Dict[str, Any]:
+    """
+    Evaluate ETG Trend Microscope on 6 real historical NASA GISTEMP v4, NOAA CO2,
+    NSIDC Arctic Sea Ice, and KNMI NAO observational time series (with embedded
+    observational fallback when `.data/etg-series.json` is absent).
+    """
+    raw_map: Dict[str, List[float]] = {k: list(v) for k, v in _EMBEDDED_REAL_HISTORICAL_SERIES.items()}
+    if series_json_path is not None and Path(series_json_path).exists():
+        loaded = json.loads(Path(series_json_path).read_text(encoding="utf-8"))
+        for key in raw_map:
+            pts = loaded.get(key)
+            if isinstance(pts, list) and len(pts) >= 20:
+                vals = [float(p["value"]) for p in pts if isinstance(p, dict) and math.isfinite(float(p.get("value", float("nan"))))]
+                if len(vals) >= 20:
+                    raw_map[key] = vals
+
+    metas = [
+        {"uuid": "signal-noaa-global-co2", "name": "NOAA Global CO2", "lat": 19.5, "lng": -155.6, "temporal_scale": "year", "trust_score": 0.99, "is_community": False, "corroborated": True},
+        {"uuid": "signal-gistemp-global", "name": "NASA GISTEMP Global", "lat": 0.0, "lng": 0.0, "temporal_scale": "year", "trust_score": 0.99, "is_community": False, "corroborated": True},
+        {"uuid": "signal-gistemp-24n-44n", "name": "NASA GISTEMP 24N-44N", "lat": 34.0, "lng": -100.0, "temporal_scale": "year", "trust_score": 0.98, "is_community": False, "corroborated": True},
+        {"uuid": "signal-gistemp-44n-64n", "name": "NASA GISTEMP 44N-64N", "lat": 54.0, "lng": -100.0, "temporal_scale": "year", "trust_score": 0.98, "is_community": False, "corroborated": True},
+        {"uuid": "signal-nsidc-arctic-seaice", "name": "NSIDC Arctic Sea Ice", "lat": 78.0, "lng": 0.0, "temporal_scale": "year", "trust_score": 0.98, "is_community": False, "corroborated": True},
+        {"uuid": "signal-knmi-nao", "name": "KNMI NAO Mode", "lat": 55.0, "lng": -25.0, "temporal_scale": "year", "trust_score": 0.95, "is_community": False, "corroborated": True},
+    ]
+    series_list = [raw_map[m["uuid"]] for m in metas]
+    scan = model.scan_graph(metas, series_list, top_k=15)
+    by_id = {n["uuid"]: n for n in scan["nodes"]}
+
+    warming_ids = (
+        "signal-noaa-global-co2",
+        "signal-gistemp-global",
+        "signal-gistemp-24n-44n",
+        "signal-gistemp-44n-64n",
+    )
+    nao_share = by_id["signal-knmi-nao"]["dealiasing"]["secularShare"]
+    secular_checks = [
+        *(
+            by_id[uid]["emergingDirection"] == "increasing"
+            and by_id[uid]["dealiasing"]["secularShare"] > 0.50
+            and by_id[uid]["dealiasing"]["falseTrendProb"] < 0.05
+            for uid in warming_ids
+        ),
+        by_id["signal-nsidc-arctic-seaice"]["emergingDirection"] == "stable"
+        and by_id["signal-nsidc-arctic-seaice"]["dealiasing"]["secularShare"] > nao_share,
+        by_id["signal-knmi-nao"]["emergingDirection"] == "stable"
+        and by_id["signal-knmi-nao"]["dealiasing"]["falseTrendProb"] > 0.85
+        and nao_share < 0.25
+        and all(by_id[uid]["dealiasing"]["secularShare"] > nao_share for uid in warming_ids),
+    ]
+    return {
+        "schemaVersion": scan["schemaVersion"],
+        "nodes": by_id,
+        "verifiedCouplings": scan["verifiedCouplings"],
+        "secularChecksPassed": sum(1 for c in secular_checks if c),
+        "secularChecksTotal": len(secular_checks),
+        "allSecularChecksPassed": all(secular_checks),
+    }

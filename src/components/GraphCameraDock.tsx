@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Crosshair, Minus, Pause, Plus, Rotate3d, RotateCw } from "lucide-react";
+import { Crosshair, Minus, Pause, Plus, Rotate3d, RotateCw, Satellite } from "lucide-react";
 
 interface GraphCameraDockProps {
   showOrbitControls?: boolean;
@@ -9,6 +9,8 @@ interface GraphCameraDockProps {
   onToggleOrbit?: () => void;
   onStepRotate?: () => void;
   onRecenter: () => void;
+  onSatelliteZoom?: () => void;
+  isSatelliteZoom?: boolean;
   onZoomIn: () => void;
   onZoomOut: () => void;
   orientation?: "horizontal" | "vertical";
@@ -21,6 +23,8 @@ export function GraphCameraDock({
   onToggleOrbit,
   onStepRotate,
   onRecenter,
+  onSatelliteZoom,
+  isSatelliteZoom = false,
   onZoomIn,
   onZoomOut,
   orientation = "horizontal",
@@ -30,9 +34,8 @@ export function GraphCameraDock({
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const btnBase = isVertical
-    ? "inline-flex min-h-8 min-w-[44px] flex-col items-center justify-center gap-0.5 rounded-sm border border-transparent px-1 py-1 text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
-    : "inline-flex min-h-7 min-w-7 items-center justify-center rounded-sm border border-transparent text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer";
+  const btnBase =
+    "etg-hud-btn inline-flex h-7 w-7 items-center justify-center rounded-sm border border-transparent text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer";
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const prevKey = isVertical ? "ArrowUp" : "ArrowLeft";
@@ -63,10 +66,10 @@ export function GraphCameraDock({
   return (
     <div
       ref={toolbarRef}
-      {...({ focusgroup: "toolbar wrap" } as Record<string, string>)}
+      {...({ focusgroup: isVertical ? "toolbar wrap block" : "toolbar wrap" } as Record<string, string>)}
       onKeyDown={handleKeyDown}
-      className={`etg-hud-pill inline-flex items-center rounded-md bg-surface ${
-        isVertical ? "flex-col gap-1 p-1.5" : "gap-0.5 p-1"
+      className={`etg-hud-pill inline-flex items-center rounded-md bg-surface p-0.5 ${
+        isVertical ? "flex-col gap-0.5" : "gap-0.5"
       } ${className}`}
       role="toolbar"
       aria-orientation={orientation}
@@ -91,9 +94,6 @@ export function GraphCameraDock({
           ) : (
             <RotateCw className="h-3.5 w-3.5" aria-hidden="true" />
           )}
-          {isVertical && (
-            <span className="font-mono text-[9px] leading-none">Orbit</span>
-          )}
         </button>
       )}
 
@@ -107,7 +107,6 @@ export function GraphCameraDock({
           className={btnBase}
         >
           <Rotate3d className="h-3.5 w-3.5" aria-hidden="true" />
-          {isVertical && <span className="font-mono text-[9px] leading-none">35°</span>}
         </button>
       )}
 
@@ -120,7 +119,6 @@ export function GraphCameraDock({
         className={btnBase}
       >
         <Crosshair className="h-3.5 w-3.5" aria-hidden="true" />
-        {isVertical && <span className="font-mono text-[9px] leading-none">Reset</span>}
       </button>
 
       <div
@@ -128,10 +126,28 @@ export function GraphCameraDock({
         aria-orientation={isVertical ? "horizontal" : "vertical"}
         className={
           isVertical
-            ? "my-0.5 w-full border-t border-border"
+            ? "my-0.5 w-5 border-t border-border"
             : "mx-0.5 h-4 border-l border-border"
         }
       />
+
+      {onSatelliteZoom && (
+        <button
+          type="button"
+          tabIndex={nextTabIndex()}
+          onClick={onSatelliteZoom}
+          title={
+            isSatelliteZoom
+              ? "Step deeper into Satellite Recon Zoom (Region → Metro → City HD → Global)"
+              : "Zoom into Satellite Recon view"
+          }
+          aria-label="Satellite recon zoom"
+          aria-pressed={isSatelliteZoom}
+          className={`${btnBase} aria-pressed:border-sky-400 aria-pressed:bg-sky-100 aria-pressed:text-sky-900 dark:aria-pressed:bg-sky-950 dark:aria-pressed:text-sky-300`}
+        >
+          <Satellite className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
 
       <button
         type="button"
@@ -142,7 +158,6 @@ export function GraphCameraDock({
         className={btnBase}
       >
         <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-        {isVertical && <span className="font-mono text-[9px] leading-none">+</span>}
       </button>
 
       <button
@@ -154,7 +169,6 @@ export function GraphCameraDock({
         className={btnBase}
       >
         <Minus className="h-3.5 w-3.5" aria-hidden="true" />
-        {isVertical && <span className="font-mono text-[9px] leading-none">-</span>}
       </button>
     </div>
   );

@@ -21,12 +21,13 @@
      - `Insight`: Detected Earth trends and cross-region correlations (`drives_opposite`, `teleconnects`, `correlates_with`).
      - `Rule`: Corroboration & verification gates (e.g., ≥2 independent sources).
    - **Epistemic Belief Revision & Prospective Verification Ledger**: New observations link via `supersedes` edges to preserve scientific lineage, while forecasts reconcile ex-ante against newly arrived observations.
-   - **ETG Trend Microscope (`etg-trend-microscope-v1`) & Inductive GNN (`etg-ml-v2`)**: 3-head AI sensory organ ([ml/etg_trend_microscope.py](ml/etg_trend_microscope.py), [trendMicroscope.ts](src/lib/graph/trendMicroscope.ts)) achieves `0.9706` pre-Mann-Kendall inflection AUROC, `0.9827` directional coupling AUROC (`100%` illusion rejection), and `0.9442` false-trend F1; paired with parameter-shared **Inductive ETG Transformer (`etg-ml-v2`, `P10–P50–P90`)** ([ml/etg_inductive_gnn.py](ml/etg_inductive_gnn.py)) and Python **`ETGLagGraphNet`** (`+51.38%` RMSE lift: `1.8166` vs. `3.7362`).
+   - **ETG Trend Microscope (`etg-trend-microscope-v1`) & Inductive GNN (`etg-ml-v2`)**: 3-head AI sensory organ ([ml/etg_trend_microscope.py](ml/etg_trend_microscope.py), [trendMicroscope.ts](src/lib/graph/trendMicroscope.ts)) achieves `0.9789` pre-Mann-Kendall inflection AUROC (vs. `0.4442` MK; `79.6%` fresh-break recall), `0.9916` directional coupling AUROC (vs. `0.7010` Pearson $|r|$; `98.9%` illusion rejection), `0.0570` simplex MAE, and `0.9380` false-trend F1; paired with parameter-shared **Inductive ETG Transformer (`etg-ml-v2`, `P10–P50–P90`)** ([ml/etg_inductive_gnn.py](ml/etg_inductive_gnn.py)) and Python **`ETGLagGraphNet`** (`+51.38%` RMSE lift: `1.8166` vs. `3.7362`).
 
-3. **Denver Solar Microgrid (`SolarGraph`, `/?demo=veritas`)**
-   - 7-node Front Range upwind graph (`2019–2026`) fusing NASA POWER Daily + Open-Meteo `18:00–23:00 MST` hourly advection.
+3. **Global & Denver Solar Microgrid (`SolarGraph` + `etg-global-gnn-v3`, `/?demo=veritas`)**
+   - Canonical 7-node Front Range upwind graph + **click-anywhere 7-node global upwind ring (`GET /api/earth/solar-graph?lat=&lng=`)** (`2019–2026`) fusing NASA POWER Daily + Open-Meteo `18:00–23:00` evening hourly advection.
    - Colab HGBR (`n = 606` unseen `2025–2026` days, `Q_0.268 < 3.50`): `0.9278` RMSE (`+32.9%` skill vs. Persistence `1.3819`, `p = 4.96e-14`), `88.6%` storm recall, `+$418/yr` prototype tariff savings (`p = 0.0135` vs. Local+23h).
-   - Live Web App (`GET /api/earth/solar-graph`): Rolling Ridge + Open-Meteo bridge (`0.899` Graph+Eve RMSE, Storm Brier `0.080`) + inner-validation **calibrated probabilistic `P(ALLSKY < 3.5 | forecast)` Bayes dispatch** (`+$218/yr` vs. `+$180/yr` fixed threshold).
+   - **`etg-global-gnn-v3` (`2,043,212` params, `~14 ms` fp16 CPU)**: Trained across `36` global cities / `252` NASA POWER Daily+Hourly (`LST`) stations (`54,570` train graph-days), achieving `+22.8%` 5-continent zero-shot skill (Salt Lake City `+30.86%`, Madrid `+33.62%`, Tokyo `+22.67%`, Sydney `+25.13%`, Santiago `+1.89%`) and unseen `2025–2026` Denver (`n=678`) `0.9947` 0-shot / `0.9397` adapted RMSE (`+32.6%`, `p = 4.58e-17`, `+$205/yr`).
+   - Live Web App (`GET /api/earth/solar-graph`): Rolling Ridge (`0.899` Graph+Eve RMSE, Storm Brier `0.080`) + inner-validation **calibrated probabilistic `P(ALLSKY < 3.5 | forecast)` Bayes dispatch** (`+$218/yr` vs. `+$180/yr` fixed threshold).
 
 ---
 
@@ -35,5 +36,5 @@
 | Producer | Protocol / Endpoint | Graph Effect |
 | :--- | :--- | :--- |
 | **Any AI Agent** (vision, forecasting, LLM) | **16-Tool MCP Streamable HTTP & SSE** (`/api/mcp`, `/api/mcp/sse`, `/api/mcp/messages`), **OpenAPI 3.1.0** (`/api/mcp/openapi`), & `/api/ai/detective` | Queries k-hop context, runs Trend Microscope scans (`/api/graph/microscope`) & inductive `etg-ml-v2` forecasts (`/api/graph/predict`), logs/revises `Insight` or `Signal` nodes (`/api/graph/revise`). |
-| **Cameras & IoT Hardware** (ESP32, Pi, weather stations) | Node Webhooks (`/api/graph/nodes/[nodeId]/webhook`) | Pushes live readings with `lat`, `lng`, `device_id`, `dataset`, and `observed_at` with zero-shot `etg-ml-v2` trust gating. |
+| **Cameras & IoT Hardware** (ESP32, Pi, weather stations, KDEN) | Node Webhooks (`/api/graph/nodes/[nodeId]/webhook`), CLI (`scripts/stream_ground_sensor.mjs`), & 1-click KDEN/NWS UI ingest | Pushes live readings with `lat`, `lng`, `device_id`, `dataset`, and `observed_at` with zero-shot `etg-ml-v2` trust gating. |
 | **NASA & Open Earth APIs** (GIBS, POWER, EONET, GISTEMP, NOAA, USGS, GloFAS, CAMS) | `/api/earth/gibs`, `/api/earth/timeseries`, `/api/earth/open-feeds`, `/api/earth/discover`, `/api/earth/eonet`, `/api/earth/dataset-import`, `/api/earth/solar-graph` | Streams global satellite imagery, multi-agency anomalies, and local physical gauges to corroborate community sensors. |

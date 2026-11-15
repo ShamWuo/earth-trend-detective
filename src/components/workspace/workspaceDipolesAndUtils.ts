@@ -61,7 +61,7 @@ export const EMPTY_CASCADE_EDGE_UUIDS: string[] = [];
 export function getNodeTimestampMs(node: ETGNode): number {
   const raw = node.properties.observed_at || node.properties.created_at;
   const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return Number.isFinite(parsed) ? parsed : Date.UTC(2026, 0, 1);
 }
 
 export function isSameSpotCoord(

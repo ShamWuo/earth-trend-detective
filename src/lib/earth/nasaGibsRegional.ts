@@ -14,6 +14,7 @@ export type ActiveGibsLayerId =
 
 export type RegionalSatelliteMode =
   | "auto"
+  | "aerial"
   | "multi_slice"
   | ActiveGibsLayerId
   | "off";
@@ -49,13 +50,13 @@ export interface GlobalWmtsSubLayerPlan {
 export interface GlobalWmtsMosaicSpec {
   key: string;
   layerId: ActiveGibsLayerId;
-  zoom: 2 | 3;
+  zoom: 0 | 1 | 2 | 3;
   cols: number;
   rows: number;
   tileSize: 512;
   width: number;
   height: number;
-  badgeLabel: "5K HD" | "2.5K HD";
+  badgeLabel: "5K HD" | "2.5K HD" | "1.3K" | "Live Preview";
   primaryDateIso: string;
   subLayers: GlobalWmtsSubLayerPlan[];
 }
@@ -103,15 +104,19 @@ export interface RegionalTileSpec {
   proxyUrl: string;
 }
 
-export const MIN_GLOBE_CAMERA_RADIUS = 116;
+export const MIN_GLOBE_CAMERA_RADIUS = 100.012;
 export const CORRIDOR_TIER_MAX_RADIUS = 146;
 export const REGIONAL_ZOOM_ACTIVATE_RADIUS = 192;
 export const REGIONAL_ZOOM_EXIT_RADIUS = 196;
 export const DEFAULT_REGIONAL_FOCUS_RADIUS = 132;
+export const DEFAULT_SATELLITE_METRO_RADIUS = 103.8;
+export const DEFAULT_SATELLITE_CITY_RADIUS = 100.38;
+export const DEFAULT_SATELLITE_STREET_RADIUS = 100.032;
 export const GIBS_WMS_ENDPOINT =
   "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi";
 export const GIBS_WMTS_ENDPOINT =
   "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best";
+export const MUR_1KM_SST_ANOMALY_START_ISO = "2019-08-01";
 
 const DAY_MS = 86_400_000;
 const EARTH_RADIUS_KM = 6371;
@@ -242,7 +247,7 @@ export const GIBS_LAYERS: Record<ActiveGibsLayerId, GibsLayerDescriptor> = {
     globalWmsLayers: "GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies",
     globalFormat: "image/png",
     lagDays: 4,
-    minEpochMs: Date.UTC(2019, 7, 1),
+    minEpochMs: Date.UTC(2002, 8, 1),
     isDataLayer: true,
     shaderMode: 4,
     wmtsZoom: 3,
@@ -424,7 +429,7 @@ export function resolveActiveGibsLayer(
   mode: RegionalSatelliteMode,
   activeTopics?: readonly ETGDatasetId[]
 ): ActiveGibsLayerId | null {
-  if (mode === "off") return null;
+  if (mode === "off" || mode === "aerial") return null;
   if (mode === "multi_slice") return "true_color";
   if (mode !== "auto") return mode;
 
@@ -452,7 +457,7 @@ export function resolveGlobalFilterLayer(
   mode: RegionalSatelliteMode,
   activeTopics?: readonly ETGDatasetId[]
 ): ActiveGibsLayerId | null {
-  if (mode === "off" || mode === "multi_slice") return null;
+  if (mode === "off" || mode === "multi_slice" || mode === "aerial") return null;
   if (mode !== "auto") return mode;
   if (!activeTopics || activeTopics.length === 0) return null;
 
@@ -514,6 +519,23 @@ export function resolveGibsDateIso(
 }
 
 /**
+ * Routes historical pre-2019-08-01 SST Anomaly queries to the continuous 0.25° MUR25 dataset (2002-09-01+).
+ */
+export function resolveEffectiveSstAnomalyWmsLayer(
+  layerId: ActiveGibsLayerId,
+  dateIso: string,
+  wmsLayers: string
+): string {
+  if (layerId === "sst_anomaly" && dateIso < MUR_1KM_SST_ANOMALY_START_ISO) {
+    return wmsLayers.replace(
+      "GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies",
+      "GHRSST_L4_MUR25_Sea_Surface_Temperature_Anomalies"
+    );
+  }
+  return wmsLayers;
+}
+
+/**
  * Builds a global equirectangular (EPSG:4326) NASA GIBS WMS request spec for the entire 3D Earth.
  */
 export function computeGlobalLayerSpec(params: {
@@ -533,7 +555,12 @@ export function computeGlobalLayerSpec(params: {
   const width = 2048;
   const height = 1024;
   const transparentPart = layer.globalFormat === "image/png" ? "&TRANSPARENT=TRUE" : "";
-  const url = `${GIBS_WMS_ENDPOINT}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer.globalWmsLayers}&STYLES=&FORMAT=${layer.globalFormat}${transparentPart}&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=${width}&HEIGHT=${height}&TIME=${dateIso}`;
+  const effectiveWmsLayers = resolveEffectiveSstAnomalyWmsLayer(
+    layerId,
+    dateIso,
+    layer.globalWmsLayers
+  );
+  const url = `${GIBS_WMS_ENDPOINT}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${effectiveWmsLayers}&STYLES=&FORMAT=${layer.globalFormat}${transparentPart}&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=${width}&HEIGHT=${height}&TIME=${dateIso}`;
   const proxyUrl = `/api/earth/gibs?layer=${layerId}&scope=global&bbox=-180,-90,180,90&width=${width}&height=${height}&time=${dateIso}`;
   return {
     key: `global:${layerId}:${dateIso}`,
@@ -558,7 +585,7 @@ export function computeGlobalBordersUrl(): string {
  */
 export function buildWmtsTileUrl(
   sub: GlobalWmtsSubLayerPlan,
-  zoom: 2 | 3,
+  zoom: 0 | 1 | 2 | 3,
   row: number,
   col: number,
   useFallbackDate = false
@@ -571,23 +598,18 @@ export function buildWmtsTileUrl(
 }
 
 /**
- * Builds a global equirectangular (EPSG:4326) NASA GIBS WMTS mosaic spec for 5K/2.5K client-side stitching.
+ * Builds a global equirectangular (EPSG:4326) NASA GIBS WMTS mosaic spec for Zoom 0–3 client-side stitching.
  */
 export function computeGlobalWmtsMosaicSpec(params: {
   layerId: ActiveGibsLayerId;
   cutoffMs?: number;
   nowMs?: number;
-  zoomOverride?: 2 | 3;
+  zoomOverride?: 0 | 1 | 2 | 3;
 }): GlobalWmtsMosaicSpec {
   const { layerId, cutoffMs, nowMs = Date.now(), zoomOverride } = params;
   const layer = GIBS_LAYERS[layerId];
-  const zoom = zoomOverride ?? layer.wmtsZoom;
-  const cols = zoom === 3 ? 10 : 5;
-  const rows = zoom === 3 ? 5 : 3;
-  const width = zoom === 3 ? 5120 : 2560;
-  const height = zoom === 3 ? 2560 : 1280;
-  const badgeLabel = zoom === 3 ? "5K HD" : "2.5K HD";
 
+  let usesHistoricalMur25 = false;
   const subLayers: GlobalWmtsSubLayerPlan[] = layer.wmtsSubLayers.map((sub) => {
     const monthly = Boolean(sub.monthly);
     const dateIso = resolveGibsDateIsoWithOptions(
@@ -598,15 +620,46 @@ export function computeGlobalWmtsMosaicSpec(params: {
       monthly
     );
     const fallbackDateIso = monthly ? "2025-07-01" : "2025-07-15";
+    const isMur25Historical =
+      layerId === "sst_anomaly" && dateIso < MUR_1KM_SST_ANOMALY_START_ISO;
+    if (isMur25Historical) {
+      usesHistoricalMur25 = true;
+    }
     return {
-      wmtsLayer: sub.wmtsLayer,
-      tileMatrixSet: sub.tileMatrixSet,
+      wmtsLayer: isMur25Historical
+        ? "GHRSST_L4_MUR25_Sea_Surface_Temperature_Anomalies"
+        : sub.wmtsLayer,
+      tileMatrixSet: isMur25Historical ? "2km" : sub.tileMatrixSet,
       ext: sub.ext,
       timeless: Boolean(sub.timeless),
       dateIso,
       fallbackDateIso,
     };
   });
+
+  const zoom: 0 | 1 | 2 | 3 =
+    zoomOverride !== undefined
+      ? zoomOverride
+      : usesHistoricalMur25
+        ? 2
+        : layer.wmtsZoom;
+
+  const matrixByZoom: Record<
+    0 | 1 | 2 | 3,
+    {
+      cols: number;
+      rows: number;
+      width: number;
+      height: number;
+      badgeLabel: GlobalWmtsMosaicSpec["badgeLabel"];
+    }
+  > = {
+    0: { cols: 2, rows: 1, width: 640, height: 320, badgeLabel: "Live Preview" },
+    1: { cols: 3, rows: 2, width: 1280, height: 640, badgeLabel: "1.3K" },
+    2: { cols: 5, rows: 3, width: 2560, height: 1280, badgeLabel: "2.5K HD" },
+    3: { cols: 10, rows: 5, width: 5120, height: 2560, badgeLabel: "5K HD" },
+  };
+  const { cols, rows, width, height, badgeLabel } = matrixByZoom[zoom];
 
   const primaryDateIso =
     subLayers[subLayers.length - 1]?.dateIso ??
@@ -743,8 +796,13 @@ export function computeRegionalTileSpec(params: {
   ];
   const dateIso = resolveGibsDateIso(layerId, cutoffMs, nowMs);
   const layer = GIBS_LAYERS[layerId];
+  const effectiveWmsLayers = resolveEffectiveSstAnomalyWmsLayer(
+    layerId,
+    dateIso,
+    layer.wmsLayers
+  );
   const bboxStr = `${minLng},${minLat},${maxLng},${maxLat}`;
-  const url = `${GIBS_WMS_ENDPOINT}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer.wmsLayers}&STYLES=&FORMAT=image/jpeg&SRS=EPSG:4326&BBOX=${bboxStr}&WIDTH=${width}&HEIGHT=${height}&TIME=${dateIso}`;
+  const url = `${GIBS_WMS_ENDPOINT}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${effectiveWmsLayers}&STYLES=&FORMAT=image/jpeg&SRS=EPSG:4326&BBOX=${bboxStr}&WIDTH=${width}&HEIGHT=${height}&TIME=${dateIso}`;
   const proxyUrl = `/api/earth/gibs?layer=${layerId}&bbox=${encodeURIComponent(bboxStr)}&width=${width}&height=${height}&time=${dateIso}`;
   const key = `${layerId}:${tier}:${bboxStr}:${dateIso}`;
 
@@ -806,13 +864,13 @@ export function buildGeodesicCircleLatLng(
  * Estimates the visible regional ground swath width in kilometers from the globe camera radius.
  */
 export function estimateRegionalSwathKm(cameraRadius: number): number {
-  const clamped = Math.max(
-    MIN_GLOBE_CAMERA_RADIUS,
-    Math.min(REGIONAL_ZOOM_EXIT_RADIUS, cameraRadius)
-  );
-  const frac =
-    (clamped - MIN_GLOBE_CAMERA_RADIUS) /
-    (REGIONAL_ZOOM_EXIT_RADIUS - MIN_GLOBE_CAMERA_RADIUS);
+  if (cameraRadius < 116) {
+    const alt = Math.max(0.012, cameraRadius - 100);
+    const rawKm = alt * 26.25;
+    return rawKm < 2 ? Number(Math.max(0.3, rawKm).toFixed(1)) : Math.round(rawKm);
+  }
+  const clamped = Math.max(116, Math.min(REGIONAL_ZOOM_EXIT_RADIUS, cameraRadius));
+  const frac = (clamped - 116) / (REGIONAL_ZOOM_EXIT_RADIUS - 116);
   return Math.round(420 + frac * 1480);
 }
 
@@ -836,7 +894,7 @@ export function resolveGlobalSyncSignature(
   cutoffMs?: number,
   nowMs: number = Date.now()
 ): string {
-  if (mode === "off") return "off";
+  if (mode === "off" || mode === "aerial") return mode;
   if (mode === "multi_slice") {
     const windsDate = resolveGibsDateIso("winds", cutoffMs, nowMs);
     const precipDate = resolveGibsDateIso("precip", cutoffMs, nowMs);

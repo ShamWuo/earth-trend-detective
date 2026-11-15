@@ -187,7 +187,7 @@ export function SpotTrendChart({
     const saB = secondarySummary?.seasonalAnalysis;
 
     return (
-      <div className="ws-inset space-y-2 rounded-md p-3">
+      <div className="ws-inset space-y-1.5 rounded-md p-2">
         <div className="flex items-center justify-between text-[11px] text-text-subtle">
           <span className="font-medium text-text-primary">How the two spots move over time</span>
           <span className="ws-numeric">
@@ -202,37 +202,42 @@ export function SpotTrendChart({
                 type="button"
                 aria-pressed={effectiveCompareMode === "raw"}
                 onClick={() => setChartMode("raw")}
+                title="Raw Values"
                 className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
                   effectiveCompareMode === "raw"
                     ? "border-accent-fg bg-amber-950 text-amber-300"
                     : "border-border bg-surface text-text-muted hover:text-text-primary"
                 }`}
               >
-                Raw Values
+                Raw
               </button>
               <button
                 type="button"
                 aria-pressed={effectiveCompareMode === "anomaly"}
                 onClick={() => setChartMode("anomaly")}
+                title="Seasonal Cycle Removed"
                 className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
                   effectiveCompareMode === "anomaly"
                     ? "border-accent-fg bg-amber-950 text-amber-300"
                     : "border-border bg-surface text-text-muted hover:text-text-primary"
                 }`}
               >
-                Seasonal Cycle Removed
+                Deseasonalized
               </button>
             </div>
             {(saA || saB) && (
-              <span className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-                {saA ? `A p_s=${saA.pValue < 0.0001 ? "<0.0001" : saA.pValue.toFixed(4)}` : ""}
+              <span
+                title="Seasonal Mann-Kendall (SMK) tests whether the long-term direction holds across the same calendar months while controlling for annual seasonality."
+                className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted"
+              >
+                {saA ? `A Seasonal p=${saA.pValue < 0.0001 ? "<0.0001" : saA.pValue.toFixed(4)}` : ""}
                 {saA && saB ? " · " : ""}
-                {saB ? `B p_s=${saB.pValue < 0.0001 ? "<0.0001" : saB.pValue.toFixed(4)}` : ""}
+                {saB ? `B Seasonal p=${saB.pValue < 0.0001 ? "<0.0001" : saB.pValue.toFixed(4)}` : ""}
               </span>
             )}
           </div>
         )}
-        <svg viewBox={`0 0 ${w} ${h}`} className="h-[118px] w-full" aria-describedby={chartDescId}>
+        <svg viewBox={`0 0 ${w} ${h}`} className="h-[94px] w-full" aria-describedby={chartDescId}>
           <line
             x1={padX}
             y1={yAt(0)}
@@ -259,8 +264,11 @@ export function SpotTrendChart({
             </span>
           </div>
           {(saA || saB) && !canCompareDeseasonalized && (
-            <span className="font-mono text-[10px] text-text-subtle">
-              Select A or B for Seasonal MK (p_s)
+            <span
+              title="Seasonal Mann-Kendall tests whether the long-term direction holds across matching calendar seasons"
+              className="font-mono text-[10px] text-text-subtle"
+            >
+              Select A or B for Seasonal MK p-value
             </span>
           )}
         </div>
@@ -349,7 +357,7 @@ export function SpotTrendChart({
   const dispSeasonalSlope = sa ? toDisplayDelta(sa.seasonalTheilSenSlope) : null;
 
   return (
-    <div className="ws-inset space-y-2 rounded-md p-3">
+    <div className="ws-inset space-y-1.5 rounded-md p-2">
       <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-text-subtle">
         <span className="font-medium text-text-primary">
           {hasOverlay ? `${effectiveFocus === "b" ? labelB : labelA} · ` : ""}
@@ -367,37 +375,42 @@ export function SpotTrendChart({
               type="button"
               aria-pressed={effectiveMode === "raw"}
               onClick={() => setChartMode("raw")}
+              title="Raw Values"
               className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
                 effectiveMode === "raw"
                   ? "border-accent-fg bg-amber-950 text-amber-300"
                   : "border-border bg-surface text-text-muted hover:text-text-primary"
               }`}
             >
-              Raw Values
+              Raw
             </button>
             <button
               type="button"
               aria-pressed={effectiveMode === "anomaly"}
               onClick={() => setChartMode("anomaly")}
+              title="Seasonal Cycle Removed"
               className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
                 effectiveMode === "anomaly"
                   ? "border-accent-fg bg-amber-950 text-amber-300"
                   : "border-border bg-surface text-text-muted hover:text-text-primary"
               }`}
             >
-              Seasonal Cycle Removed
+              Deseasonalized
             </button>
           </div>
           {sa && dispSeasonalSlope !== null && (
-            <span className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-              p_s={sa.pValue < 0.0001 ? "< 0.0001" : sa.pValue.toFixed(4)} ·{" "}
+            <span
+              title="Seasonal Mann-Kendall p-value tests whether the direction holds across matching calendar seasons"
+              className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted"
+            >
+              Seasonal p={sa.pValue < 0.0001 ? "<0.0001" : sa.pValue.toFixed(4)} ·{" "}
               {dispSeasonalSlope >= 0 ? "+" : ""}
               {dispSeasonalSlope.toFixed(3)} {displaySlopeUnit}
             </span>
           )}
         </div>
       )}
-      <svg viewBox={`0 0 ${w} ${h}`} className="h-[118px] w-full" aria-describedby={chartDescId}>
+      <svg viewBox={`0 0 ${w} ${h}`} className="h-[94px] w-full" aria-describedby={chartDescId}>
         {effectiveMode === "anomaly" && (
           <line
             x1={padX}

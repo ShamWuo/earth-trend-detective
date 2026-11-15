@@ -112,6 +112,23 @@ export function createEarthSurfaceMaterial(params: {
       uRegionalBounds: { value: new THREE.Vector4(-113, 33, -97, 45) },
       uRegionalBlend: { value: 0.0 },
       uRegionalDataMode: { value: 0.0 },
+      uRegionalMaxOpacity: { value: 1.0 },
+      uSatCoarseMap: { value: params.placeholderRegionalTex },
+      uSatCoarseMercBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatCoarseRelBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatCoarseBlend: { value: 0.0 },
+      uSatMidMap: { value: params.placeholderRegionalTex },
+      uSatMidMercBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatMidRelBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatMidBlend: { value: 0.0 },
+      uSatPrevFineMap: { value: params.placeholderRegionalTex },
+      uSatPrevFineMercBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatPrevFineRelBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatPrevFineBlend: { value: 0.0 },
+      uSatFineMap: { value: params.placeholderRegionalTex },
+      uSatFineMercBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatFineRelBounds: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uSatFineBlend: { value: 0.0 },
       uGlobalLayerMap: { value: params.placeholderRegionalTex },
       uGlobalLayerBlend: { value: 0.0 },
       uGlobalDataMode: { value: 0.0 },
@@ -126,11 +143,14 @@ export function createEarthSurfaceMaterial(params: {
       uCameraRight: { value: new THREE.Vector3(1, 0, 0) },
     },
     vertexShader: `
+      attribute vec4 aDetailMerc;
       varying vec2 vUv;
       varying vec3 vWorldNormal;
       varying vec3 vWorldPos;
+      varying vec4 vDetailMerc;
       void main() {
         vUv = uv;
+        vDetailMerc = aDetailMerc;
         vWorldNormal = normalize(mat3(modelMatrix) * normal);
         vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -151,6 +171,23 @@ export function createEarthSurfaceMaterial(params: {
       uniform vec4 uRegionalBounds;
       uniform float uRegionalBlend;
       uniform float uRegionalDataMode;
+      uniform float uRegionalMaxOpacity;
+      uniform sampler2D uSatCoarseMap;
+      uniform vec4 uSatCoarseMercBounds;
+      uniform vec4 uSatCoarseRelBounds;
+      uniform float uSatCoarseBlend;
+      uniform sampler2D uSatMidMap;
+      uniform vec4 uSatMidMercBounds;
+      uniform vec4 uSatMidRelBounds;
+      uniform float uSatMidBlend;
+      uniform sampler2D uSatPrevFineMap;
+      uniform vec4 uSatPrevFineMercBounds;
+      uniform vec4 uSatPrevFineRelBounds;
+      uniform float uSatPrevFineBlend;
+      uniform sampler2D uSatFineMap;
+      uniform vec4 uSatFineMercBounds;
+      uniform vec4 uSatFineRelBounds;
+      uniform float uSatFineBlend;
       uniform sampler2D uGlobalLayerMap;
       uniform float uGlobalLayerBlend;
       uniform float uGlobalDataMode;
@@ -166,6 +203,7 @@ export function createEarthSurfaceMaterial(params: {
       varying vec2 vUv;
       varying vec3 vWorldNormal;
       varying vec3 vWorldPos;
+      varying vec4 vDetailMerc;
 
       ${GLSL_NOISE_HELPERS}
 
@@ -221,6 +259,39 @@ export function createEarthSurfaceMaterial(params: {
         return vec4(rgb, alpha);
       }
 
+      vec4 sampleAerialMercatorPatch(
+        sampler2D tex,
+        vec4 mercBounds,
+        vec4 relBounds,
+        float fragLng,
+        float fragLat,
+        vec4 detailMerc
+      ) {
+        if (abs(fragLat) > 85.05) return vec4(0.0);
+        float u;
+        float v;
+        if (detailMerc.z > 0.5) {
+          u = (detailMerc.x - relBounds.x) * relBounds.z;
+          v = 1.0 - (detailMerc.y - relBounds.y) * relBounds.w;
+        } else {
+          float latRad = radians(clamp(fragLat, -85.05, 85.05));
+          float mercY = (1.0 - log(tan(0.7853981633974483 + 0.5 * latRad)) * 0.3183098861837907) * 0.5;
+          float rawMercX = (fragLng + 180.0) / 360.0;
+          float centerX = 0.5 * (mercBounds.x + mercBounds.z);
+          float mercX = rawMercX + floor(centerX - rawMercX + 0.5);
+          u = (mercX - mercBounds.x) / max(1e-7, mercBounds.z - mercBounds.x);
+          v = 1.0 - (mercY - mercBounds.y) / max(1e-7, mercBounds.w - mercBounds.y);
+        }
+        if (u <= 0.001 || u >= 0.999 || v <= 0.001 || v >= 0.999) return vec4(0.0);
+        float edgeDist = min(min(u, 1.0 - u), min(v, 1.0 - v));
+        float feather = smoothstep(0.002, 0.042, edgeDist);
+        vec4 texel = texture2D(tex, vec2(u, v));
+        if (texel.a <= 0.02) return vec4(0.0);
+        vec3 unpremultRgb = texel.rgb / max(0.02, texel.a);
+        float validAlpha = smoothstep(0.15, 0.92, texel.a);
+        return vec4(unpremultRgb, validAlpha * feather);
+      }
+
       vec3 evalScientificFilter(
         float mode,
         vec4 s,
@@ -263,18 +334,20 @@ export function createEarthSurfaceMaterial(params: {
           return mix(mix(deepOcean, crispLand, landMask), thermalRgb, sa * 0.90) * filterSunFloor;
         }
         if (mode < 4.5) {
-          // 4.0: Ocean Temp Anomaly (key neutral ~0°C white into deep sapphire ocean + smooth thermal roll-off)
+          // 4.0: Ocean Temp Anomaly (key neutral ~0°C linear ~(0.59,0.59,0.47) into deep sapphire ocean)
           float cMax = max(s.r, max(s.g, s.b));
           float cMin = min(s.r, min(s.g, s.b));
           float chroma = cMax - cMin;
-          float anomalyStrength = chroma + max(0.0, 0.82 - cMin) * 0.90;
-          float anomalyMask = smoothstep(0.10, 0.42, anomalyStrength);
-          float warmCore = smoothstep(0.25, 0.65, s.r - s.g) * smoothstep(0.35, 0.05, s.g);
+          float anomalyStrength = chroma + max(0.0, 0.40 - cMin) * 1.35;
+          float anomalyMask = smoothstep(0.20, 0.50, anomalyStrength);
+          float warmCore = smoothstep(0.20, 0.60, s.r - s.g) * smoothstep(0.30, 0.04, s.g);
+          float extremeHot = smoothstep(0.45, 0.18, s.r) * step(0.18, s.r) * smoothstep(0.04, 0.0, s.g) * smoothstep(0.08, 0.0, s.b);
           vec3 sstRgb = s.rgb;
+          sstRgb = mix(sstRgb, vec3(0.92, 0.05, 0.10), extremeHot * 0.72);
           sstRgb.b = mix(sstRgb.b, sstRgb.b * 0.55, warmCore * 0.65);
-          sstRgb.g = mix(sstRgb.g, max(sstRgb.g, sstRgb.r * 0.14), warmCore * 0.55);
+          sstRgb.g = mix(sstRgb.g, max(sstRgb.g, sstRgb.r * 0.12), warmCore * 0.45);
           sstRgb = (sstRgb / (1.0 + sstRgb * 0.14)) * 1.10;
-          vec3 sstSea = mix(deepOcean, sstRgb * reliefMod, sa * anomalyMask * 0.88);
+          vec3 sstSea = mix(deepOcean, sstRgb * reliefMod, sa * anomalyMask * 0.90);
           return mix(sstSea, crispLand, landMask) * filterSunFloor;
         }
         if (mode < 5.5) {
@@ -304,6 +377,8 @@ export function createEarthSurfaceMaterial(params: {
       }
 
       void main() {
+        bool isDetailCap = vDetailMerc.z > 0.5;
+        if (isDetailCap && vDetailMerc.w <= 0.001) discard;
         vec3 N0 = normalize(vWorldNormal);
         float specSample = texture2D(uWaterMap, vUv).r;
         float waterMask = smoothstep(0.24, 0.72, specSample);
@@ -474,9 +549,49 @@ export function createEarthSurfaceMaterial(params: {
           finalColor = mix(finalColor, globalColor + rayleighVeil * 0.28, uGlobalLayerBlend);
         }
 
+        // Blend 4-tier progressive Web Mercator satellite photography pyramid (coarse -> mid -> prevFine -> fine)
+        if (
+          uSatCoarseBlend > 0.001 ||
+          uSatMidBlend > 0.001 ||
+          uSatPrevFineBlend > 0.001 ||
+          uSatFineBlend > 0.001
+        ) {
+          float fragLng = fract(vUv.x) * 360.0 - 180.0;
+          float fragLat = vUv.y * 180.0 - 90.0;
+          float satIllum = mix(1.0, mix(0.80, 1.04, smoothstep(-0.25, 0.42, sphereSunDot)), uDayNightEnabled);
+          if (uSatCoarseBlend > 0.001) {
+            vec4 coarseSample = sampleAerialMercatorPatch(uSatCoarseMap, uSatCoarseMercBounds, uSatCoarseRelBounds, fragLng, fragLat, vDetailMerc);
+            if (coarseSample.a > 0.001) {
+              vec3 coarseColor = coarseSample.rgb * satIllum + rayleighVeil * 0.20;
+              finalColor = mix(finalColor, coarseColor, coarseSample.a * uSatCoarseBlend);
+            }
+          }
+          if (uSatMidBlend > 0.001) {
+            vec4 midSample = sampleAerialMercatorPatch(uSatMidMap, uSatMidMercBounds, uSatMidRelBounds, fragLng, fragLat, vDetailMerc);
+            if (midSample.a > 0.001) {
+              vec3 midColor = midSample.rgb * satIllum + rayleighVeil * 0.20;
+              finalColor = mix(finalColor, midColor, midSample.a * uSatMidBlend);
+            }
+          }
+          if (uSatPrevFineBlend > 0.001) {
+            vec4 prevFineSample = sampleAerialMercatorPatch(uSatPrevFineMap, uSatPrevFineMercBounds, uSatPrevFineRelBounds, fragLng, fragLat, vDetailMerc);
+            if (prevFineSample.a > 0.001) {
+              vec3 prevFineColor = prevFineSample.rgb * satIllum + rayleighVeil * 0.20;
+              finalColor = mix(finalColor, prevFineColor, prevFineSample.a * uSatPrevFineBlend);
+            }
+          }
+          if (uSatFineBlend > 0.001) {
+            vec4 fineSample = sampleAerialMercatorPatch(uSatFineMap, uSatFineMercBounds, uSatFineRelBounds, fragLng, fragLat, vDetailMerc);
+            if (fineSample.a > 0.001) {
+              vec3 fineColor = fineSample.rgb * satIllum + rayleighVeil * 0.20;
+              finalColor = mix(finalColor, fineColor, fineSample.a * uSatFineBlend);
+            }
+          }
+        }
+
         // Blend live NASA GIBS regional satellite / thermal / NDVI / night swath seamlessly
         if (uRegionalBlend > 0.001) {
-          float fragLng = vUv.x * 360.0 - 180.0;
+          float fragLng = fract(vUv.x) * 360.0 - 180.0;
           float fragLat = vUv.y * 180.0 - 90.0;
           vec2 regUv = vec2(
             (fragLng - uRegionalBounds.x) / max(0.001, uRegionalBounds.z - uRegionalBounds.x),
@@ -484,7 +599,7 @@ export function createEarthSurfaceMaterial(params: {
           );
           if (regUv.x > 0.0 && regUv.x < 1.0 && regUv.y > 0.0 && regUv.y < 1.0) {
             float edgeDist = min(min(regUv.x, 1.0 - regUv.x), min(regUv.y, 1.0 - regUv.y));
-            float feather = smoothstep(0.0, 0.085, edgeDist) * uRegionalBlend;
+            float feather = smoothstep(0.0, 0.085, edgeDist) * uRegionalBlend * uRegionalMaxOpacity;
             vec3 gibsSample = texture2D(uRegionalMap, regUv).rgb;
             float inspectIllum = mix(0.82, 1.06, smoothstep(-0.15, 0.45, sphereSunDot));
             float reliefMod = mix(0.94, 1.08, clamp(normalSunDot * 0.65 + 0.35, 0.0, 1.0));
@@ -495,7 +610,8 @@ export function createEarthSurfaceMaterial(params: {
           }
         }
 
-        gl_FragColor = vec4(finalColor, 1.0);
+        float outAlpha = isDetailCap ? vDetailMerc.w : 1.0;
+        gl_FragColor = vec4(finalColor, outAlpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }
@@ -519,11 +635,14 @@ export function createCloudDeckMaterial(params: {
       uRegionalFade: { value: 1.0 },
     },
     vertexShader: `
+      attribute vec4 aDetailMerc;
       varying vec2 vUv;
       varying vec3 vWorldNormal;
       varying vec3 vWorldPos;
+      varying vec4 vDetailMerc;
       void main() {
         vUv = uv;
+        vDetailMerc = aDetailMerc;
         vWorldNormal = normalize(mat3(modelMatrix) * normal);
         vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -580,6 +699,7 @@ export function createInnerHazeMaterial(params: {
     uniforms: {
       uSunDir: params.sunDirUniform,
       uDayNightEnabled: params.dayNightEnabledUniform,
+      uInnerHazeFade: { value: 1.0 },
     },
     vertexShader: `
       varying vec3 vWorldNormal;
@@ -594,6 +714,7 @@ export function createInnerHazeMaterial(params: {
     fragmentShader: `
       uniform vec3 uSunDir;
       uniform float uDayNightEnabled;
+      uniform float uInnerHazeFade;
       varying vec3 vWorldNormal;
       varying vec3 vViewPos;
       void main() {
@@ -601,7 +722,7 @@ export function createInnerHazeMaterial(params: {
         vec3 V = normalize(cameraPosition - N * ${EARTH_RADIUS.toFixed(1)});
         float rim = 1.0 - max(dot(N, V), 0.0);
         float sunSide = mix(1.0, smoothstep(-0.28, 0.62, dot(N, normalize(uSunDir))), uDayNightEnabled);
-        float alpha = pow(rim, 4.0) * (0.04 + 0.28 * sunSide);
+        float alpha = pow(rim, 4.0) * (0.04 + 0.28 * sunSide) * uInnerHazeFade;
         gl_FragColor = vec4(0.32, 0.70, 1.0, alpha);
       }
     `,

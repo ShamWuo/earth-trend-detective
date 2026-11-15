@@ -84,7 +84,7 @@ export function SpotRelationsSection({
   return (
     <section
       aria-label="Relations and connected places"
-      className="space-y-2 border-t border-border pt-2.5"
+      className="space-y-1.5 border-t border-border pt-2"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
@@ -158,7 +158,7 @@ export function SpotRelationsSection({
               return (
                 <div
                   key={edge.properties.uuid}
-                  className="rounded-md border border-border bg-surface-inset p-2.5 space-y-1.5"
+                  className="rounded-md border border-border bg-surface-inset p-2 space-y-1"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -285,7 +285,7 @@ export function SpotRelationsSection({
       <button
         type="button"
         onClick={onToggleCompareMode}
-        className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors cursor-pointer ${
+        className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
           compareMode
             ? "border-cyan-400 bg-cyan-950 text-cyan-300"
             : "border-border-strong bg-surface-elevated text-text-primary hover:border-accent-fg"
@@ -295,7 +295,7 @@ export function SpotRelationsSection({
         <span>
           {compareMode
             ? "Click another spot on Earth…"
-            : "Compare this spot with another point on Earth"}
+            : "Compare with another Earth point"}
         </span>
       </button>
     </section>
@@ -365,26 +365,26 @@ export function SpotScienceAndActionsSection({
   onRunRegionalForecast: () => void;
 }) {
   return (
-    <div className="space-y-2.5 border-t border-border pt-2.5">
+    <div className="space-y-2 border-t border-border pt-2">
       {activeDigest && (
         <div className="ws-numeric grid grid-cols-2 gap-1.5 font-mono text-[11px]">
-          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
+          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
             <span className="block font-sans text-[10px] text-text-subtle">Window</span>
             <span className="text-text-primary">
               {activeDigest.periodRange} ({activeDigest.windowYears} pts)
             </span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
+          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
             <span className="block font-sans text-[10px] text-text-subtle">Range</span>
             <span className="text-text-primary">{activeDigest.rangeFormatted}</span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
+          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
             <span className="block font-sans text-[10px] text-text-subtle">Mean / Δ</span>
             <span className="text-text-primary">
               {activeDigest.meanFormatted} ({activeDigest.anomalyFormatted})
             </span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
+          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
             <span className="block font-sans text-[10px] text-text-subtle">Anomaly Z</span>
             <span className="text-text-primary">{activeDigest.anomalyZFormatted ?? "—"}</span>
           </div>
@@ -482,7 +482,7 @@ export function SpotScienceAndActionsSection({
       </div>
 
       {showReviseForm && selectedNode && (
-        <form onSubmit={onReviseBelief} className="space-y-2 rounded-md border border-border bg-surface-inset p-3">
+        <form onSubmit={onReviseBelief} className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2.5">
           <input
             type="text"
             required
@@ -518,7 +518,7 @@ export function SpotScienceAndActionsSection({
       )}
 
       {beliefChain.length > 1 && (
-        <div className="space-y-1 rounded-md border border-border bg-surface-inset p-2.5">
+        <div className="space-y-1 rounded-md border border-border bg-surface-inset p-2">
           <div className="text-[11px] font-semibold text-amber-300">
             Revision history ({beliefChain.length})
           </div>
@@ -538,7 +538,7 @@ export function SpotScienceAndActionsSection({
 
       {/* Regional Multi-Scale Graph Forecast */}
       {(coord || selectedNode) && (
-        <div className="rounded-md border border-sky-400 bg-sky-950 p-2.5 space-y-2">
+        <div className="rounded-md border border-sky-400 bg-sky-950 p-2 space-y-1.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-[11px] font-semibold text-sky-200">
@@ -684,9 +684,9 @@ export function SpotScienceAndActionsSection({
                       <div className="flex justify-between gap-2 border-t border-border pt-1.5">
                         <span>Seasonal MK (Hirsch-Slack)</span>
                         <span className="ws-numeric text-text-primary">
-                          p_s=
+                          Seasonal p=
                           {activeSummary.seasonalAnalysis.pValue < 0.0001
-                            ? "< 0.0001"
+                            ? "<0.0001"
                             : activeSummary.seasonalAnalysis.pValue.toFixed(4)}
                           {" · "}
                           {dispSeasonalSlope >= 0 ? "+" : ""}

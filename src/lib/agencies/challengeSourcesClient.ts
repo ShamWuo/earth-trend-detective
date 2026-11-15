@@ -1,4 +1,5 @@
 import { createBoundedSignal, normalizeEarthCoordinates } from "@/lib/earth/coordinates";
+import { hasTerrestrialSurface } from "@/lib/earth/surfaceMask";
 import type { ETGDatasetId, TimeSeriesPoint, TrendProvenanceSource } from "@/types/etg";
 
 const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observatory)";
@@ -162,55 +163,17 @@ export async function fetchNoaaCdoGlobalStations(
 }
 
 /**
- * Pure parser for KNMI Climate Explorer monthly table `.dat` ASCII files
- * (`#` comments + `YEAR JAN FEB ... DEC`, ignoring `-999.9` sentinels).
- */
-export function parseKnmiIndexDat(
-  text: string,
-  startYear = 1995,
-  endYear = 2025
-): TimeSeriesPoint[] {
-  const points: TimeSeriesPoint[] = [];
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-
-    const parts = line.split(/\s+/);
-    if (parts.length < 7) continue;
-
-    const year = Number(parts[0]);
-    if (!Number.isInteger(year) || year < startYear || year > endYear) continue;
-
-    const monthlyVals: number[] = [];
-    for (let i = 1; i < Math.min(parts.length, 13); i++) {
-      const v = Number(parts[i]);
-      if (Number.isFinite(v) && v > -900) {
-        monthlyVals.push(v);
-      }
-    }
-    if (monthlyVals.length < 6) continue;
-
-    const mean = monthlyVals.reduce((s, v) => s + v, 0) / monthlyVals.length;
-    points.push({
-      date: `${year}`,
-      t: year,
-      value: Number(mean.toFixed(3)),
-    });
-  }
-
-  return points.sort((a, b) => a.t - b.t);
-}
-
-/**
- * Pure parser for KNMI Climate Explorer `.dat` monthly index tables preserving
- * all 12 monthly columns (`YYYY-MM`) for multi-scale teleconnection modeling.
+ * Pure parser for NOAA PSL / NCEI / KNMI Climate Explorer `.dat` ASCII tables.
+ * Supports:
+ * 1) 12-month table rows (`YEAR JAN FEB ... DEC`) with `-99.90`, `-99.99`, `99.99`, or `-999.9` sentinels,
+ * 2) 2-column KNMI fractional-year (`YYYY.ffff val`) or `YYYYMMDD val` series.
  */
 export function parseKnmiMonthlyIndexDat(
   text: string,
   startYear = 1995,
   endYear = 2025
 ): TimeSeriesPoint[] {
-  const points: TimeSeriesPoint[] = [];
+  const byDate = new Map<string, TimeSeriesPoint>();
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -218,26 +181,101 @@ export function parseKnmiMonthlyIndexDat(
     const parts = line.split(/\s+/);
     if (parts.length < 2) continue;
 
+    // 2-column fractional-year (YYYY.ffff val) or YYYYMMDD val format
+    if (parts.length === 2) {
+      const col0 = parts[0];
+      const val = Number(parts[1]);
+      if (!Number.isFinite(val) || Math.abs(val) >= 85) continue;
+
+      if (/^\d{8}$/.test(col0)) {
+        const year = Number(col0.slice(0, 4));
+        const month = Number(col0.slice(4, 6));
+        if (
+          Number.isInteger(year) &&
+          year >= startYear &&
+          year <= endYear &&
+          Number.isInteger(month) &&
+          month >= 1 &&
+          month <= 12
+        ) {
+          const date = `${year}-${String(month).padStart(2, "0")}`;
+          byDate.set(date, {
+            date,
+            t: Number((year + (month - 0.5) / 12).toFixed(4)),
+            value: Number(val.toFixed(3)),
+          });
+        }
+        continue;
+      }
+
+      const rawT = Number(col0);
+      if (Number.isFinite(rawT) && rawT >= startYear && rawT < endYear + 1) {
+        const year = Math.floor(rawT + 1e-6);
+        const frac = Math.max(0, rawT - year);
+        const month = Math.min(12, Math.max(1, Math.round(frac * 12) + 1));
+        const date = `${year}-${String(month).padStart(2, "0")}`;
+        byDate.set(date, {
+          date,
+          t: Number((year + (month - 0.5) / 12).toFixed(4)),
+          value: Number(val.toFixed(3)),
+        });
+      }
+      continue;
+    }
+
+    // Standard 12-month row (`YEAR JAN FEB ... DEC`, optionally followed by annual summary col)
     const year = Number(parts[0]);
     if (!Number.isInteger(year) || year < startYear || year > endYear) continue;
 
     for (let m = 1; m <= Math.min(12, parts.length - 1); m++) {
       const v = Number(parts[m]);
-      if (!Number.isFinite(v) || v <= -900) continue;
-      points.push({
-        date: `${year}-${String(m).padStart(2, "0")}`,
+      if (!Number.isFinite(v) || Math.abs(v) >= 85) continue;
+      const date = `${year}-${String(m).padStart(2, "0")}`;
+      byDate.set(date, {
+        date,
         t: Number((year + (m - 0.5) / 12).toFixed(4)),
         value: Number(v.toFixed(3)),
       });
     }
   }
 
+  return Array.from(byDate.values()).sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Pure parser deriving annual mean points from KNMI / NOAA PSL / NCEI index `.dat` tables.
+ */
+export function parseKnmiIndexDat(
+  text: string,
+  startYear = 1995,
+  endYear = 2025
+): TimeSeriesPoint[] {
+  const monthly = parseKnmiMonthlyIndexDat(text, startYear, endYear);
+  const byYear = new Map<number, number[]>();
+  for (const pt of monthly) {
+    const year = Number(pt.date.slice(0, 4));
+    if (!Number.isInteger(year)) continue;
+    const arr = byYear.get(year) ?? [];
+    arr.push(pt.value);
+    byYear.set(year, arr);
+  }
+
+  const points: TimeSeriesPoint[] = [];
+  for (const [year, vals] of byYear.entries()) {
+    if (vals.length < 6) continue;
+    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+    points.push({
+      date: `${year}`,
+      t: year,
+      value: Number(mean.toFixed(3)),
+    });
+  }
   return points.sort((a, b) => a.t - b.t);
 }
 
 interface KnmiIndexSpec {
   id: string;
-  url: string;
+  urls: readonly string[];
   name: string;
   region: string;
   lat: number;
@@ -251,7 +289,10 @@ interface KnmiIndexSpec {
 const KNMI_INDICES: readonly KnmiIndexSpec[] = [
   {
     id: "knmi-nino34",
-    url: "https://climexp.knmi.nl/data/iersst_nino3.4a.dat",
+    urls: [
+      "https://psl.noaa.gov/data/correlation/nina34.anom.data",
+      "https://climexp.knmi.nl/data/iersst_nino3.4a.dat",
+    ],
     name: "KNMI ENSO Niño 3.4 SST Anomaly",
     region: "Equatorial Central Pacific (5°S–5°N, 170°–120°W)",
     lat: 0.0,
@@ -263,7 +304,10 @@ const KNMI_INDICES: readonly KnmiIndexSpec[] = [
   },
   {
     id: "knmi-amo",
-    url: "https://climexp.knmi.nl/data/iamo_ersst.dat",
+    urls: [
+      "https://psl.noaa.gov/data/correlation/amon.us.data",
+      "https://climexp.knmi.nl/data/iamo_ersst.dat",
+    ],
     name: "KNMI Atlantic Multidecadal Oscillation (AMO)",
     region: "North Atlantic Basin",
     lat: 44.0,
@@ -275,7 +319,11 @@ const KNMI_INDICES: readonly KnmiIndexSpec[] = [
   },
   {
     id: "knmi-pdo",
-    url: "https://climexp.knmi.nl/data/ipdo.dat",
+    urls: [
+      "https://www.ncei.noaa.gov/pub/data/cmb/ersst/v5/index/ersst.v5.pdo.dat",
+      "https://psl.noaa.gov/data/correlation/pdo.data",
+      "https://climexp.knmi.nl/data/ipdo.dat",
+    ],
     name: "KNMI Pacific Decadal Oscillation (PDO)",
     region: "North Pacific Gyre",
     lat: 41.0,
@@ -287,7 +335,10 @@ const KNMI_INDICES: readonly KnmiIndexSpec[] = [
   },
   {
     id: "knmi-nao",
-    url: "https://climexp.knmi.nl/data/inao.dat",
+    urls: [
+      "https://psl.noaa.gov/data/correlation/nao.data",
+      "https://climexp.knmi.nl/data/inao.dat",
+    ],
     name: "KNMI North Atlantic Oscillation (NAO)",
     region: "Iceland–Azores Pressure Dipole",
     lat: 64.1,
@@ -299,23 +350,100 @@ const KNMI_INDICES: readonly KnmiIndexSpec[] = [
   },
 ];
 
-export async function fetchKnmiClimateIndices(
+export interface KnmiClimateModeBundle {
+  id: string;
+  annual: AgencyTimeSeriesRecord;
+  monthly: AgencyTimeSeriesRecord;
+}
+
+const KNMI_CACHE_TTL_MS = 1000 * 60 * 15;
+let knmiBundleCache: {
+  key: string;
+  expiresAt: number;
+  bundles: KnmiClimateModeBundle[];
+} | null = null;
+
+export function clearKnmiClimateCache(): void {
+  knmiBundleCache = null;
+}
+
+/**
+ * Fetches all 4 planetary oscillation modes (Niño 3.4, AMO, PDO, NAO) in a single
+ * parallel wave across NOAA PSL / NCEI primary tables and KNMI Climate Explorer mirrors,
+ * merging mirror coverage into unified monthly and annual records within <= 1200ms.
+ */
+export async function fetchKnmiClimateModeBundles(
   startYear = 1995,
   endYear = 2025
-): Promise<AgencyTimeSeriesRecord[]> {
-  const settled = await Promise.allSettled(
+): Promise<KnmiClimateModeBundle[]> {
+  const cacheKey = `${startYear}-${endYear}`;
+  if (knmiBundleCache && knmiBundleCache.key === cacheKey && knmiBundleCache.expiresAt > Date.now()) {
+    return knmiBundleCache.bundles;
+  }
+
+  const bundlesSettled = await Promise.allSettled(
     KNMI_INDICES.map(async (spec) => {
-      const res = await fetch(spec.url, {
-        signal: createBoundedSignal(1100),
-        headers: { "User-Agent": USER_AGENT },
-      });
-      if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
-      const txt = await res.text();
-      const points = parseKnmiIndexDat(txt, startYear, endYear);
-      if (points.length < 5) {
-        throw new Error(`KNMI ${spec.id} yielded insufficient annual rows`);
+      const mirrorSettled = await Promise.allSettled(
+        spec.urls.map(async (url) => {
+          const res = await fetch(url, {
+            signal: createBoundedSignal(1200),
+            headers: { "User-Agent": USER_AGENT },
+          });
+          if (!res.ok) throw new Error(`Mode ${spec.id} HTTP ${res.status}`);
+          const txt = await res.text();
+          const monthlyPts = parseKnmiMonthlyIndexDat(txt, startYear, endYear);
+          if (monthlyPts.length < 24) {
+            throw new Error(`Mode ${spec.id} from ${url} yielded insufficient monthly rows`);
+          }
+          return { url, monthlyPts };
+        })
+      );
+
+      const fulfilled = mirrorSettled
+        .filter(
+          (r): r is PromiseFulfilledResult<{ url: string; monthlyPts: TimeSeriesPoint[] }> =>
+            r.status === "fulfilled"
+        )
+        .map((r) => r.value);
+
+      if (fulfilled.length === 0) {
+        throw new Error(`All NOAA PSL / KNMI mirrors failed for ${spec.id}`);
       }
-      const record: AgencyTimeSeriesRecord = {
+
+      // Primary mirror values take precedence; secondary mirror extends newer tail months (e.g. AMO 2024-2025).
+      const mergedByDate = new Map<string, TimeSeriesPoint>();
+      for (let i = fulfilled.length - 1; i >= 0; i--) {
+        for (const pt of fulfilled[i].monthlyPts) {
+          mergedByDate.set(pt.date, pt);
+        }
+      }
+      const monthlyPoints = Array.from(mergedByDate.values()).sort((a, b) => a.t - b.t);
+
+      const byYear = new Map<number, number[]>();
+      for (const pt of monthlyPoints) {
+        const y = Number(pt.date.slice(0, 4));
+        const arr = byYear.get(y) ?? [];
+        arr.push(pt.value);
+        byYear.set(y, arr);
+      }
+      const annualPoints: TimeSeriesPoint[] = [];
+      for (const [y, vals] of byYear.entries()) {
+        const minMonths = y === endYear ? 4 : 6;
+        if (vals.length < minMonths) continue;
+        const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+        annualPoints.push({
+          date: `${y}`,
+          t: y,
+          value: Number(mean.toFixed(3)),
+        });
+      }
+      annualPoints.sort((a, b) => a.t - b.t);
+      if (annualPoints.length < 5) {
+        throw new Error(`Merged mode ${spec.id} yielded fewer than 5 annual rows`);
+      }
+
+      const primaryUrl = fulfilled[0].url;
+      const baseMeta = {
         id: spec.id,
         name: spec.name,
         region: spec.region,
@@ -325,60 +453,48 @@ export async function fetchKnmiClimateIndices(
         parameter: spec.parameter,
         unit: spec.unit,
         slopeUnit: spec.slopeUnit,
-        sourceSystem: "KNMI Climate Explorer",
-        sourceUrl: spec.url,
-        provenance: "KNMI Climate Explorer (Live)",
-        producerType: "research_station",
-        points,
+        sourceSystem: "NOAA PSL / KNMI Climate Explorer",
+        sourceUrl: primaryUrl,
+        provenance: "KNMI Climate Explorer (Live)" as const,
+        producerType: "research_station" as const,
       };
-      return record;
+
+      return {
+        id: spec.id,
+        annual: { ...baseMeta, points: annualPoints },
+        monthly: { ...baseMeta, points: monthlyPoints },
+      } satisfies KnmiClimateModeBundle;
     })
   );
 
-  return settled
-    .filter((r): r is PromiseFulfilledResult<AgencyTimeSeriesRecord> => r.status === "fulfilled")
+  const bundles = bundlesSettled
+    .filter((r): r is PromiseFulfilledResult<KnmiClimateModeBundle> => r.status === "fulfilled")
     .map((r) => r.value);
+
+  if (bundles.length > 0) {
+    knmiBundleCache = {
+      key: cacheKey,
+      expiresAt: Date.now() + KNMI_CACHE_TTL_MS,
+      bundles,
+    };
+  }
+  return bundles;
+}
+
+export async function fetchKnmiClimateIndices(
+  startYear = 1995,
+  endYear = 2025
+): Promise<AgencyTimeSeriesRecord[]> {
+  const bundles = await fetchKnmiClimateModeBundles(startYear, endYear);
+  return bundles.map((b) => b.annual);
 }
 
 export async function fetchKnmiMonthlyClimateIndices(
   startYear = 1995,
   endYear = 2025
 ): Promise<AgencyTimeSeriesRecord[]> {
-  const settled = await Promise.allSettled(
-    KNMI_INDICES.map(async (spec) => {
-      const res = await fetch(spec.url, {
-        signal: createBoundedSignal(1100),
-        headers: { "User-Agent": USER_AGENT },
-      });
-      if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
-      const txt = await res.text();
-      const points = parseKnmiMonthlyIndexDat(txt, startYear, endYear);
-      if (points.length < 24) {
-        throw new Error(`KNMI ${spec.id} yielded insufficient monthly rows`);
-      }
-      const record: AgencyTimeSeriesRecord = {
-        id: spec.id,
-        name: spec.name,
-        region: spec.region,
-        lat: spec.lat,
-        lng: spec.lng,
-        dataset: spec.dataset,
-        parameter: spec.parameter,
-        unit: spec.unit,
-        slopeUnit: spec.slopeUnit,
-        sourceSystem: "KNMI Climate Explorer",
-        sourceUrl: spec.url,
-        provenance: "KNMI Climate Explorer (Live)",
-        producerType: "research_station",
-        points,
-      };
-      return record;
-    })
-  );
-
-  return settled
-    .filter((r): r is PromiseFulfilledResult<AgencyTimeSeriesRecord> => r.status === "fulfilled")
-    .map((r) => r.value);
+  const bundles = await fetchKnmiClimateModeBundles(startYear, endYear);
+  return bundles.map((b) => b.monthly);
 }
 
 /**
@@ -517,7 +633,7 @@ export function parseGeocaAhccdJson(
     region: meta.region,
     lat,
     lng,
-    dataset: "ocean_temp",
+    dataset: "nasa_power",
     parameter: "AHCCD Mean Temp (Geo.ca)",
     unit: "°C",
     slopeUnit: "°C/yr",
@@ -684,7 +800,7 @@ export async function fetchUsgsCoastalPlumeDischarge(
       region: "Lower Mississippi Delta / Gulf of Mexico Plume",
       lat: 30.45,
       lng: -91.19,
-      dataset: "air_quality",
+      dataset: "hydrology",
       parameter: "River Discharge vs SeaWiFS Chl-a",
       unit: "m³/s",
       slopeUnit: "m³/s/yr",
@@ -704,6 +820,9 @@ function parseCmrBoxCentroid(boxes?: string[]): { lat: number; lng: number } | n
   const parts = String(boxes[0] ?? "").trim().split(/\s+/).map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
   const [south, west, north, east] = parts;
+  if (Math.abs(north - south) > 30 || Math.abs(east - west) > 45) {
+    return null;
+  }
   const norm = normalizeEarthCoordinates((south + north) / 2, (west + east) / 2, {
     poleGuardMargin: 0,
     antimeridianMargin: 0,
@@ -751,9 +870,9 @@ export async function fetchCsaSwotAndRcmMetadata(): Promise<{
       boxes?: string[];
       time_start?: string;
     }>;
-    for (const entry of entries.slice(0, 3)) {
+    for (const entry of entries.slice(0, 6)) {
       const centroid = parseCmrBoxCentroid(entry.boxes);
-      if (!centroid) continue;
+      if (!centroid || !hasTerrestrialSurface(centroid.lat, centroid.lng)) continue;
       passes.push({
         id: `swot-pass-${String(entry.id || passes.length).slice(-10).toLowerCase()}`,
         title: `SWOT RiverSP Vector Pass (${entry.producer_granule_id?.slice(0, 26) || "Global"})`,

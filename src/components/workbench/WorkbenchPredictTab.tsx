@@ -241,7 +241,7 @@ export function WorkbenchPredictTab({
   };
 
   return (
-    <div className="space-y-3.5 p-3.5">
+    <div className="space-y-2.5 p-2.5">
       {/* What-If Neighbor Preview */}
       <div className="space-y-1">
         <label htmlFor={`${baseId}-whatif`} className="ws-eyebrow block">
@@ -262,7 +262,7 @@ export function WorkbenchPredictTab({
         </select>
       </div>
 
-      <fieldset className="space-y-1.5">
+      <fieldset className="space-y-1">
         <legend className="ws-eyebrow">Forecast Horizon</legend>
         <div className="grid grid-cols-3 gap-1.5">
           {([1, 2, 3] as const).map((step) => {
@@ -281,13 +281,13 @@ export function WorkbenchPredictTab({
                 />
                 <label
                   htmlFor={radioId}
-                  className={`flex cursor-pointer items-center justify-center rounded-sm border px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                  className={`flex cursor-pointer items-center justify-center rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors ${
                     isSelected
                       ? "border-sky-400 bg-sky-950 text-sky-300"
                       : "border-border bg-surface-inset text-text-muted hover:text-text-primary"
                   }`}
                 >
-                  +{step} step{step > 1 ? "s" : ""}
+                  +{step} {step === 1 ? "step" : "steps"}
                 </label>
               </div>
             );
@@ -299,7 +299,7 @@ export function WorkbenchPredictTab({
         <div
           role="status"
           aria-live="polite"
-          className="flex items-center gap-2 rounded-md border border-border bg-surface-inset p-3 text-text-muted"
+          className="flex items-center gap-2 rounded-md border border-border bg-surface-inset p-2.5 text-text-muted"
         >
           <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
           <span>Fitting leak-free Ridge model over {maxHops}-hop neighborhood…</span>
@@ -309,7 +309,7 @@ export function WorkbenchPredictTab({
       {predictError && !predictLoading && (
         <div
           role="alert"
-          className="space-y-2.5 rounded-md border border-amber-400 bg-amber-950 p-3 text-[11px] text-amber-300"
+          className="space-y-2 rounded-md border border-amber-400 bg-amber-950 p-2.5 text-[11px] text-amber-300"
         >
           <p>{predictError}</p>
           <p className="text-text-muted">
@@ -319,7 +319,7 @@ export function WorkbenchPredictTab({
           <button
             type="button"
             onClick={() => void onMaterializeSolarGraph()}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400 bg-surface-elevated px-2.5 py-1.5 font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400 bg-surface-elevated px-2.5 py-1 font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
           >
             <Sun className="h-3.5 w-3.5" />
             Load 7-Node Solar Predictive Graph
@@ -330,7 +330,7 @@ export function WorkbenchPredictTab({
       {prediction && !predictLoading && (
         <>
           {/* Next Forecast Highlight */}
-          <div className="rounded-md border border-sky-400 bg-sky-950 p-3 space-y-1.5">
+          <div className="rounded-md border border-sky-400 bg-sky-950 p-2.5 space-y-1">
             <div className="flex flex-wrap items-center justify-between gap-1.5">
               <span className="ws-eyebrow text-sky-300">
                 Next {prediction.bucket} forecast ({prediction.nextForecast.nextPeriodLabel})

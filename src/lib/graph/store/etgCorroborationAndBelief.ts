@@ -6,8 +6,13 @@ import type {
   ETGNode,
   ETGNodeLabel,
   ETGProducerType,
+  ETGResearchDossier,
 } from "@/types/etg";
-import { assertValidEtgLabel, inferProducerType } from "./etgSeriesAndTrustUtils";
+import {
+  assertValidEtgLabel,
+  haversineKm,
+  inferProducerType,
+} from "./etgSeriesAndTrustUtils";
 import type { EtgStoreContext } from "./etgStoreContext";
 
 export function ensureGovernanceRulesOp(ctx: EtgStoreContext): {
@@ -100,41 +105,126 @@ export function evaluateCorroborationOp(
   ctx.ensureGovernanceRules();
 
   const supportingSources: CorroborationAudit["supportingSources"] = [];
+  const contradictingSources: NonNullable<CorroborationAudit["contradictingSources"]> = [];
   const producerSet = new Set<ETGProducerType>();
   const sourceSystemSet = new Set<string>();
+  const countedSupportCoords: Array<{
+    pType: ETGProducerType;
+    systemKey: string;
+    dataset?: string;
+    lat?: number;
+    lng?: number;
+  }> = [];
+  let effectiveIndependentTotal = 0;
 
   for (const edge of ctx.edges.values()) {
-    if (
-      edge.target_uuid === nodeUuid &&
-      (edge.type === "supports" || edge.type === "corroborates")
-    ) {
+    if (edge.target_uuid !== nodeUuid || edge.properties.superseded_at) continue;
+    if (edge.type === "supports" || edge.type === "corroborates") {
       const src = ctx.nodes.get(edge.source_uuid);
       if (!src) continue;
       const pType = inferProducerType(src);
-      producerSet.add(pType);
-      sourceSystemSet.add(
-        String(
-          src.properties.source_system ||
-            `${pType}:${src.properties.dataset || src.uuid}`
-        )
+      const systemKey = String(
+        src.properties.source_system ||
+          `${pType}:${src.properties.dataset || src.uuid}`
       );
+      producerSet.add(pType);
+      sourceSystemSet.add(systemKey);
+
+      const srcLat =
+        typeof src.properties.lat === "number" && Number.isFinite(src.properties.lat)
+          ? src.properties.lat
+          : undefined;
+      const srcLng =
+        typeof src.properties.lng === "number" && Number.isFinite(src.properties.lng)
+          ? src.properties.lng
+          : undefined;
+      const isCommunityModality =
+        pType === "citizen_sensor" ||
+        pType === "iot_sensor" ||
+        pType === "community";
+
+      let weightFactor = 1.0;
+      for (const prev of countedSupportCoords) {
+        const prevCommunityModality =
+          prev.pType === "citizen_sensor" ||
+          prev.pType === "iot_sensor" ||
+          prev.pType === "community";
+        const isHomogeneousCommunity = isCommunityModality && prevCommunityModality;
+        const isSameSystemOrDataset =
+          prev.systemKey === systemKey ||
+          (Boolean(src.properties.dataset) &&
+            prev.dataset === src.properties.dataset &&
+            prev.pType === pType);
+
+        if (
+          srcLat !== undefined &&
+          srcLng !== undefined &&
+          prev.lat !== undefined &&
+          prev.lng !== undefined
+        ) {
+          const distKm = haversineKm(srcLat, srcLng, prev.lat, prev.lng);
+          if (distKm < 150 && (isHomogeneousCommunity || isSameSystemOrDataset)) {
+            weightFactor = Math.min(weightFactor, 0.45);
+          }
+        } else if (prev.systemKey === systemKey) {
+          weightFactor = Math.min(weightFactor, 0.45);
+        }
+      }
+      effectiveIndependentTotal += weightFactor;
+      countedSupportCoords.push({
+        pType,
+        systemKey,
+        dataset: src.properties.dataset,
+        lat: srcLat,
+        lng: srcLng,
+      });
+
       supportingSources.push({
         uuid: src.uuid,
         name: src.properties.name,
         label: src.label,
         producerType: pType,
       });
+    } else if (edge.type === "contradicts") {
+      const src = ctx.nodes.get(edge.source_uuid);
+      if (!src) continue;
+      contradictingSources.push({
+        uuid: src.uuid,
+        name: src.properties.name,
+        label: src.label,
+        producerType: inferProducerType(src),
+      });
     }
   }
 
+  const effectiveIndependentSources = Number(effectiveIndependentTotal.toFixed(2));
   const distinctProducerTypes = Array.from(producerSet);
   const corroborated =
     supportingSources.length >= 2 &&
+    effectiveIndependentSources >= 1.95 &&
     (sourceSystemSet.size >= 2 || distinctProducerTypes.length >= 2);
+  const contested = contradictingSources.length > 0;
 
-  if (corroborated && (node.is_provisional || node.properties.status === "Provisional")) {
+  if (supportingSources.length > 0 || contested || node.properties.contested) {
+    if (supportingSources.length > 0) {
+      node.properties.independent_sources_count = Math.max(
+        sourceSystemSet.size,
+        supportingSources.length
+      );
+      node.properties.effective_independent_sources = effectiveIndependentSources;
+    }
+    node.properties.contradicting_sources_count = contradictingSources.length;
+    node.properties.contested = contested;
+    ctx.nodes.set(node.uuid, node);
+  }
+
+  if (corroborated) {
+    const wasTransition = Boolean(node.is_provisional) || node.properties.corroborated !== true;
     node.is_provisional = false;
-    node.properties.status = "Active";
+    node.properties.corroborated = true;
+    if (!node.properties.status || node.properties.status === "Provisional") {
+      node.properties.status = "Active";
+    }
     node.properties.confidence = Math.max(node.properties.confidence ?? 0.85, 0.9);
     ctx.nodes.set(node.uuid, node);
 
@@ -161,7 +251,7 @@ export function evaluateCorroborationOp(
       });
     }
 
-    if (emit) {
+    if (emit && wasTransition) {
       const act = ctx.pushActivity({
         kind: "corroboration",
         nodeUuid,
@@ -174,8 +264,11 @@ export function evaluateCorroborationOp(
   return {
     nodeUuid,
     supportingSources,
+    ...(contradictingSources.length > 0 ? { contradictingSources } : {}),
     distinctProducerTypes,
+    effectiveIndependentSources,
     corroborated: corroborated || (!node.is_provisional && node.label === "Insight"),
+    ...(contested ? { contested } : {}),
     requiredSources: 2,
     gateRuleUuid: "rule-corroboration",
   };
@@ -213,6 +306,7 @@ export function reviseBeliefOp(
   ctx: EtgStoreContext,
   params: {
     priorNodeUuid: string;
+    newNodeUuid?: string;
     newName: string;
     newDescription: string;
     rationale: string;
@@ -223,6 +317,7 @@ export function reviseBeliefOp(
     theil_sen_slope?: number;
     series?: ETGNode["properties"]["series"];
     observed_at?: string;
+    dossier?: ETGResearchDossier;
     silent?: boolean;
   }
 ): {
@@ -238,7 +333,11 @@ export function reviseBeliefOp(
 
   const revisedLabel = assertValidEtgLabel(params.label || prior.label);
   const now = new Date().toISOString();
-  const revisedUuid = `revised-${crypto.randomUUID().slice(0, 8)}`;
+  const cleanCustomUuid = params.newNodeUuid?.trim();
+  const revisedUuid =
+    cleanCustomUuid && cleanCustomUuid !== prior.uuid
+      ? cleanCustomUuid
+      : `revised-${crypto.randomUUID().slice(0, 8)}`;
 
   const revisedNode: ETGNode = {
     uuid: revisedUuid,
@@ -249,6 +348,11 @@ export function reviseBeliefOp(
       name: params.newName.trim(),
       concept_name: params.newName.trim(),
       description: params.newDescription.trim(),
+      ...(params.dossier
+        ? { dossier: params.dossier }
+        : prior.properties.dossier
+          ? { dossier: prior.properties.dossier }
+          : {}),
       status: "Active",
       superseded_by: undefined,
       dataset: params.dataset || prior.properties.dataset,
@@ -265,7 +369,10 @@ export function reviseBeliefOp(
   prior.properties.status = "Superseded";
   prior.properties.superseded_by = revisedUuid;
 
-  const edgeUuid = `edge-supersedes-${crypto.randomUUID().slice(0, 8)}`;
+  const edgeUuid =
+    cleanCustomUuid && cleanCustomUuid !== prior.uuid
+      ? `edge-supersedes-${revisedUuid}-${prior.uuid}`
+      : `edge-supersedes-${crypto.randomUUID().slice(0, 8)}`;
   const supersedesEdge: ETGEdge = {
     source_uuid: revisedUuid,
     target_uuid: prior.uuid,

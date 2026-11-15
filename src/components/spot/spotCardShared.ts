@@ -16,6 +16,8 @@ import type {
 } from "@/types/etg";
 import { convertSlopeUnitLabel } from "@/lib/earth/currentConditionsClient";
 
+export type SpotInspectorTab = "overview" | "trends" | "relations" | "science";
+
 export interface SpotViewPrefs {
   showCurrent: boolean;
   showTrends: boolean;
@@ -40,7 +42,7 @@ export const DEFAULT_SPOT_VIEW_PREFS: SpotViewPrefs = {
   showPressureSolar: true,
 };
 
-export const SPOT_VIEW_PREFS_KEY = "etg:spot-view-prefs:v2";
+export const SPOT_VIEW_PREFS_KEY = "etg:spot-view-prefs:v3";
 
 export interface GuidedCaseStudyItem {
   id: string;
@@ -108,6 +110,9 @@ export interface CompactSpotCardProps {
     targetNodeUuid?: string;
   }) => Promise<void>;
   onOpenInGraphWorkbench?: (nodeUuid: string) => void;
+  onOpenBriefing?: (nodeUuid: string) => void;
+  onSatelliteZoomSpot?: (lat: number, lng: number) => void;
+  onOpenSolarForSpot?: (lat: number, lng: number, label: string) => void;
   onGraphUpdated: () => Promise<void>;
   onClose: () => void;
 }

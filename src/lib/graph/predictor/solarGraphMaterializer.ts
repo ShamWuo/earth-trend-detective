@@ -142,6 +142,13 @@ export async function materializeDenverSolarGraphIntoEtg(
           })
         : null;
 
+    const cleanCity = cfg.name.split("/")[0]?.trim() || cfg.name;
+    const cleanRegion =
+      cfg.direction === "CENTER"
+        ? "Denver, CO"
+        : /,\s*[A-Z]{2}$/.test(cleanCity)
+          ? cleanCity
+          : `${cleanCity}, CO`;
     const node = store.createNode({
       uuid,
       label: "Signal",
@@ -152,7 +159,7 @@ export async function materializeDenverSolarGraphIntoEtg(
         description: cfg.rationale,
         lat: cfg.lat,
         lng: cfg.lng,
-        region: cfg.direction === "CENTER" ? "Front Range Hub, CO" : `${cfg.direction} Corridor (${cfg.distanceKm} km)`,
+        region: cleanRegion,
         dataset: "nasa_power",
         parameter: "ALLSKY_SFC_SW_DWN",
         unit: "kWh/m²/d",

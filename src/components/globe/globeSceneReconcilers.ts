@@ -2,6 +2,7 @@ import type React from "react";
 import * as THREE from "three";
 import { DATASET_BY_ID } from "@/lib/datasets";
 import { buildGeodesicCircleLatLng } from "@/lib/earth/nasaGibsRegional";
+import type { SatelliteDepthTier } from "@/lib/earth/satelliteZoomTiles";
 import {
   convertSlopeUnitLabel,
   convertTemperatureDisplayValue,
@@ -18,6 +19,7 @@ import {
   EARTH_RADIUS,
   buildElevatedGreatCircleCurve,
   disposeGroupResources,
+  intersectTrueEarthSphere,
   latLngToVector3,
   lngSpanDeg,
   resolveComparisonArcVisuals,
@@ -48,11 +50,27 @@ export function reconcileRegionalRings(params: {
   isRegionalZoom: boolean;
   regionalFocalCoord: { lat: number; lng: number };
   hasSelectedOrProbedPin: boolean;
+  depthTier?: SatelliteDepthTier;
 }): void {
-  const { refs, isRegionalZoom, regionalFocalCoord, hasSelectedOrProbedPin } = params;
+  const {
+    refs,
+    isRegionalZoom,
+    regionalFocalCoord,
+    hasSelectedOrProbedPin,
+    depthTier = "corridor",
+  } = params;
   disposeGroupResources(refs.regionalGroup, refs.sharedTextures);
   refs.regionalGroup.visible = isRegionalZoom;
   if (!isRegionalZoom) return;
+
+  const isGround = depthTier === "ground";
+  const isCity = depthTier === "city";
+  const isMetro = depthTier === "metro";
+  const innerKm = isGround ? 0.25 : isCity ? 2 : isMetro ? 10 : 50;
+  const outerKm = isGround ? 1 : isCity ? 10 : isMetro ? 50 : 150;
+  const ringAltitude = isGround ? 0.00018 : isCity ? 0.007 : isMetro ? 0.045 : 0.26;
+  const innerExtra = isGround ? 0.00005 : isCity ? 0.0015 : isMetro ? 0.006 : 0.015;
+  const centerPlaneSize = isGround ? 0.0006 : isCity ? 0.022 : isMetro ? 0.11 : 1.5;
 
   const addGeodesicRing = (
     radiusKm: number,
@@ -82,8 +100,8 @@ export function reconcileRegionalRings(params: {
     refs.regionalGroup.add(new THREE.Line(geo, mat));
   };
 
-  addGeodesicRing(50, 0.28, 0xfbbf24, 0.72, 72);
-  addGeodesicRing(150, 0.26, 0x38bdf8, 0.52, 88);
+  addGeodesicRing(innerKm, ringAltitude + innerExtra, 0xfbbf24, 0.72, 72);
+  addGeodesicRing(outerKm, ringAltitude, 0x38bdf8, 0.52, 88);
 
   if (!hasSelectedOrProbedPin) {
     const unitNormal = latLngToVector3(
@@ -91,7 +109,7 @@ export function reconcileRegionalRings(params: {
       regionalFocalCoord.lng,
       1
     ).normalize();
-    const centerGeo = new THREE.PlaneGeometry(1.5, 1.5);
+    const centerGeo = new THREE.PlaneGeometry(centerPlaneSize, centerPlaneSize);
     const centerMat = new THREE.MeshBasicMaterial({
       map: refs.ringTex,
       color: 0x38bdf8,
@@ -102,7 +120,9 @@ export function reconcileRegionalRings(params: {
       side: THREE.DoubleSide,
     });
     const centerMesh = new THREE.Mesh(centerGeo, centerMat);
-    centerMesh.position.copy(unitNormal.clone().multiplyScalar(EARTH_RADIUS + 0.3));
+    centerMesh.position.copy(
+      unitNormal.clone().multiplyScalar(EARTH_RADIUS + ringAltitude + innerExtra * 1.2)
+    );
     centerMesh.lookAt(unitNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
     refs.regionalGroup.add(centerMesh);
   }
@@ -204,21 +224,20 @@ export function reconcileMarkersAndArcs(params: {
 
     const regPinScale = isRegionalZoom ? 0.56 : 1;
     const unitNormal = latLngToVector3(lat, lng, 1).normalize();
-    const surfacePos = unitNormal
-      .clone()
-      .multiplyScalar(EARTH_RADIUS + (isRegionalZoom ? 0.28 : 0.5));
-    const beaconAltitude = isRegionalZoom
+    const surfAltOffset = isRegionalZoom ? 0.28 : 0.5;
+    const beaconAltOffset = isRegionalZoom
       ? isEndpointFocused || node.label === "Insight"
-        ? EARTH_RADIUS + 1.45
+        ? 1.45
         : node.label === "Concept"
-          ? EARTH_RADIUS + 1.05
-          : EARTH_RADIUS + 0.75
+          ? 1.05
+          : 0.75
       : isEndpointFocused || node.label === "Insight"
-        ? EARTH_RADIUS + 3.4
+        ? 3.4
         : node.label === "Concept"
-          ? EARTH_RADIUS + 2.3
-          : EARTH_RADIUS + 1.6;
-    const orbPos = unitNormal.clone().multiplyScalar(beaconAltitude);
+          ? 2.3
+          : 1.6;
+    const surfacePos = unitNormal.clone().multiplyScalar(EARTH_RADIUS + surfAltOffset);
+    const orbPos = unitNormal.clone().multiplyScalar(EARTH_RADIUS + beaconAltOffset);
     const phaseOffset = (idx * 0.27) % 1;
 
     // 1. Tangent Surface Footprint Reticle (compact precision scale)
@@ -236,6 +255,8 @@ export function reconcileMarkersAndArcs(params: {
     const footprintMesh = new THREE.Mesh(footprintGeo, footprintMat);
     footprintMesh.position.copy(surfacePos);
     footprintMesh.lookAt(unitNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
+    footprintMesh.userData.unitNormal = unitNormal.clone();
+    footprintMesh.userData.baseAltOffset = surfAltOffset;
     refs.markersGroup.add(footprintMesh);
 
     // 2. Pulse Wave only on active/focused endpoints so resting globe stays peaceful
@@ -257,6 +278,8 @@ export function reconcileMarkersAndArcs(params: {
       pulseMesh.userData.phaseOffset = phaseOffset;
       pulseMesh.userData.baseScale = isSelected ? 1.25 : 1.05;
       pulseMesh.userData.maxOpacity = isSelected ? 0.8 : 0.62;
+      pulseMesh.userData.unitNormal = unitNormal.clone();
+      pulseMesh.userData.baseAltOffset = surfAltOffset + 0.12;
       refs.markersGroup.add(pulseMesh);
 
       // 3. Hairline Light Filament connecting Surface Anchor to Elevated Focused Orb
@@ -268,15 +291,21 @@ export function reconcileMarkersAndArcs(params: {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
-      refs.markersGroup.add(new THREE.Line(filamentGeo, filamentMat));
+      const filamentLine = new THREE.Line(filamentGeo, filamentMat);
+      filamentLine.userData.isFilament = true;
+      filamentLine.userData.unitNormal = unitNormal.clone();
+      filamentLine.userData.surfOffset = surfAltOffset;
+      filamentLine.userData.orbOffset = beaconAltOffset;
+      refs.markersGroup.add(filamentLine);
     }
 
     // 4. Radial Corona Billboard Sprite at Beacon Altitude
+    const haloOpacity = (isSuperseded ? 0.4 : 0.8) * dimFactor;
     const spriteMat = new THREE.SpriteMaterial({
       map: refs.glowTex,
       color: colorHex,
       transparent: true,
-      opacity: (isSuperseded ? 0.4 : 0.8) * dimFactor,
+      opacity: haloOpacity,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -291,7 +320,10 @@ export function reconcileMarkersAndArcs(params: {
     haloSprite.scale.setScalar(baseScale);
     haloSprite.userData.haloSprite = true;
     haloSprite.userData.baseScale = baseScale;
+    haloSprite.userData.baseOpacity = haloOpacity;
     haloSprite.userData.phaseOffset = phaseOffset * Math.PI * 2;
+    haloSprite.userData.unitNormal = unitNormal.clone();
+    haloSprite.userData.baseAltOffset = beaconAltOffset;
     refs.markersGroup.add(haloSprite);
 
     // 5. Crisp Inner Diamond-White Pin Core
@@ -308,6 +340,8 @@ export function reconcileMarkersAndArcs(params: {
     });
     const innerCore = new THREE.Mesh(innerGeo, innerMat);
     innerCore.position.copy(orbPos);
+    innerCore.userData.unitNormal = unitNormal.clone();
+    innerCore.userData.baseAltOffset = beaconAltOffset;
     refs.markersGroup.add(innerCore);
 
     // 6. Generous Invisible Raycast Hit Target for Easy Selection
@@ -329,6 +363,9 @@ export function reconcileMarkersAndArcs(params: {
     });
     const hitTarget = new THREE.Mesh(targetGeo, targetMat);
     hitTarget.position.copy(orbPos);
+    hitTarget.userData.isHitTarget = true;
+    hitTarget.userData.unitNormal = unitNormal.clone();
+    hitTarget.userData.baseAltOffset = beaconAltOffset;
     refs.markersGroup.add(hitTarget);
     refs.markerMap.set(hitTarget, node);
   });
@@ -406,13 +443,15 @@ export function reconcileMarkersAndArcs(params: {
       6,
       false
     );
+    const coreOpacity = isFocusedArc ? 0.96 : hasActiveFocus ? 0.86 : 0.78;
     const tubeMat = new THREE.MeshBasicMaterial({
       color: arcColor,
       transparent: true,
-      opacity: isFocusedArc ? 0.96 : hasActiveFocus ? 0.86 : 0.78,
+      opacity: coreOpacity,
       depthWrite: false,
     });
     const arcCoreMesh = new THREE.Mesh(tubeGeo, tubeMat);
+    arcCoreMesh.userData.baseOpacity = coreOpacity;
     refs.arcsGroup.add(arcCoreMesh);
     refs.arcMap.set(arcCoreMesh, edge);
 
@@ -425,14 +464,17 @@ export function reconcileMarkersAndArcs(params: {
         6,
         false
       );
+      const sleeveOpacity = isFocusedArc ? 0.24 : 0.12;
       const haloMat = new THREE.MeshBasicMaterial({
         color: arcColor,
         transparent: true,
-        opacity: isFocusedArc ? 0.24 : 0.12,
+        opacity: sleeveOpacity,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
-      refs.arcsGroup.add(new THREE.Mesh(haloGeo, haloMat));
+      const haloMesh = new THREE.Mesh(haloGeo, haloMat);
+      haloMesh.userData.baseOpacity = sleeveOpacity;
+      refs.arcsGroup.add(haloMesh);
     }
 
     // 3. Generous invisible hit tube for effortless arc clicking & hovering
@@ -449,6 +491,7 @@ export function reconcileMarkersAndArcs(params: {
       depthWrite: false,
     });
     const arcHitMesh = new THREE.Mesh(hitGeo, hitMat);
+    arcHitMesh.userData.isArcHit = true;
     refs.arcsGroup.add(arcHitMesh);
     refs.arcMap.set(arcHitMesh, edge);
 
@@ -485,10 +528,16 @@ export function reconcileMarkersAndArcs(params: {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
+      const travelerScale = isLocalCorridor
+        ? isFocusedArc
+          ? 1.45
+          : 1.1
+        : isFocusedArc
+          ? 2.8
+          : 2.1;
       const pulseSprite = new THREE.Sprite(pulseSpriteMat);
-      pulseSprite.scale.setScalar(
-        isLocalCorridor ? (isFocusedArc ? 1.45 : 1.1) : isFocusedArc ? 2.8 : 2.1
-      );
+      pulseSprite.scale.setScalar(travelerScale);
+      pulseSprite.userData.baseScale = travelerScale;
       pulseSprite.position.copy(pts[0]);
       refs.arcsGroup.add(pulseSprite);
       refs.arcTravelers.push({
@@ -517,37 +566,65 @@ export function reconcileProbeReticlesAndComparisonArc(params: {
   refs.probeTravelers = [];
   refs.probeMidpoint = null;
 
+  const initAlt = Math.max(0.008, refs.spherical.radius - EARTH_RADIUS);
+  const initProbeScale = Math.min(1.0, initAlt / 185);
+  const initGlowAtten = initAlt < 18 ? 0.55 + 0.45 * (initAlt / 18) : 1.0;
+
   const addProbeReticle = (coord: { lat: number; lng: number }, hexColor: number) => {
     const unitNormal = latLngToVector3(coord.lat, coord.lng, 1).normalize();
-    const pos = unitNormal.clone().multiplyScalar(EARTH_RADIUS + 0.65);
+    const orbAlt = Math.max(0.00009, 1.15 * initProbeScale);
+    const ringAlt = Math.max(0.00006, 0.55 * initProbeScale);
 
     const spriteMat = new THREE.SpriteMaterial({
       map: refs.glowTex,
       color: hexColor,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.62 * initGlowAtten,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     const probeOrb = new THREE.Sprite(spriteMat);
-    probeOrb.position.copy(unitNormal.clone().multiplyScalar(EARTH_RADIUS + 2.8));
-    probeOrb.scale.setScalar(6.5);
+    probeOrb.position.copy(unitNormal.clone().multiplyScalar(EARTH_RADIUS + orbAlt));
+    probeOrb.scale.setScalar(4.8 * initProbeScale);
+    probeOrb.userData.unitNormal = unitNormal.clone();
+    probeOrb.userData.baseAltOffset = 1.15;
+    probeOrb.userData.baseSize = 4.8;
+    probeOrb.userData.baseOpacity = 0.62;
     refs.probeGroup.add(probeOrb);
 
-    const ringGeo = new THREE.PlaneGeometry(6.2, 6.2);
+    const coreGeo = new THREE.SphereGeometry(0.34, 12, 12);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+    });
+    const probeCore = new THREE.Mesh(coreGeo, coreMat);
+    probeCore.position.copy(unitNormal.clone().multiplyScalar(EARTH_RADIUS + orbAlt));
+    probeCore.scale.setScalar(initProbeScale);
+    probeCore.userData.unitNormal = unitNormal.clone();
+    probeCore.userData.baseAltOffset = 1.15;
+    probeCore.userData.isProbeCore = true;
+    refs.probeGroup.add(probeCore);
+
+    const ringGeo = new THREE.PlaneGeometry(5.4, 5.4);
     const ringMat = new THREE.MeshBasicMaterial({
       map: refs.ringTex,
       color: hexColor,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.88,
+      opacity: 0.72 * initGlowAtten,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.position.copy(pos);
+    ring.position.copy(unitNormal.clone().multiplyScalar(EARTH_RADIUS + ringAlt));
     ring.lookAt(unitNormal.clone().multiplyScalar(EARTH_RADIUS * 2));
+    ring.scale.setScalar(initProbeScale);
     ring.userData.probeRing = true;
+    ring.userData.maxOpacity = 0.72;
+    ring.userData.unitNormal = unitNormal.clone();
+    ring.userData.baseAltOffset = 0.55;
     refs.probeGroup.add(ring);
   };
 
@@ -579,7 +656,10 @@ export function reconcileProbeReticlesAndComparisonArc(params: {
         opacity: 0.96,
         depthWrite: false,
       });
-      refs.probeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
+      const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+      tubeMesh.userData.isComparisonTube = true;
+      tubeMesh.userData.baseOpacity = 0.96;
+      refs.probeGroup.add(tubeMesh);
 
       const haloGeo = new THREE.TubeGeometry(curve, 52, visuals.haloRadius, 8, false);
       const haloMat = new THREE.MeshBasicMaterial({
@@ -589,7 +669,10 @@ export function reconcileProbeReticlesAndComparisonArc(params: {
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       });
-      refs.probeGroup.add(new THREE.Mesh(haloGeo, haloMat));
+      const compHaloMesh = new THREE.Mesh(haloGeo, haloMat);
+      compHaloMesh.userData.isComparisonTube = true;
+      compHaloMesh.userData.baseOpacity = visuals.haloOpacity;
+      refs.probeGroup.add(compHaloMesh);
 
       const pulseSpriteMat = new THREE.SpriteMaterial({
         map: refs.glowTex,
@@ -601,6 +684,7 @@ export function reconcileProbeReticlesAndComparisonArc(params: {
       });
       const pulseSprite = new THREE.Sprite(pulseSpriteMat);
       pulseSprite.scale.setScalar(2.6);
+      pulseSprite.userData.baseScale = 2.6;
       pulseSprite.position.copy(curvePts[0]);
       refs.probeGroup.add(pulseSprite);
       refs.probeTravelers.push({
@@ -651,9 +735,11 @@ function pickGlobeSceneHit(ctx: RaycastPickContext):
     }
   }
 
-  // Check front-hemisphere teleconnection arcs (guard against picking far-side arcs through globe)
-  const earthHits = ctx.raycaster.intersectObject(ctx.earthMesh, false);
-  const earthDist = earthHits.length > 0 ? earthHits[0].distance : Infinity;
+  // Check front-hemisphere teleconnection arcs against true Earth sphere (avoids 124k-tri traversal & sagitta offset)
+  const earthHitPoint = intersectTrueEarthSphere(ctx.raycaster.ray);
+  const earthDist = earthHitPoint
+    ? ctx.camera.position.distanceTo(earthHitPoint)
+    : Infinity;
   const arcHits = ctx.raycaster.intersectObjects(ctx.arcsGroup.children, false);
   const arcHit = arcHits.find(
     (h) => ctx.arcMap.has(h.object) && h.distance <= earthDist + 2.5
@@ -663,8 +749,8 @@ function pickGlobeSceneHit(ctx: RaycastPickContext):
     if (edge) return { kind: "edge", edge };
   }
 
-  if (earthHits.length > 0) {
-    return { kind: "earth", point: earthHits[0].point };
+  if (earthHitPoint) {
+    return { kind: "earth", point: earthHitPoint };
   }
   return null;
 }
@@ -753,12 +839,35 @@ export function resolveGlobePointerHover(
  */
 export function resolveGlobePointerClick(
   ctx: RaycastPickContext & {
+    compareMode?: boolean;
     onSelectNode: (node: ETGNode) => void;
     onSelectEdge?: (edge: ETGEdge) => void;
     onProbeCoordinate: (lat: number, lng: number) => void;
   }
 ): void {
   const hit = pickGlobeSceneHit(ctx);
+  if (ctx.compareMode) {
+    if (
+      hit?.kind === "node" &&
+      typeof hit.node.properties.lat === "number" &&
+      typeof hit.node.properties.lng === "number"
+    ) {
+      ctx.onProbeCoordinate(hit.node.properties.lat, hit.node.properties.lng);
+      return;
+    }
+    if (hit?.kind === "earth") {
+      const { lat, lng } = vector3ToLatLng(hit.point);
+      ctx.onProbeCoordinate(lat, lng);
+      return;
+    }
+    ctx.raycaster.setFromCamera(ctx.ndc, ctx.camera);
+    const earthHit = intersectTrueEarthSphere(ctx.raycaster.ray);
+    if (earthHit) {
+      const { lat, lng } = vector3ToLatLng(earthHit);
+      ctx.onProbeCoordinate(lat, lng);
+    }
+    return;
+  }
   if (hit?.kind === "node") {
     ctx.onSelectNode(hit.node);
     return;
@@ -857,10 +966,14 @@ export function projectGlobeOverlayLabels(params: {
       });
 
     const nextNodeLabels: ProjectedRegionalNodeLabel[] = [];
+    const labelAltOffset = Math.min(
+      1.2,
+      Math.max(0.001, (spherical.radius - EARTH_RADIUS) * 0.05)
+    );
     for (const node of nearby) {
       const nLat = node.properties.lat!;
       const nLng = node.properties.lng!;
-      nodePosVec.copy(latLngToVector3(nLat, nLng, EARTH_RADIUS + 1.2));
+      nodePosVec.copy(latLngToVector3(nLat, nLng, EARTH_RADIUS + labelAltOffset));
       midUnitVec.copy(nodePosVec).normalize();
       if (camUnitVec.dot(midUnitVec) < 0.25) continue;
       projVec.copy(nodePosVec).project(camera);
@@ -869,7 +982,7 @@ export function projectGlobeOverlayLabels(params: {
       const y = Math.round((-projVec.y * 0.5 + 0.5) * currentH);
       if (x < 72 || x > rightCutoff || y < 56 || y > currentH - 88) continue;
       // Keep clear of top-left Regional Satellite HUD card
-      if (x < 405 && y < 148) continue;
+      if (x < 405 && y < 210) continue;
       if (occupiedBoxes.some((b) => Math.abs(b.x - x) < 126 && Math.abs(b.y - y) < 28)) {
         continue;
       }
@@ -1000,7 +1113,7 @@ export function projectGlobeOverlayLabels(params: {
         if (x < 64 || x > rightCutoff || y < 56 || y > currentH - 86) {
           continue;
         }
-        if (isRegionalZoom && x < 405 && y < 148) {
+        if (isRegionalZoom && x < 405 && y < 210) {
           continue;
         }
         if (occupiedBoxes.some((b) => Math.abs(b.x - x) < 126 && Math.abs(b.y - y) < 28)) {

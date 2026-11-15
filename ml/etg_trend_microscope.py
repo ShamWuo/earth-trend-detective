@@ -33,6 +33,7 @@ from microscope.corpus_and_benchmarks import (
     _synthesize_curriculum_graph,
     build_microscope_training_corpus,
     evaluate_microscope_benchmarks,
+    evaluate_real_historical_microscope,
     train_and_export_microscope,
 )
 from microscope.features import (

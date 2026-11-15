@@ -99,10 +99,10 @@ export function GraphWorkbenchToolbar({
 
   return (
     <div
-      className={`pointer-events-none absolute top-3 z-20 flex flex-col items-center gap-2 transition-[left] duration-200 ${
+      className={`etg-stage-hud-row pointer-events-none absolute top-2.5 left-11 z-20 flex flex-col items-center gap-1.5 transition-[right] duration-200 ${
         inspectorOpen
-          ? "left-1/2 -translate-x-1/2 lg:left-[calc(50%-200px)]"
-          : "left-1/2 -translate-x-1/2"
+          ? "right-2.5 sm:right-[22.75rem] xl:right-[23.75rem]"
+          : "right-2.5"
       }`}
     >
       <div
@@ -110,20 +110,22 @@ export function GraphWorkbenchToolbar({
         role="toolbar"
         aria-label="Knowledge Graph Workbench"
         {...({ focusgroup: "toolbar wrap" } as Record<string, string>)}
-        className="etg-hud-pill pointer-events-auto flex max-w-[calc(100dvw-2rem)] flex-wrap items-center gap-1 rounded-md bg-surface px-2 py-1 text-[11px] shadow-lg"
+        className="etg-hud-pill pointer-events-auto flex max-w-full flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] rounded-lg bg-surface px-1.5 py-0.5 text-[10.5px] shadow-lg"
       >
-        <div role="group" aria-label="Graph authoring actions" className="flex items-center gap-1">
+        <div role="group" aria-label="Graph authoring actions" className="flex shrink-0 items-center gap-0.5">
           {onOpenQuickAddNode && (
             <button
               type="button"
               onClick={onOpenQuickAddNode}
-              className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
+              title="Add Node to Graph"
+              aria-label="Add Node"
+              className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
             >
               <Plus
-                className="h-3.5 w-3.5 text-amber-400"
+                className="h-3 w-3 text-amber-400"
                 aria-hidden="true"
               />
-              <span>Add Node</span>
+              <span>Add</span>
             </button>
           )}
 
@@ -132,9 +134,9 @@ export function GraphWorkbenchToolbar({
               type="button"
               aria-pressed={connectMode}
               onClick={onToggleConnectMode}
-              className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary transition-colors hover:bg-surface-hover aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
+              className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 font-medium text-text-primary transition-colors hover:bg-surface-hover aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
             >
-              <GitBranchPlus className="h-3.5 w-3.5" aria-hidden="true" />
+              <GitBranchPlus className="h-3 w-3" aria-hidden="true" />
               <span>{connectMode ? "Connecting…" : "Connect"}</span>
             </button>
           )}
@@ -144,55 +146,55 @@ export function GraphWorkbenchToolbar({
               type="button"
               onClick={onDiscoverLinks}
               disabled={discoveringLinks}
-              className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
+              title="Discover latent connections across the Earth Trend Graph"
+              aria-label={discoveringLinks ? "Scanning for links" : "Find Links"}
+              className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 font-medium text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
             >
               <Sparkles
-                className={`h-3.5 w-3.5 text-violet-400 ${discoveringLinks ? "animate-pulse" : ""}`}
+                className={`h-3 w-3 text-violet-400 ${discoveringLinks ? "animate-pulse" : ""}`}
                 aria-hidden="true"
               />
-              <span>{discoveringLinks ? "Scanning…" : "Find Links"}</span>
+              <span>{discoveringLinks ? "Scanning…" : "Links"}</span>
             </button>
           )}
         </div>
 
         {onChangeTraversalFilter && (
           <>
-            <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
-            <div role="group" aria-label="Hop depth traversal" className="flex items-center gap-0.5">
-              {([null, 1, 2, 3] as const).map((h) => (
-                <button
-                  key={h === null ? "all" : `hop-${h}`}
-                  type="button"
-                  disabled={h !== null && !hasSelection}
-                  title={
-                    h !== null && !hasSelection
-                      ? "Select a node first to isolate its k-hop neighborhood"
-                      : undefined
-                  }
-                  aria-pressed={traversalFilter.maxHops === h}
-                  onClick={() => onChangeTraversalFilter({ ...traversalFilter, maxHops: h })}
-                  className="rounded-sm border border-transparent px-2 py-1 font-mono ws-numeric text-[10px] font-medium text-text-muted hover:text-text-primary disabled:opacity-35 aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  {h === null ? "All" : `${h}-Hop`}
-                </button>
-              ))}
-            </div>
-
             {hasSelection && (
               <>
-                <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
-                <div role="group" aria-label="Causal traversal direction" className="flex items-center gap-0.5">
+                <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+                <div role="group" aria-label="Hop depth traversal" className="flex shrink-0 items-center gap-0.5">
+                  {([null, 1, 2, 3] as const).map((h) => (
+                    <button
+                      key={h === null ? "all" : `hop-${h}`}
+                      type="button"
+                      aria-pressed={traversalFilter.maxHops === h}
+                      onClick={() => onChangeTraversalFilter({ ...traversalFilter, maxHops: h })}
+                      title={h === null ? "All Hops" : `${h}-Hop traversal`}
+                      aria-label={h === null ? "All Hops" : `${h}-Hop`}
+                      className="etg-hud-btn h-6 shrink-0 rounded-sm border border-transparent px-1.5 font-mono ws-numeric text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+                    >
+                      {h === null ? "All" : `${h}H`}
+                    </button>
+                  ))}
+                </div>
+
+                <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+                <div role="group" aria-label="Causal traversal direction" className="flex shrink-0 items-center gap-0.5">
                   {(
                     [
-                      { id: "both", label: "Both" },
-                      { id: "upstream", label: "← Drivers" },
-                      { id: "downstream", label: "→ Impacts" },
+                      { id: "both", label: "↔", full: "All directions (drivers and impacts)" },
+                      { id: "upstream", label: "← In", full: "Upstream Drivers" },
+                      { id: "downstream", label: "Out →", full: "Downstream Impacts" },
                     ] as const
                   ).map((dir) => (
                     <button
                       key={dir.id}
                       type="button"
                       aria-pressed={traversalFilter.direction === dir.id}
+                      title={dir.full}
+                      aria-label={dir.full}
                       onClick={() =>
                         onChangeTraversalFilter({
                           ...traversalFilter,
@@ -200,7 +202,7 @@ export function GraphWorkbenchToolbar({
                           maxHops: traversalFilter.maxHops ?? 2,
                         })
                       }
-                      className="rounded-sm border border-transparent px-2 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-teal-400 aria-pressed:bg-teal-950 aria-pressed:text-teal-300 cursor-pointer"
+                      className="etg-hud-btn h-6 shrink-0 rounded-sm border border-transparent px-1.5 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-teal-400 aria-pressed:bg-teal-950 aria-pressed:text-teal-300 cursor-pointer"
                     >
                       {dir.label}
                     </button>
@@ -211,11 +213,13 @@ export function GraphWorkbenchToolbar({
 
             {renderMode === "2d" && (
               <>
-                <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
-                <div role="group" aria-label="Graph layout mode" className="flex items-center">
+                <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+                <div role="group" aria-label="Graph layout mode" className="flex shrink-0 items-center">
                   <button
                     type="button"
                     aria-pressed={traversalFilter.layoutMode === "causal_flow"}
+                    title="Causal Flow 2D layered layout"
+                    aria-label="Causal Flow layout"
                     onClick={() =>
                       onChangeTraversalFilter({
                         ...traversalFilter,
@@ -223,10 +227,10 @@ export function GraphWorkbenchToolbar({
                           traversalFilter.layoutMode === "causal_flow" ? "force" : "causal_flow",
                       })
                     }
-                    className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
+                    className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
                   >
                     <Waypoints className="h-3 w-3" aria-hidden="true" />
-                    <span>Causal Flow</span>
+                    <span>Flow</span>
                   </button>
                 </div>
               </>
@@ -236,15 +240,15 @@ export function GraphWorkbenchToolbar({
 
         {onChangeRegionScope && regionOptions.length > 0 && (
           <>
-            <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
-            <div role="group" aria-label="Move to region" className="flex items-center gap-1">
+            <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+            <div role="group" aria-label="Move to region" className="flex shrink-0 items-center gap-0.5">
               <select
                 aria-label="Move to region"
                 value={selectedRegionScope ?? ""}
                 onChange={(e) => onChangeRegionScope(e.target.value ? e.target.value : null)}
-                className="max-w-[180px] rounded-sm border border-border bg-surface-band px-2 py-1 text-[10px] font-medium text-text-primary focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)] cursor-pointer"
+                className="h-6 min-w-[112px] max-w-[180px] rounded-sm border border-border bg-surface-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-primary focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)] cursor-pointer"
               >
-                <option value="">All Regions (Overview)</option>
+                <option value="">All Regions</option>
                 {regionOptions.map((opt) => (
                   <option key={opt.id} value={opt.id}>
                     {opt.label} ({opt.count})
@@ -258,7 +262,7 @@ export function GraphWorkbenchToolbar({
                       type="button"
                       onClick={onRefocusActiveRegion}
                       title="Fly camera back to selected region"
-                      className="rounded-sm border border-border bg-surface-band px-1.5 py-1 text-[10px] font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
+                      className="etg-hud-btn h-6 rounded-sm border border-border bg-surface-band px-1.5 text-[10px] font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
                     >
                       Fly
                     </button>
@@ -268,7 +272,7 @@ export function GraphWorkbenchToolbar({
                     onClick={() => onChangeRegionScope(null)}
                     aria-label="Clear region focus"
                     title="Return to global overview"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-sm border border-transparent text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+                    className="etg-hud-btn inline-flex h-6 w-6 items-center justify-center rounded-sm border border-transparent text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
                   >
                     <X className="h-3 w-3" aria-hidden="true" />
                   </button>
@@ -284,7 +288,7 @@ export function GraphWorkbenchToolbar({
         <div
           role="status"
           aria-live="polite"
-          className="etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border border-amber-400 bg-amber-950 px-3 py-1 text-[11px] text-amber-300 shadow"
+          className="etg-hud-pill pointer-events-auto flex items-center gap-1.5 rounded-md border border-amber-400 bg-amber-950 px-2.5 py-0.5 text-[10.5px] text-amber-300 shadow"
         >
           <span
             className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"
@@ -292,17 +296,17 @@ export function GraphWorkbenchToolbar({
           />
           {connectSourceName ? (
             <span>
-              From <strong>{connectSourceName}</strong> <ArrowRight className="inline h-3 w-3" /> click any target node
+              From <strong>{connectSourceName}</strong> <ArrowRight className="inline h-3 w-3" /> target node
             </span>
           ) : (
-            <span>Connect Mode: click any Source node (or Shift+Click two nodes)</span>
+            <span>Connect: click Source node (or Shift+Click two)</span>
           )}
           {onToggleConnectMode && (
             <button
               type="button"
               onClick={onToggleConnectMode}
               aria-label="Exit connect mode"
-              className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-sm text-amber-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+              className="etg-hud-btn ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-sm text-amber-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
             >
               <X className="h-3 w-3" />
             </button>
@@ -314,22 +318,22 @@ export function GraphWorkbenchToolbar({
         <div
           role="status"
           aria-live="polite"
-          className="etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border border-violet-400 bg-violet-950 px-3 py-1 text-[11px] text-violet-300 shadow"
+          className="etg-hud-pill pointer-events-auto flex items-center gap-1.5 rounded-md border border-violet-400 bg-violet-950 px-2.5 py-0.5 text-[10.5px] text-violet-300 shadow"
         >
           <Sparkles
             className="h-3 w-3 text-violet-400"
             aria-hidden="true"
           />
           <span>
-            <span className="ws-numeric">{candidateCount}</span> latent connection{candidateCount === 1 ? "" : "s"} found
-            {selectedNodeName ? ` around ${selectedNodeName}` : ""} — click a dashed violet edge to wire
+            <span className="ws-numeric">{candidateCount}</span> latent link{candidateCount === 1 ? "" : "s"}
+            {selectedNodeName ? ` · ${selectedNodeName}` : ""} — click dashed violet edge
           </span>
           {onClearCandidateLinks && (
             <button
               type="button"
               onClick={onClearCandidateLinks}
               aria-label="Hide discovered link suggestions"
-              className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-sm text-violet-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+              className="etg-hud-btn ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-sm text-violet-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
             >
               <X className="h-3 w-3" />
             </button>

@@ -76,6 +76,7 @@ export const DATASET_BADGE_COLORS: Record<ETGDatasetId, string> = {
 const EDGE_RELATION_COLORS: Record<ETGRelationshipType, string> = {
   drives_opposite: "#f87171",
   corroborates: "#34d399",
+  contradicts: "#fb7185",
   verified_by: "#34d399",
   teleconnects: "#a78bfa",
   correlates_with: "#818cf8",

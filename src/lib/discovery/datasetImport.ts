@@ -59,6 +59,24 @@ export function parseAgencyFormattedText(
   if (hasKnmiHeader && !rawText.includes(",")) {
     const points = parseKnmiIndexDat(rawText, 1880, 2100);
     if (points.length >= 5) {
+      const headerContext = [
+        defaults?.defaultName ?? "",
+        ...lines.filter((l) => l.startsWith("#")).slice(0, 12),
+      ].join(" ");
+      let inferredKnmiDataset: ETGDatasetId = "nasa_power";
+      if (
+        /\b(?:sst|ersst|hadisst|nino|niño|enso|amo|pdo|iod|sea\s*surface|sea\s*ice|ocean)\b/i.test(
+          headerContext
+        )
+      ) {
+        inferredKnmiDataset = "ocean_temp";
+      } else if (
+        /\b(?:precip|rain|discharge|river|runoff|drought|soil|moisture)\b/i.test(
+          headerContext
+        )
+      ) {
+        inferredKnmiDataset = "hydrology";
+      }
       return points.map((p) => ({
         name: defaults?.defaultName || "KNMI Climate Explorer Series",
         lat: defaults?.defaultLat ?? 0,
@@ -66,7 +84,7 @@ export function parseAgencyFormattedText(
         date: p.date,
         value: p.value,
         unit: defaults?.defaultUnit || "index",
-        dataset: defaults?.defaultDataset ?? "ocean_temp",
+        dataset: defaults?.defaultDataset ?? inferredKnmiDataset,
       }));
     }
   }

@@ -11,12 +11,16 @@ const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observa
 const CACHE_TTL_MS = 1000 * 60 * 15;
 
 let gistempCsvCache: { expiresAt: number; csvText: string } | null = null;
+let gistempMonthlyCache: { expiresAt: number; points: TimeSeriesPoint[] } | null = null;
 let co2Cache: { expiresAt: number; sourceUrl: string; points: TimeSeriesPoint[] } | null = null;
+let co2MonthlyCache: { expiresAt: number; points: TimeSeriesPoint[] } | null = null;
 let nsidcCache: { expiresAt: number; sourceUrl: string; points: TimeSeriesPoint[] } | null = null;
 
 export function clearGistempAndCo2Caches(): void {
   gistempCsvCache = null;
+  gistempMonthlyCache = null;
   co2Cache = null;
+  co2MonthlyCache = null;
   nsidcCache = null;
 }
 
@@ -293,6 +297,145 @@ export function parseNoaaCo2AnnMean(
     });
   }
   return points.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Pure parser for NASA GISS GISTEMP v4 monthly global means CSV (`GLB.Ts+dSST.csv`).
+ */
+export function parseGistempMonthlyCsv(
+  csvText: string,
+  startYear = 1995,
+  endYear = 2025
+): TimeSeriesPoint[] {
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const headerIdx = lines.findIndex((l) => l.startsWith("Year,Jan,Feb"));
+  if (headerIdx < 0) return [];
+
+  const headers = lines[headerIdx].split(",").map((h) => h.trim());
+  const yearIdx = headers.indexOf("Year");
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthCols = monthNames.map((m) => headers.indexOf(m));
+  if (yearIdx < 0 || monthCols.some((idx) => idx < 0)) return [];
+
+  const points: TimeSeriesPoint[] = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const cells = lines[i].split(",").map((c) => c.trim());
+    const year = Number(cells[yearIdx]);
+    if (!Number.isInteger(year) || year < startYear || year > endYear) continue;
+    for (let m = 0; m < 12; m++) {
+      const raw = cells[monthCols[m]];
+      if (!raw || raw.includes("*")) continue;
+      const val = Number(raw);
+      if (!Number.isFinite(val)) continue;
+      points.push({
+        date: `${year}-${String(m + 1).padStart(2, "0")}`,
+        t: Number((year + (m + 0.5) / 12).toFixed(4)),
+        value: Number(val.toFixed(3)),
+      });
+    }
+  }
+  return points.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Fetches live NASA GISS GISTEMP v4 monthly global temperature anomaly (`GLB.Ts+dSST.csv`).
+ * Returns `[]` gracefully on upstream timeout or malformed payload.
+ */
+export async function fetchNasaGistempGlobalMonthlySeries(
+  startYear = 1995,
+  endYear = 2025,
+  budget?: TelemetryBudget
+): Promise<TimeSeriesPoint[]> {
+  if (gistempMonthlyCache && gistempMonthlyCache.expiresAt > Date.now()) {
+    return gistempMonthlyCache.points.filter((p) => p.t >= startYear && p.t < endYear + 1);
+  }
+  try {
+    const csvText = await fetchTextWithRetry(
+      "https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv",
+      "text/csv,text/plain,*/*",
+      "NASA GISTEMP v4 Monthly",
+      budget
+    );
+    const parsed = parseGistempMonthlyCsv(csvText, startYear, endYear);
+    if (parsed.length >= 24) {
+      gistempMonthlyCache = { expiresAt: Date.now() + CACHE_TTL_MS, points: parsed };
+      return parsed;
+    }
+  } catch {
+    // Non-fatal: pipeline falls back cleanly to annual GISTEMP series
+  }
+  return [];
+}
+
+/**
+ * Pure parser for NOAA GML Mauna Loa monthly CO2 CSV (`co2_mm_mlo.csv`).
+ */
+export function parseNoaaCo2MonthlyCsv(
+  csvText: string,
+  startYear = 1995,
+  endYear = 2025
+): TimeSeriesPoint[] {
+  const points: TimeSeriesPoint[] = [];
+  for (const rawLine of csvText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith("year")) continue;
+    const cols = line.split(",").map((c) => c.trim());
+    if (cols.length < 4) continue;
+    const year = Number(cols[0]);
+    const month = Number(cols[1]);
+    const average = Number(cols[3]);
+    if (
+      !Number.isInteger(year) ||
+      year < startYear ||
+      year > endYear ||
+      !Number.isInteger(month) ||
+      month < 1 ||
+      month > 12 ||
+      !Number.isFinite(average) ||
+      average <= 0
+    ) {
+      continue;
+    }
+    points.push({
+      date: `${year}-${String(month).padStart(2, "0")}`,
+      t: Number((year + (month - 0.5) / 12).toFixed(4)),
+      value: Number(average.toFixed(2)),
+    });
+  }
+  return points.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Fetches live NOAA GML monthly Mauna Loa CO2 concentration (`co2_mm_mlo.csv`).
+ * Returns `[]` gracefully on upstream timeout or malformed payload.
+ */
+export async function fetchNoaaMonthlyCo2Series(
+  startYear = 1995,
+  endYear = 2025,
+  budget?: TelemetryBudget
+): Promise<TimeSeriesPoint[]> {
+  if (co2MonthlyCache && co2MonthlyCache.expiresAt > Date.now()) {
+    return co2MonthlyCache.points.filter((p) => p.t >= startYear && p.t < endYear + 1);
+  }
+  try {
+    const csvText = await fetchTextWithRetry(
+      "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_mm_mlo.csv",
+      "text/csv,text/plain,*/*",
+      "NOAA GML CO2 Monthly",
+      budget
+    );
+    const parsed = parseNoaaCo2MonthlyCsv(csvText, startYear, endYear);
+    if (parsed.length >= 24) {
+      co2MonthlyCache = { expiresAt: Date.now() + CACHE_TTL_MS, points: parsed };
+      return parsed;
+    }
+  } catch {
+    // Non-fatal: pipeline falls back cleanly to annual CO2 series
+  }
+  return [];
 }
 
 /**

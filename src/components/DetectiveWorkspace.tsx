@@ -18,6 +18,8 @@ import {
   findNearbyFilteredNodes,
 } from "@/lib/plainLanguage";
 import { assignNodeRegions, extractRegionOptions } from "@/lib/graph/regionalSubgraph";
+import { DEFAULT_SATELLITE_STREET_RADIUS } from "@/lib/earth/nasaGibsRegional";
+import type { EarthPlaceTarget } from "@/lib/earth/placeSearch";
 import { TimelineScrubber } from "@/components/TimelineScrubber";
 import {
   EarthGlobe3D,
@@ -32,6 +34,7 @@ import { CompactSpotCard, type GuidedCaseStudyItem } from "@/components/CompactS
 import { IngestionModal, type IngestionTabId } from "@/components/IngestionModal";
 import { SolarMicrogridPanel } from "@/components/SolarMicrogridPanel";
 import { AiGraphChatPanel } from "@/components/AiGraphChatPanel";
+import { TrendBriefingsModal } from "@/components/TrendBriefingsModal";
 import {
   DEFAULT_MULTI_TOPICS,
   EMPTY_CASCADE_EDGE_UUIDS,
@@ -61,6 +64,7 @@ import {
 import {
   WorkspaceGlobeEmptyPrompt,
   WorkspaceGraphEmptyPrompt,
+  WorkspaceMissionCard,
   WorkspaceStageBanner,
 } from "@/components/workspace/WorkspaceStageOverlays";
 
@@ -91,6 +95,13 @@ export function DetectiveWorkspace({
   const [selectedNodeUuid, setSelectedNodeUuid] = useState<string | null>(null);
   const [selectedEdgeUuid, setSelectedEdgeUuid] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+
+  const openInspectorSafe = useCallback(() => {
+    setInspectorOpen(true);
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      setAiStudioOpen(false);
+    }
+  }, []);
   const [probedCoord, setProbedCoord] = useState<{ lat: number; lng: number } | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [comparePinB, setComparePinB] = useState<{ lat: number; lng: number } | null>(null);
@@ -101,9 +112,14 @@ export function DetectiveWorkspace({
   const [activeCascade, setActiveCascade] = useState<EarthCascadeChain | null>(null);
   const [activeCaseStudyId, setActiveCaseStudyId] = useState<string | null>(null);
   const [solarGraphOpen, setSolarGraphOpen] = useState(false);
-  const [aiStudioOpen, setAiStudioOpen] = useState<boolean>(
-    () => initialDemoMode !== "veritas" && initialDemoMode !== "spaceapps"
-  );
+  const [solarTargetLocation, setSolarTargetLocation] = useState<{
+    lat: number;
+    lng: number;
+    name: string;
+  } | null>(null);
+  const [aiStudioOpen, setAiStudioOpen] = useState<boolean>(false);
+  const [briefingsOpen, setBriefingsOpen] = useState(false);
+  const [briefingsNodeUuid, setBriefingsNodeUuid] = useState<string | null>(null);
   const [regionalFocusRequest, setRegionalFocusRequest] =
     useState<RegionalFocusRequest | null>(null);
   const regionalFocusSeqRef = useRef(0);
@@ -140,7 +156,7 @@ export function DetectiveWorkspace({
     const max = Math.max(...times);
     return {
       minMs: Number.isFinite(min) ? min : Date.UTC(2024, 0, 1),
-      maxMs: Number.isFinite(max) ? max : Date.now(),
+      maxMs: Number.isFinite(max) ? max : Date.UTC(2026, 0, 1),
     };
   }, [snapshot.nodes]);
 
@@ -208,6 +224,38 @@ export function DetectiveWorkspace({
   const [ingestOpen, setIngestOpen] = useState(false);
   const [ingestTab, setIngestTab] = useState<IngestionTabId>("dataset");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [missionDismissed, setMissionDismissed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("etg_mission_dismissed_v1") === "1") {
+        setMissionDismissed(true);
+      }
+    } catch {
+      // Ignore storage read issues
+    }
+  }, []);
+
+  const dismissMissionCard = useCallback(() => {
+    setMissionDismissed(true);
+    try {
+      window.localStorage.setItem("etg_mission_dismissed_v1", "1");
+    } catch {
+      // Ignore storage write issues
+    }
+  }, []);
+
+  const openMissionCard = useCallback(() => {
+    setViewMode("globe");
+    setInspectorOpen(false);
+    setCompareMode(false);
+    setMissionDismissed(false);
+    try {
+      window.localStorage.removeItem("etg_mission_dismissed_v1");
+    } catch {
+      // Ignore storage write issues
+    }
+  }, []);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -546,6 +594,28 @@ export function DetectiveWorkspace({
     return hit?.node.uuid ?? null;
   }, [selectedNodeUuid, probedCoord, globeNodes]);
 
+  const activeSpotForSolar = useMemo(() => {
+    if (
+      selectedNode &&
+      typeof selectedNode.properties.lat === "number" &&
+      typeof selectedNode.properties.lng === "number"
+    ) {
+      return {
+        lat: selectedNode.properties.lat,
+        lng: selectedNode.properties.lng,
+        name: selectedNode.properties.name,
+      };
+    }
+    if (probedCoord) {
+      return {
+        lat: probedCoord.lat,
+        lng: probedCoord.lng,
+        name: `Spot (${probedCoord.lat.toFixed(2)}°, ${probedCoord.lng.toFixed(2)}°)`,
+      };
+    }
+    return null;
+  }, [selectedNode, probedCoord]);
+
   const cascades = useMemo(
     () =>
       findMultiHopCascades(
@@ -557,8 +627,21 @@ export function DetectiveWorkspace({
     [visibleNodes, visibleEdges, selectedNodeUuid]
   );
 
+  const handleProbeRef = useRef<((lat: number, lng: number) => void) | null>(null);
+
   const handleSelectNode = useCallback(
     (node: ETGNode) => {
+      if (
+        compareMode &&
+        viewMode === "globe" &&
+        typeof node.properties.lat === "number" &&
+        typeof node.properties.lng === "number" &&
+        Number.isFinite(node.properties.lat) &&
+        Number.isFinite(node.properties.lng)
+      ) {
+        handleProbeRef.current?.(node.properties.lat, node.properties.lng);
+        return;
+      }
       setSelectedNodeUuid(node.uuid);
       setSelectedEdgeUuid(null);
       setComparePinB(null);
@@ -574,7 +657,7 @@ export function DetectiveWorkspace({
         if (prev[prev.length - 1]?.uuid === node.uuid) return prev;
         return [...prev.slice(-11), { uuid: node.uuid, name: node.properties.name }];
       });
-      setInspectorOpen(true);
+      openInspectorSafe();
       const embedded = computeClientEmbeddedSummary(node);
       if (
         typeof node.properties.lat === "number" &&
@@ -638,6 +721,8 @@ export function DetectiveWorkspace({
     },
     [
       activeTopics,
+      compareMode,
+      viewMode,
       cancelTelemetryRequests,
       queryTimeSeries,
       setComparison,
@@ -652,6 +737,7 @@ export function DetectiveWorkspace({
       setTelemetrySecondaryCurrent,
       setTelemetrySummaries,
       setTraversalHistory,
+      openInspectorSafe,
       telemetryCurrentRef,
       telemetryPrimaryRef,
       telemetrySummariesRef,
@@ -680,6 +766,14 @@ export function DetectiveWorkspace({
       handleSwitchView("graph");
     },
     [snapshot.nodes, handleSelectNode, handleSwitchView]
+  );
+
+  const handleOpenBriefing = useCallback(
+    (nodeUuid?: string) => {
+      setBriefingsNodeUuid(nodeUuid ?? selectedNodeUuid);
+      setBriefingsOpen(true);
+    },
+    [selectedNodeUuid]
   );
 
   const handleClearSelection = useCallback(() => {
@@ -719,12 +813,14 @@ export function DetectiveWorkspace({
       const next = !prev;
       if (!next) {
         setConnectSourceUuid(null);
+      } else if (viewMode === "graph") {
+        setStatusMessage(null);
       } else {
         setStatusMessage("Connect Mode active: click any Source node, then a Target node.");
       }
       return next;
     });
-  }, []);
+  }, [viewMode]);
 
   const handleStartQuickConnect = useCallback(
     (sourceNode: ETGNode, targetNode?: ETGNode) => {
@@ -734,19 +830,23 @@ export function DetectiveWorkspace({
         setQuickAddNodeOpen(false);
         setConnectSourceUuid(null);
         setConnectMode(false);
-        setInspectorOpen(true);
+        openInspectorSafe();
         setStatusMessage(
           `Composing link: ${sourceNode.properties.name} → ${targetNode.properties.name}`
         );
       } else {
         setConnectMode(true);
         setConnectSourceUuid(sourceNode.uuid);
-        setStatusMessage(
-          `Selected source "${sourceNode.properties.name}" — now click a target node.`
-        );
+        if (viewMode === "graph") {
+          setStatusMessage(null);
+        } else {
+          setStatusMessage(
+            `Selected source "${sourceNode.properties.name}" — now click a target node.`
+          );
+        }
       }
     },
-    []
+    [viewMode, openInspectorSafe]
   );
 
   const handleSelectEdge = useCallback(
@@ -756,7 +856,7 @@ export function DetectiveWorkspace({
       setCompareMode(false);
       setActiveCaseStudyId(null);
       setFocusedSummaryDataset(null);
-      setInspectorOpen(true);
+      openInspectorSafe();
       setRelationNodePair({
         sourceUuid: edge.source_uuid,
         targetUuid: edge.target_uuid,
@@ -821,6 +921,7 @@ export function DetectiveWorkspace({
       setTelemetrySecondary,
       setTelemetrySecondaryCurrent,
       setTelemetrySummaries,
+      openInspectorSafe,
     ]
   );
 
@@ -841,7 +942,7 @@ export function DetectiveWorkspace({
         setRelationNodePair(null);
         setCompareMode(false);
         setFocusedSummaryDataset(null);
-        setInspectorOpen(true);
+        openInspectorSafe();
         void queryTimeSeries(pinA.lat, pinA.lng, dsA, {
           lat,
           lng,
@@ -893,7 +994,7 @@ export function DetectiveWorkspace({
         setTelemetryError(null);
         setTelemetryLoading(false);
       }
-      setInspectorOpen(true);
+      openInspectorSafe();
       if (compareMode) {
         setStatusMessage(
           `First spot locked (${lat.toFixed(1)}°, ${lng.toFixed(1)}°). Click Earth again to compare.`
@@ -907,6 +1008,7 @@ export function DetectiveWorkspace({
       activeTopics,
       queryTimeSeries,
       cancelTelemetryRequests,
+      openInspectorSafe,
       telemetryPrimaryRef,
       telemetrySummariesRef,
       telemetryCurrentRef,
@@ -924,6 +1026,37 @@ export function DetectiveWorkspace({
     ]
   );
 
+  handleProbeRef.current = handleProbeCoordinate;
+
+  const handleSearchLocationSelect = useCallback(
+    (target: EarthPlaceTarget) => {
+      setSearchQuery(target.label);
+      setStatusMessage(`Focusing ${target.label}…`);
+
+      if (target.kind === "node" && target.nodeUuid) {
+        const matched = snapshot.nodes.find((n) => n.uuid === target.nodeUuid);
+        if (matched) {
+          handleLocateOnGlobe(matched);
+          return;
+        }
+      }
+
+      if (viewMode !== "globe") {
+        handleSwitchView("globe");
+      }
+      requestRegionalFocus(target.lat, target.lng, 160);
+      handleProbeCoordinate(target.lat, target.lng);
+    },
+    [
+      handleLocateOnGlobe,
+      handleProbeCoordinate,
+      handleSwitchView,
+      requestRegionalFocus,
+      snapshot.nodes,
+      viewMode,
+    ]
+  );
+
   const handleCompareOpposite = useCallback(
     (nodeA: ETGNode, nodeB: ETGNode) => {
       hidePopoverById("etg-dipoles-popover");
@@ -938,7 +1071,7 @@ export function DetectiveWorkspace({
       setRelationNodePair({ sourceUuid: nodeA.uuid, targetUuid: nodeB.uuid });
       setCompareMode(false);
       setFocusedSummaryDataset(null);
-      setInspectorOpen(true);
+      openInspectorSafe();
       if (
         nodeA.properties.lat === undefined ||
         nodeA.properties.lng === undefined ||
@@ -970,7 +1103,7 @@ export function DetectiveWorkspace({
         nodeA.uuid
       );
     },
-    [snapshot.edges, queryTimeSeries, setFocusedSummaryDataset, setTelemetryError]
+    [snapshot.edges, queryTimeSeries, setFocusedSummaryDataset, setTelemetryError, openInspectorSafe]
   );
 
   const handleSwapPins = useCallback(() => {
@@ -1001,14 +1134,55 @@ export function DetectiveWorkspace({
     );
   }, [telemetryPrimary, telemetrySecondary, relationNodePair, queryTimeSeries]);
 
-  const handleSelectCascade = useCallback((chain: EarthCascadeChain | null) => {
-    setActiveCascade(chain);
-    if (chain) {
+  const handleSelectCascade = useCallback(
+    (chain: EarthCascadeChain | null) => {
+      setActiveCascade(chain);
+      if (!chain) return;
       hidePopoverById("etg-dipoles-popover");
-      setInspectorOpen(true);
+      const firstEdge = chain.edgeUuids
+        .map((id) => snapshot.edges.find((e) => e.properties.uuid === id))
+        .find((e): e is ETGEdge => Boolean(e));
+      const chainNodes = chain.nodeUuids
+        .map((id) => snapshot.nodes.find((n) => n.uuid === id))
+        .filter((n): n is ETGNode => Boolean(n));
+      const geoNodes = chainNodes.filter(
+        (n) =>
+          typeof n.properties.lat === "number" &&
+          Number.isFinite(n.properties.lat) &&
+          typeof n.properties.lng === "number" &&
+          Number.isFinite(n.properties.lng)
+      );
+
+      if (firstEdge) {
+        handleSelectEdge(firstEdge);
+      } else if (geoNodes[0] || chainNodes[0]) {
+        handleSelectNode((geoNodes[0] ?? chainNodes[0]) as ETGNode);
+      } else {
+        openInspectorSafe();
+      }
+
+      if (geoNodes.length >= 2) {
+        const firstGeo = geoNodes[0]!;
+        const lastGeo = geoNodes[geoNodes.length - 1]!;
+        const frame = computeDipoleFramingTarget(
+          { lat: firstGeo.properties.lat!, lng: firstGeo.properties.lng! },
+          { lat: lastGeo.properties.lat!, lng: lastGeo.properties.lng! }
+        );
+        requestRegionalFocus(frame.lat, frame.lng, frame.radius);
+      } else if (geoNodes.length === 1) {
+        requestRegionalFocus(geoNodes[0]!.properties.lat!, geoNodes[0]!.properties.lng!, 1200);
+      }
       setStatusMessage(`Highlighted ${chain.steps.length}-stage Earth chain: ${chain.title}`);
-    }
-  }, []);
+    },
+    [
+      handleSelectEdge,
+      handleSelectNode,
+      openInspectorSafe,
+      requestRegionalFocus,
+      snapshot.edges,
+      snapshot.nodes,
+    ]
+  );
 
   const handleRunCaseStudy = useCallback(
     (preset: GuidedDipoleCase) => {
@@ -1031,7 +1205,7 @@ export function DetectiveWorkspace({
       setRelationNodePair(null);
       setCompareMode(false);
       setFocusedSummaryDataset(null);
-      setInspectorOpen(true);
+      openInspectorSafe();
       const frame = computeDipoleFramingTarget(preset.spotA, preset.spotB);
       requestRegionalFocus(frame.lat, frame.lng, frame.radius);
       void queryTimeSeries(preset.spotA.lat, preset.spotA.lng, preset.spotA.dataset, {
@@ -1042,6 +1216,7 @@ export function DetectiveWorkspace({
       setStatusMessage(`Guided Case Study: ${preset.title}`);
     },
     [
+      openInspectorSafe,
       queryTimeSeries,
       requestRegionalFocus,
       setComparison,
@@ -1100,6 +1275,7 @@ export function DetectiveWorkspace({
     if (demoBootedRef.current || !initialDemoMode) return;
     demoBootedRef.current = true;
     if (initialDemoMode === "veritas") {
+      setSolarTargetLocation(null);
       setSolarGraphOpen(true);
     } else if (initialDemoMode === "spaceapps") {
       if (snapshot.nodes.length === 0) {
@@ -1142,6 +1318,11 @@ export function DetectiveWorkspace({
     [snapshot.nodes, snapshot.edges, enabledRelationCategories]
   );
 
+  const briefingsCount = useMemo(
+    () => snapshot.nodes.filter((n) => Boolean(n.properties.dossier)).length,
+    [snapshot.nodes]
+  );
+
   return (
     <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-bg text-text-primary">
       <a href="#etg-main-stage" className="etg-skip-link">
@@ -1151,15 +1332,38 @@ export function DetectiveWorkspace({
         topicButtonLabel={topicButtonLabel}
         activeFilterCount={activeFilterCount}
         relationsCount={formattedAllRelations.length}
+        briefingsCount={briefingsCount}
         viewMode={viewMode}
         graphRenderMode={graphRenderMode}
         searchQuery={searchQuery}
+        nodes={snapshot.nodes}
+        missionOpen={
+          snapshot.nodes.length > 0 &&
+          viewMode === "globe" &&
+          !missionDismissed &&
+          !inspectorOpen &&
+          !compareMode
+        }
         aiStudioOpen={aiStudioOpen}
         onSwitchView={handleSwitchView}
         onChangeGraphRenderMode={setGraphRenderMode}
         onChangeSearchQuery={setSearchQuery}
-        onOpenSolarGraph={() => setSolarGraphOpen(true)}
-        onToggleAiStudio={() => setAiStudioOpen((v) => !v)}
+        onSelectSearchTarget={handleSearchLocationSelect}
+        onOpenMissionGuide={openMissionCard}
+        onOpenSolarGraph={() => {
+          setSolarTargetLocation(null);
+          setSolarGraphOpen(true);
+        }}
+        onOpenBriefings={() => handleOpenBriefing()}
+        onToggleAiStudio={() =>
+          setAiStudioOpen((prev) => {
+            const next = !prev;
+            if (next && typeof window !== "undefined" && window.innerWidth < 1024) {
+              setInspectorOpen(false);
+            }
+            return next;
+          })
+        }
         onOpenAddData={() => {
           setIngestTab("dataset");
           setIngestOpen(true);
@@ -1191,6 +1395,7 @@ export function DetectiveWorkspace({
         onToggleTopic={toggleTopic}
         onResetTopics={resetTopics}
         onChangeSearchQuery={setSearchQuery}
+        onSelectSearchTarget={handleSearchLocationSelect}
         onToggleRelationCategoryFilter={toggleRelationCategoryFilter}
         onChangeOnlyOpposite={setOnlyOpposite}
         onChangeShowSuperseded={setShowSuperseded}
@@ -1199,7 +1404,10 @@ export function DetectiveWorkspace({
         onRunCaseStudy={handleRunCaseStudy}
         onSelectEdge={handleSelectEdge}
         onSelectCascade={(chain) => handleSelectCascade(chain)}
-        onOpenSolarGraph={() => setSolarGraphOpen(true)}
+        onOpenSolarGraph={() => {
+          setSolarTargetLocation(null);
+          setSolarGraphOpen(true);
+        }}
         onDiscoverGlobalTrends={() => void handleDiscoverGlobalTrends()}
         onSyncEonet={() => void handleSyncEonet()}
         onOpenIngestModal={(tab) => {
@@ -1238,6 +1446,7 @@ export function DetectiveWorkspace({
           <WorkspaceStageBanner
             statusMessage={statusMessage}
             compareMode={compareMode}
+            compareStep={probedCoord || telemetryPrimary ? 2 : 1}
             viewMode={viewMode}
             aiStudioOpen={aiStudioOpen}
             inspectorOpen={inspectorOpen}
@@ -1281,7 +1490,7 @@ export function DetectiveWorkspace({
                 setQuickAddNodeOpen(true);
                 setPendingConnectPair(null);
                 setSelectedEdgeUuid(null);
-                setInspectorOpen(true);
+                openInspectorSafe();
               }}
               onDiscoverLinks={() => void handleDiscoverCandidateLinks()}
               onAcceptCandidateLink={(s) => void handleAcceptCandidateLink(s)}
@@ -1333,11 +1542,39 @@ export function DetectiveWorkspace({
               onSelectEdge={handleSelectEdge}
               onProbeCoordinate={handleProbeCoordinate}
               onToggleCompareMode={() => {
-                setCompareMode((v) => !v);
-                setInspectorOpen(true);
+                setCompareMode((prev) => {
+                  const next = !prev;
+                  if (next && (probedCoord || telemetryPrimary)) {
+                    openInspectorSafe();
+                  }
+                  return next;
+                });
               }}
             />
           )}
+
+          {snapshot.nodes.length > 0 &&
+            viewMode === "globe" &&
+            !missionDismissed &&
+            !inspectorOpen &&
+            !compareMode && (
+              <WorkspaceMissionCard
+                nodeCount={snapshot.nodes.length}
+                edgeCount={snapshot.edges.length}
+                onInspectBoulder={() =>
+                  handleSearchLocationSelect({
+                    id: "place-boulder",
+                    label: "Boulder, Colorado",
+                    subtitle: "Front Range foothills & alpine transition",
+                    lat: 40.015,
+                    lng: -105.2705,
+                    kind: "place",
+                  })
+                }
+                onRunCaseStudy={handleRunCaseStudy}
+                onDismiss={dismissMissionCard}
+              />
+            )}
 
           {snapshot.nodes.length === 0 && viewMode === "globe" && !inspectorOpen && (
             <WorkspaceGlobeEmptyPrompt
@@ -1354,7 +1591,7 @@ export function DetectiveWorkspace({
               onMaterializeSolarGraph={() => void handleMaterializeSolarGraph()}
               onOpenQuickAddNode={() => {
                 setQuickAddNodeOpen(true);
-                setInspectorOpen(true);
+                openInspectorSafe();
               }}
               onOpenAgencyHub={() => {
                 setIngestTab("agencies");
@@ -1369,7 +1606,7 @@ export function DetectiveWorkspace({
             (selectedNode || selectedEdge || pendingConnectPair || quickAddNodeOpen) ? (
               <aside
                 aria-label="Graph workbench"
-                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto max-sm:max-h-[54dvh] max-sm:overflow-y-auto sm:top-3 sm:right-4 sm:w-[min(410px,calc(100dvw-2rem))]"
+                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto max-sm:max-h-[54dvh] max-sm:overflow-y-auto sm:top-2.5 sm:right-2.5 sm:w-[min(348px,calc(100dvw-1.5rem))] xl:w-[min(364px,calc(100dvw-1.5rem))]"
               >
                 <GraphNodeWorkbenchPanel
                   allNodes={snapshot.nodes}
@@ -1396,6 +1633,7 @@ export function DetectiveWorkspace({
                   onAcceptCandidateLink={handleAcceptCandidateLink}
                   onMaterializeSolarGraph={handleMaterializeSolarGraph}
                   onLocateOnGlobe={handleLocateOnGlobe}
+                  onOpenBriefing={handleOpenBriefing}
                   onSnapshotChange={handleSnapshotChange}
                   onClose={handleClearSelection}
                 />
@@ -1403,7 +1641,7 @@ export function DetectiveWorkspace({
             ) : viewMode === "globe" ? (
               <aside
                 aria-label="Spot summary"
-                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto sm:top-3 sm:right-4 sm:w-[min(396px,calc(100dvw-2rem))]"
+                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto sm:top-2.5 sm:right-2.5 sm:w-[min(348px,calc(100dvw-1.5rem))] xl:w-[min(364px,calc(100dvw-1.5rem))]"
               >
                 <CompactSpotCard
                   selectedNode={selectedNode}
@@ -1476,6 +1714,14 @@ export function DetectiveWorkspace({
                   onCommitToGraph={handleCommitTelemetryToGraph}
                   onCommitRelation={handleCommitRelation}
                   onOpenInGraphWorkbench={handleOpenInGraphWorkbench}
+                  onOpenBriefing={handleOpenBriefing}
+                  onSatelliteZoomSpot={(lat, lng) =>
+                    requestRegionalFocus(lat, lng, DEFAULT_SATELLITE_STREET_RADIUS)
+                  }
+                  onOpenSolarForSpot={(lat, lng, label) => {
+                    setSolarTargetLocation({ lat, lng, name: label });
+                    setSolarGraphOpen(true);
+                  }}
                   onGraphUpdated={refreshGraph}
                   onClose={handleClearSelection}
                 />
@@ -1495,13 +1741,38 @@ export function DetectiveWorkspace({
       <SolarMicrogridPanel
         open={solarGraphOpen}
         onClose={() => setSolarGraphOpen(false)}
+        initialLocation={solarTargetLocation}
+        activeSpotLocation={activeSpotForSolar}
         onFocusDenver={() => {
           setSolarGraphOpen(false);
           setViewMode("globe");
           void handleProbeCoordinate(39.74, -104.99);
           requestRegionalFocus(39.74, -104.99, 128);
         }}
+        onFocusLocation={(lat, lng) => {
+          setSolarGraphOpen(false);
+          setViewMode("globe");
+          void handleProbeCoordinate(lat, lng);
+          requestRegionalFocus(lat, lng, 128);
+        }}
         onMaterializeInGraph={handleMaterializeSolarGraph}
+      />
+
+      <TrendBriefingsModal
+        open={briefingsOpen}
+        initialNodeUuid={briefingsNodeUuid}
+        nodes={snapshot.nodes}
+        edges={snapshot.edges}
+        onClose={() => setBriefingsOpen(false)}
+        onLocateOnGlobe={(node) => {
+          setBriefingsOpen(false);
+          handleLocateOnGlobe(node);
+        }}
+        onOpenInGraph={(uuid) => {
+          setBriefingsOpen(false);
+          handleOpenInGraphWorkbench(uuid);
+        }}
+        onSnapshotChange={handleSnapshotChange}
       />
     </div>
   );

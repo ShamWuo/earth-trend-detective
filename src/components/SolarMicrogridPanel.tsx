@@ -6,7 +6,9 @@ import {
   BatteryCharging,
   BatteryFull,
   Compass,
+  Cpu,
   GitBranchPlus,
+  Globe,
   Loader2,
   Network,
   RefreshCw,
@@ -16,19 +18,57 @@ import {
 import type { SolarGraphAnalysisResult } from "@/lib/solar/denverClimateGraph";
 import { useIsLightTheme } from "@/components/graph/graphViewShared";
 import { attachDialogLightDismissFallback } from "@/lib/a11y/dialogLightDismiss";
-import { restoreOpenerFocus, trapDialogTabKey } from "@/lib/a11y/dialogFocusTrap";
+import { restoreOpenerFocus } from "@/lib/a11y/dialogFocusTrap";
+
+export interface SolarLocationTarget {
+  lat: number;
+  lng: number;
+  name: string;
+}
+
+const GLOBAL_SOLAR_PRESETS: Array<{ label: string; loc: SolarLocationTarget | null }> = [
+  { label: "Denver, CO (Showcase)", loc: null },
+  { label: "Salt Lake City", loc: { lat: 40.76, lng: -111.89, name: "Salt Lake City" } },
+  { label: "Madrid", loc: { lat: 40.42, lng: -3.7, name: "Madrid" } },
+  { label: "Tokyo", loc: { lat: 35.68, lng: 139.65, name: "Tokyo" } },
+  { label: "Sydney", loc: { lat: -33.87, lng: 151.21, name: "Sydney" } },
+  { label: "Santiago", loc: { lat: -33.45, lng: -70.67, name: "Santiago" } },
+];
+
+function isCanonicalDenver(loc: SolarLocationTarget | null | undefined): boolean {
+  return !loc || (Math.abs(loc.lat - 39.74) < 0.05 && Math.abs(loc.lng - -104.99) < 0.05);
+}
+
+function isSameSolarLocation(
+  a: SolarLocationTarget | null | undefined,
+  b: SolarLocationTarget | null | undefined,
+): boolean {
+  if (isCanonicalDenver(a) && isCanonicalDenver(b)) return true;
+  if (!a || !b) return false;
+  return Math.abs(a.lat - b.lat) < 0.05 && Math.abs(a.lng - b.lng) < 0.05;
+}
+
+function solarLocationKey(loc: SolarLocationTarget | null | undefined): string {
+  return isCanonicalDenver(loc) ? "denver" : `${loc!.lat.toFixed(3)},${loc!.lng.toFixed(3)}`;
+}
 
 interface SolarMicrogridPanelProps {
   open: boolean;
   onClose: () => void;
+  initialLocation?: SolarLocationTarget | null;
+  activeSpotLocation?: SolarLocationTarget | null;
   onFocusDenver?: () => void;
+  onFocusLocation?: (lat: number, lng: number) => void;
   onMaterializeInGraph?: () => Promise<void> | void;
 }
 
 export function SolarMicrogridPanel({
   open,
   onClose,
+  initialLocation = null,
+  activeSpotLocation = null,
   onFocusDenver,
+  onFocusLocation,
   onMaterializeInGraph,
 }: SolarMicrogridPanelProps) {
   const isLightTheme = useIsLightTheme();
@@ -37,6 +77,11 @@ export function SolarMicrogridPanel({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+  const reqSeqRef = useRef(0);
+  const loadedKeyRef = useRef<string | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<SolarLocationTarget | null>(
+    isCanonicalDenver(initialLocation) ? null : initialLocation,
+  );
   const [data, setData] = useState<SolarGraphAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [materializing, setMaterializing] = useState(false);
@@ -75,39 +120,67 @@ export function SolarMicrogridPanel({
     restoreOpenerFocus(opener);
   };
 
-  const loadAnalysis = async (forceRefresh = false) => {
+  const loadAnalysis = async (
+    forceRefresh = false,
+    locOverride?: SolarLocationTarget | null,
+  ) => {
+    const targetLoc = locOverride !== undefined ? locOverride : selectedLocation;
+    const seq = ++reqSeqRef.current;
     setLoading(true);
     setError(null);
     try {
-      const url = `/api/earth/solar-graph?startYear=2019${forceRefresh ? "&refresh=1" : ""}`;
+      const qs = new URLSearchParams({ startYear: "2019" });
+      if (!isCanonicalDenver(targetLoc) && targetLoc) {
+        qs.set("lat", targetLoc.lat.toFixed(4));
+        qs.set("lng", targetLoc.lng.toFixed(4));
+        qs.set("name", targetLoc.name);
+      }
+      if (forceRefresh) qs.set("refresh", "1");
+      const url = `/api/earth/solar-graph?${qs.toString()}`;
       const res = await fetch(url);
       const json = (await res.json().catch(() => null)) as
         | (SolarGraphAnalysisResult & { error?: string })
         | { error?: string }
         | null;
+      if (seq !== reqSeqRef.current) return;
       if (!res.ok) {
         throw new Error(json?.error || `HTTP ${res.status}`);
       }
       if (!json || !("nodes" in json)) {
         throw new Error("Unexpected response from solar graph endpoint");
       }
+      loadedKeyRef.current = solarLocationKey(targetLoc);
       setData(json as SolarGraphAnalysisResult);
     } catch (err) {
+      if (seq !== reqSeqRef.current) return;
       const rawMsg = err instanceof Error ? err.message : "Failed to load solar graph";
       const friendlyMsg = /failed to fetch|networkerror|load failed/i.test(rawMsg)
         ? "Could not reach the local Earth Trend server (/api/earth/solar-graph). Make sure the Next.js server for this tab is running and click Retry."
         : rawMsg;
       setError(friendlyMsg);
     } finally {
-      setLoading(false);
+      if (seq === reqSeqRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (open && !data && !loading) {
-      void loadAnalysis();
+    if (!open) return;
+    const normalized = isCanonicalDenver(initialLocation) ? null : initialLocation;
+    setSelectedLocation(normalized);
+    const nextKey = solarLocationKey(normalized);
+    if (!data || loadedKeyRef.current !== nextKey) {
+      void loadAnalysis(false, normalized);
     }
-  }, [open, data, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialLocation?.lat, initialLocation?.lng, initialLocation?.name]);
+
+  const handleSelectLocation = (loc: SolarLocationTarget | null) => {
+    const normalized = isCanonicalDenver(loc) ? null : loc;
+    setSelectedLocation(normalized);
+    void loadAnalysis(false, normalized);
+  };
 
   const renderClimateGraphSvg = (d: SolarGraphAnalysisResult) => {
     const w = 360;
@@ -147,7 +220,7 @@ export function SolarMicrogridPanel({
     return (
       <svg
         role="img"
-        aria-label={`7-node Front Range solar irradiance and wind graph showing wind from ${d.tomorrow.windFromDeg} degrees at ${d.tomorrow.windSpeedMs} meters per second`}
+        aria-label={`7-node ${d.isDynamicLocation ? d.city : "Front Range"} solar irradiance and wind graph showing wind from ${d.tomorrow.windFromDeg} degrees at ${d.tomorrow.windSpeedMs} meters per second`}
         viewBox={`0 0 ${w} ${h}`}
         className="w-full h-56 rounded-md bg-surface-inset border border-border"
       >
@@ -235,10 +308,12 @@ export function SolarMicrogridPanel({
               </g>
             );
           })}
-        {/* Target Denver node */}
+        {/* Target Center Node */}
         <circle cx={cx} cy={cy} r={13} fill={svgTargetFill} stroke={svgTargetStroke} strokeWidth={2} />
         <text x={cx} y={cy + 3} textAnchor="middle" fill={svgTargetText} fontSize="8" fontWeight="bold">
-          DEN
+          {d.isDynamicLocation
+            ? d.city.replace(/[^A-Za-z]/g, "").slice(0, 3).toUpperCase() || "LOC"
+            : "DEN"}
         </text>
       </svg>
     );
@@ -270,7 +345,7 @@ export function SolarMicrogridPanel({
         role="img"
         aria-label="Recent 45 unseen test days comparing actual solar irradiance against Graph-Aware and Persistence forecasts"
         viewBox={`0 0 ${w} ${h}`}
-        className="w-full h-32 rounded-sm bg-surface-inset border border-border"
+        className="w-full h-24 rounded-sm bg-surface-inset border border-border"
       >
         <line
           x1={pad}
@@ -312,14 +387,13 @@ export function SolarMicrogridPanel({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={handleNativeClose}
-      onKeyDown={(e) => trapDialogTabKey(dialogRef.current, e)}
-      style={{ maxInlineSize: "min(94vw, 900px)", maxBlockSize: "90dvh" }}
+      style={{ maxInlineSize: "min(94dvw, 900px)", maxBlockSize: "90dvh" }}
       className="etg-dialog bg-surface text-text-primary"
       {...({ closedby: "any" } as Record<string, unknown>)}
     >
       <div ref={contentRef} className="flex flex-1 min-h-0 flex-col bg-surface text-text-primary">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface-band px-6 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-border bg-surface-band px-4 py-2.5">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-amber-950 border border-amber-400 text-amber-300">
             <Sun className="h-5 w-5" />
@@ -327,7 +401,9 @@ export function SolarMicrogridPanel({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 id={titleId} className="text-base font-semibold tracking-tight text-text-primary">
-                Denver Solar Microgrid — Local Climate Graph
+                {data?.isDynamicLocation
+                  ? `${data.city} — 7-Node Upwind Solar Graph`
+                  : "Denver Solar Microgrid — Local Climate Graph"}
               </h2>
               {data?.provenanceMode && (
                 <span
@@ -348,16 +424,19 @@ export function SolarMicrogridPanel({
               )}
             </div>
             <p className="text-xs text-text-muted">
-              7-Node Front Range Upwind Graph · NASA POWER Daily (
+              {data?.isDynamicLocation ? "7-Node Upwind Ring (120 km)" : "7-Node Front Range Upwind Graph"} · NASA POWER Daily (
               <code className="rounded-xs border border-border bg-surface-inset px-1 py-0.5 font-mono text-[11px] text-text-primary">
                 ALLSKY_SFC_SW_DWN
               </code>
-              ) + Open-Meteo 18:00–23:00 Evening Advection · Strict Temporal Split
+              ) + Open-Meteo 18:00–23:00 Evening Advection +{" "}
+              <code className="rounded-xs border border-border bg-surface-inset px-1 py-0.5 font-mono text-[11px] text-text-primary">
+                etg-global-gnn-v3
+              </code>
             </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {onMaterializeInGraph && (
+          {onMaterializeInGraph && !data?.isDynamicLocation && (
             <button
               type="button"
               disabled={materializing}
@@ -376,22 +455,26 @@ export function SolarMicrogridPanel({
               {materializing ? "Materializing…" : "Materialize in Knowledge Graph"}
             </button>
           )}
-          {onFocusDenver && (
+          {((onFocusLocation && data?.targetCoords) || onFocusDenver) && (
             <button
               type="button"
               onClick={() => {
-                onFocusDenver();
+                if (onFocusLocation && data?.targetCoords) {
+                  onFocusLocation(data.targetCoords.lat, data.targetCoords.lng);
+                } else {
+                  onFocusDenver?.();
+                }
                 dialogRef.current?.close();
               }}
               className="inline-flex items-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-300 cursor-pointer"
             >
               <Network className="h-3.5 w-3.5" />
-              Focus Denver on Globe
+              Focus {data?.isDynamicLocation ? "Spot" : "Denver"} on Globe
             </button>
           )}
           <button
             type="button"
-            onClick={() => void loadAnalysis(true)}
+            onClick={() => void loadAnalysis(true, selectedLocation)}
             disabled={loading}
             className="inline-flex items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent-fg disabled:opacity-50 cursor-pointer"
           >
@@ -409,8 +492,48 @@ export function SolarMicrogridPanel({
         </div>
       </div>
 
+      {/* Global 7-Node Location Switcher */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-surface-inset px-4 py-1.5 text-[11px]">
+        <span className="inline-flex items-center gap-1 text-text-subtle font-medium mr-1">
+          <Globe className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+          Global 7-Node Ring:
+        </span>
+        {GLOBAL_SOLAR_PRESETS.map((preset) => {
+          const active = isSameSolarLocation(selectedLocation, preset.loc);
+          return (
+            <button
+              key={preset.label}
+              type="button"
+              disabled={loading}
+              onClick={() => handleSelectLocation(preset.loc)}
+              className={`rounded-sm border px-2 py-0.5 font-medium transition-colors cursor-pointer disabled:opacity-60 ${
+                active
+                  ? "border-amber-400 bg-amber-950 text-amber-200"
+                  : "border-border bg-surface-band text-text-muted hover:border-sky-400 hover:text-text-primary"
+              }`}
+            >
+              {preset.label}
+            </button>
+          );
+        })}
+        {activeSpotLocation && !isCanonicalDenver(activeSpotLocation) && (
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => handleSelectLocation(activeSpotLocation)}
+            className={`rounded-sm border px-2 py-0.5 font-medium transition-colors cursor-pointer disabled:opacity-60 ${
+              isSameSolarLocation(selectedLocation, activeSpotLocation)
+                ? "border-sky-400 bg-sky-950 text-sky-200"
+                : "border-sky-400/50 bg-surface-band text-sky-300 hover:border-sky-300"
+            }`}
+          >
+            Active Globe Spot: {activeSpotLocation.name}
+          </button>
+        )}
+      </div>
+
       {/* Scrollable Body */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-6 space-y-4">
           {loading && !data && (
             <div
               role="status"
@@ -419,7 +542,11 @@ export function SolarMicrogridPanel({
             >
               <Loader2 className="h-7 w-7 animate-spin text-amber-400" />
               <p className="text-sm">
-                Fetching 2019–2026 NASA POWER daily irradiance &amp; Open-Meteo 18:00–23:00 evening advection across 7 Front Range nodes...
+                Fetching 2019–2026 NASA POWER daily irradiance &amp; Open-Meteo 18:00–23:00 evening advection across{" "}
+                {isCanonicalDenver(selectedLocation)
+                  ? "7 Front Range nodes"
+                  : `${selectedLocation?.name ?? "target"} 7-node upwind ring`}
+                ...
               </p>
             </div>
           )}
@@ -527,11 +654,116 @@ export function SolarMicrogridPanel({
                 </div>
               </div>
 
+              {/* Global Spatiotemporal GNN (etg-global-gnn-v3) Quantile & Multi-City Benchmark */}
+              {(data.tomorrow.globalGnn || data.globalGnnBenchmark) && (
+                <section
+                  aria-label="Global Spatiotemporal GNN etg-global-gnn-v3 Quantile Forecast and 36-City Benchmark"
+                  className="rounded-md border border-sky-400/70 bg-sky-950/35 p-3 space-y-2"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-sky-300">
+                      <Cpu className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                      <span>
+                        Global Spatiotemporal GNN ({data.tomorrow.globalGnn?.modelId ?? data.globalGnnBenchmark?.modelId ?? "etg-global-gnn-v3"})
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono ws-numeric">
+                      {data.tomorrow.globalGnn && (
+                        <>
+                          <span className="rounded-xs border border-sky-400/60 bg-surface-inset px-1.5 py-0.5 text-sky-200">
+                            {data.tomorrow.globalGnn.variant === "denver_adapter" ? "Denver Adapter" : "Global Zero-Shot"}
+                          </span>
+                          <span className="rounded-xs border border-emerald-400/60 bg-surface-inset px-1.5 py-0.5 text-emerald-300">
+                            {data.tomorrow.globalGnn.inferenceMs.toFixed(1)} ms CPU
+                          </span>
+                        </>
+                      )}
+                      {data.globalGnnBenchmark && (
+                        <span className="rounded-xs border border-border bg-surface-inset px-1.5 py-0.5 text-text-muted">
+                          {(data.globalGnnBenchmark.paramCount / 1_000_000).toFixed(2)}M params · {data.globalGnnBenchmark.trainCities} train cities · {data.globalGnnBenchmark.totalStations} stations
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {data.tomorrow.globalGnn && (
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                      <div className="rounded-sm border border-border bg-surface-inset px-3 py-2">
+                        <div className="text-[10px] text-text-subtle">P10 Lower</div>
+                        <div className="text-sm font-semibold font-mono ws-numeric text-text-primary">
+                          {data.tomorrow.globalGnn.p10.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-amber-400 bg-surface-inset px-3 py-2">
+                        <div className="text-[10px] text-amber-300">Q0.268 Cutoff</div>
+                        <div className="text-sm font-semibold font-mono ws-numeric text-amber-200">
+                          {data.tomorrow.globalGnn.q268.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-sky-400 bg-surface-inset px-3 py-2">
+                        <div className="text-[10px] text-sky-300">P50 Median</div>
+                        <div className="text-sm font-semibold font-mono ws-numeric text-sky-200">
+                          {data.tomorrow.globalGnn.p50.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-border bg-surface-inset px-3 py-2">
+                        <div className="text-[10px] text-text-subtle">P90 Upper</div>
+                        <div className="text-sm font-semibold font-mono ws-numeric text-text-primary">
+                          {data.tomorrow.globalGnn.p90.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="rounded-sm border border-border bg-surface-inset px-3 py-2">
+                        <div className="text-[10px] text-text-subtle">GNN Storm Risk</div>
+                        <div className="text-sm font-semibold font-mono ws-numeric text-sky-300">
+                          {data.tomorrow.globalGnn.probStormPct.toFixed(1)}% ({data.tomorrow.globalGnn.prechargeRecommended ? "PRE-CHARGE" : "HOLD"})
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {data.globalGnnBenchmark && (
+                    <div className="space-y-2 border-t border-border/60 pt-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
+                        <span>
+                          Held-Out 2025–2026 Zero-Shot Mean Skill ({data.globalGnnBenchmark.global5CityCities.length} Continents):{" "}
+                          <strong className="font-mono ws-numeric text-emerald-300">
+                            +{data.globalGnnBenchmark.global5CityMeanSkillPct.toFixed(1)}%
+                          </strong>
+                        </span>
+                        {data.globalGnnBenchmark.denverAdapted && (
+                          <span className="font-mono ws-numeric text-sky-200">
+                            Denver Adapted RMSE {data.globalGnnBenchmark.denverAdapted.rmse.toFixed(3)} (+{data.globalGnnBenchmark.denverAdapted.skillPct.toFixed(1)}% · ${data.globalGnnBenchmark.denverAdapted.savingsUsd.toFixed(0)}/yr saved · p={data.globalGnnBenchmark.denverAdapted.pVsLocalEve.toExponential(1)})
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 text-[11px]">
+                        {data.globalGnnBenchmark.global5CityCities.map((c) => (
+                          <button
+                            key={c.cityId}
+                            type="button"
+                            onClick={() => {
+                              const preset = GLOBAL_SOLAR_PRESETS.find((p) =>
+                                p.loc && c.name.toLowerCase().includes(p.loc.name.toLowerCase()),
+                              );
+                              if (preset?.loc) handleSelectLocation(preset.loc);
+                            }}
+                            className="rounded-sm border border-border bg-surface-inset px-2 py-1 font-mono ws-numeric text-text-primary hover:border-sky-400 cursor-pointer"
+                            title={`${c.name} (${c.regime}): RMSE ${c.rmse.toFixed(3)} vs Persist ${c.persistenceRmse.toFixed(3)}, p vs Local+Eve ${c.pVsLocalEve.toFixed(3)}`}
+                          >
+                            {c.name}: <span className="text-emerald-300">+{c.skillPct.toFixed(1)}%</span> ({c.rmse.toFixed(2)} RMSE)
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              )}
+
               {/* K-12 Microgrid Economic & Storm-Shortfall Impact */}
               {data.economics && (
                 <section
                   aria-label="K-12 Microgrid Economic and Storm-Shortfall Impact"
-                  className="rounded-md border border-emerald-400 bg-emerald-950 p-4 space-y-2.5"
+                  className="rounded-md border border-emerald-400 bg-emerald-950 p-3 space-y-2"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
@@ -612,7 +844,7 @@ export function SolarMicrogridPanel({
                     </caption>
                     <thead className="bg-surface-band text-text-muted">
                       <tr>
-                        <th scope="col" className="px-3 py-2.5">Model / Policy</th>
+                        <th scope="col" className="px-2.5 py-1.5">Model / Policy</th>
                         <th scope="col" className="px-2.5 py-2.5">RMSE</th>
                         <th scope="col" className="px-2.5 py-2.5">MAE</th>
                         <th scope="col" className="px-2.5 py-2.5">R²</th>
@@ -663,7 +895,7 @@ export function SolarMicrogridPanel({
                                   key={m.name}
                                   className={highlight ? "bg-sky-950 text-sky-100" : "text-text-primary"}
                                 >
-                                  <th scope="row" className="px-3 py-2.5 font-medium">{m.name}</th>
+                                  <th scope="row" className="px-2.5 py-1.5 font-medium">{m.name}</th>
                                   <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.rmse.toFixed(3)}</td>
                                   <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.mae.toFixed(3)}</td>
                                   <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.r2.toFixed(3)}</td>
@@ -685,8 +917,8 @@ export function SolarMicrogridPanel({
                               );
                             })}
                             {data.economics?.probabilisticGraphPolicy && (
-                              <tr className="bg-emerald-950/60 text-emerald-100">
-                                <th scope="row" className="px-3 py-2.5 font-medium">
+                              <tr className="bg-emerald-950/60 font-medium text-text-primary">
+                                <th scope="row" className="px-2.5 py-1.5 font-medium">
                                   {data.economics.probabilisticGraphPolicy.policyName}
                                 </th>
                                 <td className="px-2.5 py-2.5 font-mono ws-numeric">
@@ -763,7 +995,10 @@ export function SolarMicrogridPanel({
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-sm font-semibold text-text-primary flex items-center gap-1.5">
                     <Compass className="h-4 w-4 text-sky-400" />
-                    7-Node Front Range Climate Graph (Latest Wind: <span className="ws-numeric">{data.tomorrow.windFromDeg}° @{" "}
+                    {data.isDynamicLocation
+                      ? `7-Node Upwind Climate Graph — ${data.city}`
+                      : "7-Node Front Range Climate Graph"}{" "}
+                    (Latest Wind: <span className="ws-numeric">{data.tomorrow.windFromDeg}° @{" "}
                     {data.tomorrow.windSpeedMs}</span> m/s)
                   </h3>
                 </div>
@@ -785,7 +1020,7 @@ export function SolarMicrogridPanel({
                         </span>
                       </div>
                       <p className="text-[11px] text-text-muted mt-1">{node.rationale}</p>
-                      <div className="mt-2 flex items-center justify-between text-[11px] font-mono ws-numeric text-text-primary">
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2.5 gap-y-0.5 text-[11px] font-mono ws-numeric text-text-primary">
                         <span>Irrad: {node.latestAllsky} kWh/m²/d</span>
                         <span>k_t: {node.latestKt}</span>
                         <span className="text-sky-300">

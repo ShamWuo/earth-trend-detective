@@ -40,6 +40,7 @@ interface GraphNodeWorkbenchPanelProps {
   onAcceptCandidateLink: (suggestion: CandidateLinkSuggestion) => Promise<void>;
   onMaterializeSolarGraph: () => Promise<void>;
   onLocateOnGlobe?: (node: ETGNode) => void;
+  onOpenBriefing?: (nodeUuid: string) => void;
   onSnapshotChange: (snapshot: EtgGraphSnapshot, toast?: string) => void;
   onClose: () => void;
 }
@@ -65,6 +66,7 @@ export function GraphNodeWorkbenchPanel({
   onAcceptCandidateLink,
   onMaterializeSolarGraph,
   onLocateOnGlobe,
+  onOpenBriefing,
   onSnapshotChange,
   onClose,
 }: GraphNodeWorkbenchPanelProps) {
@@ -256,14 +258,14 @@ export function GraphNodeWorkbenchPanel({
         : nodeColor;
 
   return (
-    <div className="etg-hud-pill flex max-h-[calc(100dvh-5rem)] flex-col overflow-hidden rounded-md bg-surface shadow-2xl">
+    <div className="etg-hud-pill flex max-h-[calc(100dvh-4.25rem)] flex-col overflow-hidden rounded-lg bg-surface/95 backdrop-blur-md shadow-2xl">
       {/* Workbench Header */}
-      <div className="border-b border-border px-4 py-3 space-y-2">
+      <div className="border-b border-border px-3 py-2 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-1.5">
+          <div className="min-w-0 space-y-0.5">
+            <div className="flex flex-wrap items-center gap-1">
               <span
-                className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[10px] font-semibold"
+                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold"
                 style={{
                   backgroundColor: isLightTheme ? labelStyle.pillBgLight : labelStyle.pillBgDark,
                   color: pillColor,
@@ -271,7 +273,7 @@ export function GraphNodeWorkbenchPanel({
               >
                 {selectedNode.label}
               </span>
-              <span className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 font-mono text-[10px] text-text-muted">
+              <span className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
                 {isHuman
                   ? "Human"
                   : selectedNode.properties.authored_by === "ai"
@@ -279,18 +281,18 @@ export function GraphNodeWorkbenchPanel({
                     : "NASA / Sensor"}
               </span>
               {selectedNode.properties.phenomenon_type && (
-                <span className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[10px] text-text-subtle">
+                <span className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] text-text-subtle">
                   {selectedNode.properties.phenomenon_type.replaceAll("_", " ")}
                 </span>
               )}
               {(selectedNode.properties.status === "Superseded" ||
                 Boolean(selectedNode.properties.superseded_by)) && (
-                <span className="rounded-sm border border-purple-400 bg-purple-950 px-2 py-0.5 font-mono text-[10px] font-semibold text-purple-300">
-                  Superseded Assessment
+                <span className="rounded-sm border border-purple-400 bg-purple-950 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-purple-300">
+                  Superseded
                 </span>
               )}
             </div>
-            <h2 className="truncate text-sm font-semibold text-text-primary">
+            <h2 className="truncate text-[13px] font-semibold text-text-primary">
               {selectedNode.properties.name}
             </h2>
           </div>
@@ -299,28 +301,30 @@ export function GraphNodeWorkbenchPanel({
             type="button"
             onClick={onClose}
             aria-label="Close node workbench"
-            className="rounded-sm p-1 text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
+            className="etg-hud-btn inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => onStartQuickConnect(selectedNode)}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400 bg-amber-950 px-2.5 py-1 text-[11px] font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
+            title="Connect From Here"
+            className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-amber-400 bg-amber-950 px-2 text-[10.5px] font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
           >
             <GitBranchPlus className="h-3 w-3" aria-hidden="true" />
-            <span>Connect From Here</span>
+            <span>Connect</span>
           </button>
           <button
             type="button"
             onClick={() => void onDiscoverLinksForNode(selectedNode.uuid)}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-purple-400 bg-purple-950 px-2.5 py-1 text-[11px] font-semibold text-purple-300 hover:border-purple-300 cursor-pointer"
+            title="Discover Links"
+            className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-purple-400 bg-purple-950 px-2 text-[10.5px] font-semibold text-purple-300 hover:border-purple-300 cursor-pointer"
           >
             <Sparkles className="h-3 w-3" aria-hidden="true" />
-            <span>Discover Links</span>
+            <span>Links</span>
           </button>
           {typeof selectedNode.properties.lat === "number" &&
             typeof selectedNode.properties.lng === "number" &&
@@ -328,17 +332,18 @@ export function GraphNodeWorkbenchPanel({
               <button
                 type="button"
                 onClick={() => onLocateOnGlobe(selectedNode)}
-                className="inline-flex items-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1 text-[11px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
+                title="Locate on 3D Earth"
+                className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-sky-400 bg-sky-950 px-2 text-[10.5px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
               >
                 <Globe2 className="h-3 w-3" aria-hidden="true" />
-                <span>Locate on 3D Earth</span>
+                <span>Earth</span>
               </button>
             )}
         </div>
       </div>
 
       {/* Single-Row Accessible Tablist (.etg-tablist / .etg-tab) */}
-      <div role="tablist" aria-label="Node workbench sections" className="etg-tablist px-2">
+      <div role="tablist" aria-label="Node workbench sections" className="etg-tablist shrink-0 px-3">
         {tabs.map((tab, idx) => (
           <button
             key={tab.id}
@@ -349,7 +354,6 @@ export function GraphNodeWorkbenchPanel({
             type="button"
             role="tab"
             aria-selected={activeTab === tab.id}
-            aria-controls={`${baseId}-panel-${tab.id}`}
             tabIndex={activeTab === tab.id ? 0 : -1}
             onClick={() => setActiveTab(tab.id)}
             onKeyDown={(e) => handleTabKeyDown(e, idx)}
@@ -361,7 +365,7 @@ export function GraphNodeWorkbenchPanel({
       </div>
 
       {/* Scrollable Body — Zero padding/margins/borders on [role="tabpanel"] itself */}
-      <div className="flex-1 overflow-y-auto text-xs">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain text-xs">
         {/* TAB 1: TRAVERSE & LINKS */}
         <div
           id={`${baseId}-panel-traverse`}
@@ -433,6 +437,7 @@ export function GraphNodeWorkbenchPanel({
         >
           <WorkbenchEvidenceTab
             selectedNode={selectedNode}
+            nodeById={nodeById}
             busy={busy}
             localError={localError}
             localStatus={localStatus}
@@ -440,6 +445,7 @@ export function GraphNodeWorkbenchPanel({
             onSetLocalError={setLocalError}
             onSetLocalStatus={setLocalStatus}
             onSelectNode={onSelectNode}
+            onOpenBriefing={onOpenBriefing}
             onSnapshotChange={onSnapshotChange}
             onClose={onClose}
           />

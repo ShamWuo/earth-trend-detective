@@ -1,12 +1,18 @@
 import { DATASET_BY_ID } from "@/lib/datasets";
+import { validateDatasetForSurface } from "@/lib/earth/surfaceMask";
 import type { EtgStore } from "@/lib/graph/etgStore";
 import { fetchEarthTimeSeries } from "@/lib/nasa/nasaPowerClient";
+import {
+  dossierContainsUnsafeContent,
+  sanitizeResearchDossier,
+} from "@/lib/research/dossierUtils";
 import type {
   ETGDatasetId,
   ETGEdge,
   ETGNode,
   ETGNodeLabel,
   ETGRelationshipType,
+  ETGResearchDossier,
   TimeSeriesPoint,
 } from "@/types/etg";
 
@@ -37,6 +43,7 @@ export type ProposedGraphAction =
       region?: string;
       lat?: number;
       lng?: number;
+      dossier?: ETGResearchDossier;
       relatedNodeUuids?: string[];
       rationale?: string;
     }
@@ -49,6 +56,7 @@ export type ProposedGraphAction =
       lat?: number;
       lng?: number;
       dataset?: ETGDatasetId;
+      dossier?: ETGResearchDossier;
       relatedNodeUuids?: string[];
       rationale?: string;
     }
@@ -69,6 +77,7 @@ export type ProposedGraphAction =
       name?: string;
       description?: string;
       region?: string;
+      dossier?: ETGResearchDossier;
       rationale: string;
     }
   | {
@@ -76,6 +85,7 @@ export type ProposedGraphAction =
       priorNodeUuid: string;
       newName: string;
       newDescription: string;
+      dossier?: ETGResearchDossier;
       rationale: string;
     }
   | {
@@ -141,13 +151,15 @@ const VALID_ETG_EDGE_TYPES = new Set<ETGRelationshipType>([
   "triggers",
   "impacts",
   "hypothesized_link",
+  "contradicts",
 ]);
 
 const EDGE_TYPE_SYNONYMS: Record<string, ETGRelationshipType> = {
   causes: "triggers",
   contextualizes: "relates_to",
   links_to: "relates_to",
-  contradicts: "drives_opposite",
+  disconfirms: "contradicts",
+  refutes: "contradicts",
 };
 
 function normalizeEdgeType(raw: unknown): ETGRelationshipType | undefined {
@@ -241,6 +253,39 @@ function isCoordOnlyRegion(region: string | undefined): boolean {
   const trimmed = region?.trim();
   if (!trimmed) return true;
   return /^-?\d+(?:\.\d+)?°,\s*-?\d+(?:\.\d+)?°$/.test(trimmed);
+}
+
+function validateOptionalDossier(raw: unknown): GraphGuardVerdict | null {
+  if (raw === undefined) return null;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    const textValues = [
+      obj.abstract,
+      obj.physical_mechanism,
+      obj.markdown_body,
+      ...(Array.isArray(obj.empirical_findings) ? obj.empirical_findings : []),
+      ...(Array.isArray(obj.impacts) ? obj.impacts : []),
+    ];
+    if (
+      textValues.some((v) => containsInjectionOrSpam(v) || dossierContainsUnsafeContent(v))
+    ) {
+      return {
+        allowed: false,
+        rule: "NO_OFFTOPIC_OR_INJECTION",
+        reason: "Blocked prompt-injection or unsafe payload in research dossier.",
+      };
+    }
+  }
+  const clean = sanitizeResearchDossier(raw);
+  if (!clean) {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason:
+        "Invalid research dossier: requires abstract (>= 8 chars), physical_mechanism (>= 8 chars), and valid citations.",
+    };
+  }
+  return null;
 }
 
 function validateOptionalCoords(
@@ -540,6 +585,8 @@ export function validateGraphAction(
     }
     const coordErr = validateOptionalCoords(action.lat, action.lng);
     if (coordErr) return coordErr;
+    const dossierErr = validateOptionalDossier(action.dossier);
+    if (dossierErr) return dossierErr;
     return {
       allowed: true,
       rule: "ALLOWED_HELPFUL_MUTATION",
@@ -604,6 +651,29 @@ export function validateGraphAction(
     }
     const coordErr = validateOptionalCoords(action.lat, action.lng);
     if (coordErr) return coordErr;
+    if (
+      action.label === "Signal" &&
+      action.dataset &&
+      typeof action.lat === "number" &&
+      typeof action.lng === "number"
+    ) {
+      const surfaceValidation = validateDatasetForSurface(
+        action.dataset,
+        action.lat,
+        action.lng
+      );
+      if (!surfaceValidation.applicable) {
+        return {
+          allowed: false,
+          rule: "GEO_AND_STRUCT_VALIDITY",
+          reason:
+            surfaceValidation.reason ||
+            `Dataset "${action.dataset}" does not apply to ${surfaceValidation.regime} coordinates.`,
+        };
+      }
+    }
+    const dossierErr = validateOptionalDossier(action.dossier);
+    if (dossierErr) return dossierErr;
     return {
       allowed: true,
       rule: "ALLOWED_HELPFUL_MUTATION",
@@ -655,6 +725,20 @@ export function validateGraphAction(
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
         reason: `Unknown dataset "${String(action.dataset)}" for live signal ingestion.`,
+      };
+    }
+    const surfaceValidation = validateDatasetForSurface(
+      action.dataset as ETGDatasetId,
+      action.lat,
+      action.lng
+    );
+    if (!surfaceValidation.applicable) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason:
+          surfaceValidation.reason ||
+          `Dataset "${action.dataset}" does not apply to ${surfaceValidation.regime} coordinates.`,
       };
     }
     if (action.edgeType !== undefined && !VALID_ETG_EDGE_TYPES.has(action.edgeType)) {
@@ -710,6 +794,8 @@ export function validateGraphAction(
         reason: "A scientific rationale (>= 6 chars) is required to update a node.",
       };
     }
+    const dossierErr = validateOptionalDossier(action.dossier);
+    if (dossierErr) return dossierErr;
     const node = store.getNode(action.uuid);
     if (!node) {
       return {
@@ -799,6 +885,8 @@ export function validateGraphAction(
         reason: `Prior node ${action.priorNodeUuid} does not exist.`,
       };
     }
+    const dossierErr = validateOptionalDossier(action.dossier);
+    if (dossierErr) return dossierErr;
     return {
       allowed: true,
       rule: "ALLOWED_HELPFUL_MUTATION",
@@ -1007,12 +1095,15 @@ function applySyncValidatedAction(
 
   if (action.type === "create_insight" || action.type === "create_node") {
     const label: ETGNodeLabel = action.type === "create_insight" ? "Insight" : action.label;
+    const sanitizedDossier =
+      action.dossier !== undefined ? sanitizeResearchDossier(action.dossier) : undefined;
     const node = store.createNode({
       label,
       is_provisional: label === "Signal",
       properties: {
         name: action.name.trim(),
         description: action.description.trim(),
+        ...(sanitizedDossier ? { dossier: sanitizedDossier } : {}),
         region: action.region?.trim() || "Global / Regional Synthesis",
         lat: action.lat,
         lng: action.lng,
@@ -1048,27 +1139,33 @@ function applySyncValidatedAction(
   }
 
   if (action.type === "update_node") {
+    const sanitizedDossier =
+      action.dossier !== undefined ? sanitizeResearchDossier(action.dossier) : undefined;
     const updated = store.updateNode(action.uuid, {
       ...(action.name !== undefined ? { name: action.name } : {}),
       ...(action.description !== undefined ? { description: action.description } : {}),
       ...(action.region !== undefined ? { region: action.region } : {}),
+      ...(sanitizedDossier ? { dossier: sanitizedDossier } : {}),
     });
     if (updated) {
       applied.push({
         action,
         verdict,
         createdNodeUuid: updated.uuid,
-        summary: `Updated "${updated.properties.name}" [${updated.uuid}]`,
+        summary: `Updated "${updated.properties.name}" [${updated.uuid}]${sanitizedDossier ? " (attached scientific dossier)" : ""}`,
       });
     }
     return;
   }
 
   if (action.type === "revise_belief") {
+    const sanitizedDossier =
+      action.dossier !== undefined ? sanitizeResearchDossier(action.dossier) : undefined;
     const rev = store.reviseBelief({
       priorNodeUuid: action.priorNodeUuid,
       newName: action.newName,
       newDescription: action.newDescription,
+      ...(sanitizedDossier ? { dossier: sanitizedDossier } : {}),
       rationale: action.rationale,
     });
     batchCreatedIds.push(rev.revisedNode.uuid);

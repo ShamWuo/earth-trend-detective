@@ -3,6 +3,7 @@
  * climatological baseline generators for judge-proof network & boundary resilience.
  */
 
+import { classifyEarthSurface } from "@/lib/earth/surfaceMask";
 import type { ETGDatasetId, TimeSeriesPoint } from "@/types/etg";
 
 export type DataProvenanceMode = "live" | "cached" | "climatological_fallback";
@@ -172,14 +173,25 @@ export function buildClimatologicalSeriesPoints(
         cycleAmplitude = 14.0;
         clampMin = 0.5;
       } else {
-        parameter = "GWETPROF";
-        unit = "index (0-1)";
-        slopeUnit = "idx/decade";
-        baseLevel = Math.max(0.18, Math.min(0.75, 0.48 - Math.abs(absLat - 25) * 0.0025));
-        decadalDrift = absLat < 40 ? -0.012 : 0.008;
-        cycleAmplitude = 0.025;
-        clampMin = 0.05;
-        clampMax = 0.98;
+        const surface = classifyEarthSurface(norm.lat, norm.lng);
+        if (surface.regime === "open_ocean") {
+          parameter = "PRECTOTCORR";
+          unit = "mm/day";
+          slopeUnit = "mm/d/yr";
+          baseLevel = Math.max(0.5, 5.2 - absLat * 0.05);
+          decadalDrift = absLat < 25 ? 0.08 : 0.03;
+          cycleAmplitude = 0.35;
+          clampMin = 0;
+        } else {
+          parameter = "GWETPROF";
+          unit = "index (0-1)";
+          slopeUnit = "idx/decade";
+          baseLevel = Math.max(0.18, Math.min(0.75, 0.48 - Math.abs(absLat - 25) * 0.0025));
+          decadalDrift = absLat < 40 ? -0.012 : 0.008;
+          cycleAmplitude = 0.025;
+          clampMin = 0.05;
+          clampMax = 0.98;
+        }
       }
       break;
     case "air_quality":

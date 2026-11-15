@@ -336,4 +336,77 @@ describe("nasaGibsRegional", () => {
     expect(sliceOne).toMatch(/^multi_slice:/);
     expect(sliceTwo).not.toBe(sliceOne);
   });
+
+  it("routes historical pre-2019-08-01 sst_anomaly to MUR25 (2002-09-01+) and builds Zoom 0/1 WMTS previews", () => {
+    const nowMs = Date.UTC(2026, 10, 15, 12, 0, 0);
+
+    // Pre-2019-08-01 dates route to continuous 0.25-deg MUR25 (2km) at zoom 2
+    const dec2010Ms = Date.UTC(2010, 11, 1);
+    const dec2015Ms = Date.UTC(2015, 11, 15);
+    const wmts2010 = computeGlobalWmtsMosaicSpec({
+      layerId: "sst_anomaly",
+      cutoffMs: dec2010Ms,
+      nowMs,
+    });
+    expect(wmts2010.primaryDateIso).toBe("2010-12-01");
+    expect(wmts2010.zoom).toBe(2);
+    expect(wmts2010.badgeLabel).toBe("2.5K HD");
+    expect(wmts2010.subLayers[0]!.wmtsLayer).toBe(
+      "GHRSST_L4_MUR25_Sea_Surface_Temperature_Anomalies"
+    );
+    expect(wmts2010.subLayers[0]!.tileMatrixSet).toBe("2km");
+
+    const wms2015 = computeGlobalLayerSpec({
+      layerId: "sst_anomaly",
+      cutoffMs: dec2015Ms,
+      nowMs,
+    });
+    expect(wms2015.dateIso).toBe("2015-12-15");
+    expect(wms2015.url).toContain(
+      "LAYERS=GHRSST_L4_MUR25_Sea_Surface_Temperature_Anomalies"
+    );
+
+    // Pre-2002-09-01 clamps to 2002-09-01
+    expect(resolveGibsDateIso("sst_anomaly", Date.UTC(1998, 0, 1), nowMs)).toBe(
+      "2002-09-01"
+    );
+
+    // >= 2019-08-01 retains 1km MUR at zoom 3 (5K HD)
+    const wmts2023 = computeGlobalWmtsMosaicSpec({
+      layerId: "sst_anomaly",
+      cutoffMs: Date.UTC(2023, 11, 15),
+      nowMs,
+    });
+    expect(wmts2023.zoom).toBe(3);
+    expect(wmts2023.badgeLabel).toBe("5K HD");
+    expect(wmts2023.subLayers[0]!.wmtsLayer).toBe(
+      "GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies"
+    );
+    expect(wmts2023.subLayers[0]!.tileMatrixSet).toBe("1km");
+
+    // Zoom 0 (2-tile) and Zoom 1 (6-tile) fast preview specs match OGC EPSG:4326 geometry
+    const z0 = computeGlobalWmtsMosaicSpec({
+      layerId: "sst_anomaly",
+      cutoffMs: dec2015Ms,
+      nowMs,
+      zoomOverride: 0,
+    });
+    expect(z0.cols).toBe(2);
+    expect(z0.rows).toBe(1);
+    expect(z0.width).toBe(640);
+    expect(z0.height).toBe(320);
+    expect(z0.badgeLabel).toBe("Live Preview");
+
+    const z1 = computeGlobalWmtsMosaicSpec({
+      layerId: "sst_anomaly",
+      cutoffMs: Date.UTC(2023, 11, 15),
+      nowMs,
+      zoomOverride: 1,
+    });
+    expect(z1.cols).toBe(3);
+    expect(z1.rows).toBe(2);
+    expect(z1.width).toBe(1280);
+    expect(z1.height).toBe(640);
+    expect(z1.badgeLabel).toBe("1.3K");
+  });
 });

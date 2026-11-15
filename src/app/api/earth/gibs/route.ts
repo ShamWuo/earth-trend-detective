@@ -9,6 +9,7 @@ import {
 import {
   GIBS_LAYERS,
   GIBS_WMS_ENDPOINT,
+  resolveEffectiveSstAnomalyWmsLayer,
   type ActiveGibsLayerId,
 } from "@/lib/earth/nasaGibsRegional";
 import type { UpstreamFaultDetail } from "@/types/etg";
@@ -68,7 +69,8 @@ async function fetchGibsUpstream(
   height: number,
   dateIso: string,
   format: "image/jpeg" | "image/png" = "image/jpeg",
-  budget?: TelemetryBudget
+  budget?: TelemetryBudget,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS
 ): Promise<{ ok: true; buffer: ArrayBuffer; contentType: string } | { ok: false; fault: UpstreamFaultDetail }> {
   const transparentPart = format === "image/png" ? "&TRANSPARENT=TRUE" : "";
   const upstreamUrl =
@@ -81,7 +83,7 @@ async function fetchGibsUpstream(
       headers: {
         "User-Agent": "EarthTrendDetective/1.0 (NASA Space Apps; GIBS Swath Proxy)",
       },
-      signal: budget ? budget.signal(UPSTREAM_TIMEOUT_MS) : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: budget ? budget.signal(timeoutMs) : AbortSignal.timeout(timeoutMs),
       cache: "no-store",
     });
     if (!res.ok) {
@@ -173,11 +175,18 @@ export async function GET(req: NextRequest) {
   }
 
   const layer = isBorders ? null : GIBS_LAYERS[layerParam as ActiveGibsLayerId];
-  const wmsLayers = isBorders
+  const baseWmsLayers = isBorders
     ? "Coastlines,Reference_Features"
     : isGlobal
       ? layer!.globalWmsLayers
       : layer!.wmsLayers;
+  const wmsLayers = isBorders
+    ? baseWmsLayers
+    : resolveEffectiveSstAnomalyWmsLayer(
+        layerParam as ActiveGibsLayerId,
+        timeParam,
+        baseWmsLayers
+      );
   const format: "image/jpeg" | "image/png" = isBorders
     ? "image/png"
     : isGlobal
@@ -189,6 +198,10 @@ export async function GET(req: NextRequest) {
       ? Boolean(layer!.globalMonthly ?? layer!.monthly)
       : Boolean(layer!.monthly);
 
+  const fallbackDate = isMonthly ? "2025-07-01" : "2025-07-15";
+  const singleAttempt = isBorders || timeParam === fallbackDate;
+  const primaryTimeoutMs = singleAttempt ? 1450 : UPSTREAM_TIMEOUT_MS;
+
   let resolvedDate = timeParam;
   let primaryOutcome = await fetchGibsUpstream(
     wmsLayers,
@@ -197,11 +210,11 @@ export async function GET(req: NextRequest) {
     heightParam,
     timeParam,
     format,
-    budget
+    budget,
+    primaryTimeoutMs
   );
 
   if (!primaryOutcome.ok && !isBorders && budget.remainingMs() > 150) {
-    const fallbackDate = isMonthly ? "2025-07-01" : "2025-07-15";
     if (timeParam !== fallbackDate) {
       resolvedDate = fallbackDate;
       primaryOutcome = await fetchGibsUpstream(
@@ -211,7 +224,8 @@ export async function GET(req: NextRequest) {
         heightParam,
         fallbackDate,
         format,
-        budget
+        budget,
+        Math.max(UPSTREAM_TIMEOUT_MS, budget.remainingMs())
       );
     }
   }

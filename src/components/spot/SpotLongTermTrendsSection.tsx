@@ -9,7 +9,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
-import { DATASET_BY_ID, EARTH_TREND_DATASETS } from "@/lib/datasets";
+import { DATASET_BY_ID } from "@/lib/datasets";
 import {
   convertTemperatureDisplayValue,
   convertTemperatureUnitLabel,
@@ -33,14 +33,13 @@ import {
 import { MiniSparkline } from "@/components/spot/SpotTrendChart";
 
 /**
- * Multi-year Earth trends section supporting Cards & Table formats, dataset filter chips,
+ * Multi-year Earth trends section supporting Cards & Table formats, active dataset filter notice,
  * fallback stored node readings, per-dataset status rows, and AI Trend Microscope cards.
  */
 export function SpotLongTermTrendsSection({
   trendLayout,
   onChangeTrendLayout,
   activeTopics,
-  onToggleTopic,
   onResetTopics,
   onlyCommunityFilterAtEmptySpot,
   visibleSummaries,
@@ -59,7 +58,7 @@ export function SpotLongTermTrendsSection({
   trendLayout: "cards" | "table";
   onChangeTrendLayout: (layout: "cards" | "table") => void;
   activeTopics: ETGDatasetId[];
-  onToggleTopic: (ds: ETGDatasetId) => void;
+  onToggleTopic?: (ds: ETGDatasetId) => void;
   onResetTopics: () => void;
   onlyCommunityFilterAtEmptySpot: boolean;
   visibleSummaries: TrendAnalysisSummary[];
@@ -76,13 +75,13 @@ export function SpotLongTermTrendsSection({
   onOpenInGraphWorkbench?: (nodeUuid: string) => void;
 }) {
   return (
-    <section aria-label="Earth trends summary" className="space-y-2 border-t border-border pt-2.5">
+    <section aria-label="Earth trends summary" className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
           Long-Term Trends
         </div>
         <div
-          className="inline-flex rounded-sm border border-border bg-surface-inset p-0.5"
+          className="inline-flex rounded-md border border-border bg-surface-inset p-0.5"
           role="group"
           aria-label="Trend layout format"
         >
@@ -90,7 +89,7 @@ export function SpotLongTermTrendsSection({
             type="button"
             aria-pressed={trendLayout === "cards"}
             onClick={() => onChangeTrendLayout("cards")}
-            className="inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+            className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
           >
             <LayoutGrid className="h-3 w-3" aria-hidden="true" />
             <span>Cards</span>
@@ -99,7 +98,7 @@ export function SpotLongTermTrendsSection({
             type="button"
             aria-pressed={trendLayout === "table"}
             onClick={() => onChangeTrendLayout("table")}
-            className="inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+            className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
           >
             <List className="h-3 w-3" aria-hidden="true" />
             <span>Table</span>
@@ -107,60 +106,35 @@ export function SpotLongTermTrendsSection({
         </div>
       </div>
 
-      {/* Dataset Filter Chips */}
-      <div
-        className="flex flex-wrap items-center gap-1"
-        role="region"
-        aria-label="Filter datasets for this spot"
-      >
-        <button
-          type="button"
-          aria-pressed={activeTopics.length === 0}
-          onClick={onResetTopics}
-          className={`rounded-sm border px-2 py-0.5 text-[11px] transition-colors cursor-pointer ${
-            activeTopics.length === 0
-              ? "border-accent-fg bg-amber-950 font-semibold text-amber-300"
-              : "border-border bg-surface-inset text-text-muted hover:text-text-primary"
-          }`}
-        >
-          All
-        </button>
-        {EARTH_TREND_DATASETS.map((ds) => {
-          const active = activeTopics.includes(ds.id);
-          return (
-            <button
-              key={ds.id}
-              type="button"
-              aria-pressed={active}
-              onClick={() => onToggleTopic(ds.id)}
-              className={`inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] transition-colors cursor-pointer ${
-                active
-                  ? "border-accent-fg bg-amber-950 font-semibold text-amber-300"
-                  : "border-border bg-surface-inset text-text-muted hover:text-text-primary"
-              }`}
-            >
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: ds.color }}
-                aria-hidden="true"
-              />
-              <span>{ds.shortLabel}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/* Compact Active Filter Strip (replaces 3-row 8-chip wall) */}
+      {activeTopics.length > 0 && (
+        <div className="flex items-center justify-between gap-2 rounded-md bg-surface-inset px-2 py-1 text-[11px] text-text-muted">
+          <span className="truncate">
+            Filtered:{" "}
+            {activeTopics
+              .map((id) => DATASET_BY_ID[id]?.shortLabel ?? id)
+              .join(", ")}
+          </span>
+          <button
+            type="button"
+            onClick={onResetTopics}
+            className="shrink-0 font-medium text-accent-fg hover:underline cursor-pointer"
+          >
+            Show all
+          </button>
+        </div>
+      )}
 
       {onlyCommunityFilterAtEmptySpot && (
-        <div className="rounded-md border border-border bg-surface-inset p-3 text-text-muted">
-          No local sensors recorded near this spot yet. Switch to{" "}
+        <div className="rounded-md bg-surface-inset p-3 text-text-muted">
+          No local sensors recorded near this spot yet.{" "}
           <button
             type="button"
             onClick={onResetTopics}
             className="font-semibold text-accent-fg hover:underline cursor-pointer"
           >
-            All topics
-          </button>{" "}
-          or pick another filter above.
+            Show all datasets
+          </button>
         </div>
       )}
 
@@ -184,10 +158,10 @@ export function SpotLongTermTrendsSection({
             <table className="w-full table-fixed text-[11px]">
               <thead>
                 <tr>
-                  <th scope="col" className="w-[30%] px-1.5 py-1.5 text-left">Metric</th>
-                  <th scope="col" className="w-[23%] px-1.5 py-1.5 text-right">Recent</th>
-                  <th scope="col" className="w-[22%] px-1.5 py-1.5 text-right">Δ Avg</th>
-                  <th scope="col" className="w-[25%] px-1.5 py-1.5 text-right">Rate/dec</th>
+                  <th scope="col" className="w-[30%] px-1.5 py-1 text-left">Metric</th>
+                  <th scope="col" className="w-[23%] px-1.5 py-1 text-right">Recent</th>
+                  <th scope="col" className="w-[22%] px-1.5 py-1 text-right">Δ Avg</th>
+                  <th scope="col" className="w-[25%] px-1.5 py-1 text-right">Rate/dec</th>
                 </tr>
               </thead>
               <tbody>
@@ -275,7 +249,7 @@ export function SpotLongTermTrendsSection({
                   key={key}
                   type="button"
                   onClick={() => onFocusSummary(key, item.dataset)}
-                  className={`w-full space-y-1.5 rounded-md border px-3 py-2 text-left transition-colors cursor-pointer ${
+                  className={`w-full space-y-1 rounded-md border px-2.5 py-1.5 text-left transition-colors cursor-pointer ${
                     isFocused
                       ? "border-accent-fg bg-surface-elevated"
                       : "border-border bg-surface-inset hover:border-border-strong"
@@ -316,7 +290,7 @@ export function SpotLongTermTrendsSection({
                     <MiniSparkline points={item.points} color={meta?.color ?? "#e2a856"} />
                   </div>
 
-                  <div className="ws-numeric grid grid-cols-3 gap-1.5 border-t border-border-subtle pt-1.5 font-mono text-[10px]">
+                  <div className="ws-numeric grid grid-cols-3 gap-1.5 border-t border-border-subtle pt-1 font-mono text-[10px]">
                     <div>
                       <span className="block text-[9px] font-sans uppercase text-text-subtle">
                         Recent
@@ -358,12 +332,19 @@ export function SpotLongTermTrendsSection({
             })}
 
             {activeDigest && (
-              <p className="px-0.5 pt-0.5 text-[11px] leading-relaxed text-text-muted">
-                <strong className="font-semibold text-text-primary">
-                  {activeDigest.topicLabel} ({activeDigest.periodRange}):
-                </strong>{" "}
-                {activeDigest.summarySentence}
-              </p>
+              <div className="space-y-1.5 px-0.5 pt-0.5 text-[11px] leading-relaxed text-text-muted">
+                <p>
+                  <strong className="font-semibold text-text-primary">
+                    {activeDigest.topicLabel} ({activeDigest.periodRange}):
+                  </strong>{" "}
+                  {activeDigest.summarySentence}
+                </p>
+                {activeDigest.isProxy && activeDigest.proxyNote && (
+                  <p className="rounded-sm border border-amber-400 bg-surface-elevated px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-300">
+                    {activeDigest.proxyNote}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -556,35 +537,29 @@ export function SpotLongTermTrendsSection({
           </div>
         )}
 
-      {/* Per-Dataset Status Rows */}
+      {/* Per-Dataset Status Rows (calm muted appearance for partial availability) */}
       {!onlyCommunityFilterAtEmptySpot && relevantDatasetDiags.length > 0 && (
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           {relevantDatasetDiags.map((diag) => {
             const dsMeta = DATASET_BY_ID[diag.dataset];
             const isFetchFailed = diag.status === "failed_to_fetch";
             return (
               <div
                 key={`${diag.dataset}-${diag.status}`}
-                className={`flex items-start justify-between gap-2 rounded-sm border px-2.5 py-1.5 text-[11px] ${
-                  isFetchFailed
-                    ? "border-rose-400 bg-rose-950 text-rose-200"
-                    : "border-border-subtle bg-surface-inset text-text-muted"
-                }`}
+                className="flex items-center justify-between gap-2 rounded-md bg-surface-inset px-2.5 py-1.5 text-[11px] text-text-muted"
+                title={diag.reason}
               >
-                <div className="min-w-0">
-                  <span className="font-semibold text-text-primary">
+                <div className="flex min-w-0 items-center gap-1.5 truncate">
+                  {isFetchFailed && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
+                  )}
+                  <span className="font-medium text-text-primary">
                     {dsMeta?.shortLabel ?? diag.dataset}
                   </span>
-                  <span className="ml-1.5">{diag.reason}</span>
+                  <span className="truncate text-text-subtle">{diag.reason}</span>
                 </div>
-                <span
-                  className={`shrink-0 rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${
-                    isFetchFailed
-                      ? "border-rose-400 bg-rose-900 text-rose-100"
-                      : "border-border bg-surface text-text-subtle"
-                  }`}
-                >
-                  {isFetchFailed ? "Failed to fetch" : "Unavailable"}
+                <span className="shrink-0 font-mono text-[10px] text-text-subtle">
+                  {isFetchFailed ? "Unavailable" : "N/A"}
                 </span>
               </div>
             );

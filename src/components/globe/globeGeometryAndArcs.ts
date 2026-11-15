@@ -5,6 +5,7 @@ import type {
   RegionalSatelliteMode,
   RegionalZoomTier,
 } from "@/lib/earth/nasaGibsRegional";
+import type { SatelliteDepthTier } from "@/lib/earth/satelliteZoomTiles";
 import { classifyRelationCategory } from "@/lib/plainLanguage";
 import type {
   ETGDatasetId,
@@ -43,6 +44,7 @@ const EDGE_TYPE_PRIORITY: Record<ETGRelationshipType, number> = {
   impacts: 5,
   dampens: 4,
   correlates_with: 4,
+  contradicts: 4,
   supersedes: 3,
   corroborates: 2,
   supports: 1,
@@ -328,6 +330,18 @@ export function selectVisibleGlobeArcs(params: {
 }
 
 export const EARTH_RADIUS = 100;
+const TRUE_EARTH_SPHERE = new THREE.Sphere(new THREE.Vector3(0, 0, 0), EARTH_RADIUS);
+
+/**
+ * Exact O(1) analytical ray-sphere intersection against the true Earth sphere (R = EARTH_RADIUS).
+ * Eliminates triangle chord sagitta error and high-poly mesh traversal overhead at street zoom.
+ */
+export function intersectTrueEarthSphere(
+  ray: THREE.Ray,
+  target = new THREE.Vector3()
+): THREE.Vector3 | null {
+  return ray.intersectSphere(TRUE_EARTH_SPHERE, target);
+}
 
 export function latLngToVector3(lat: number, lng: number, radius = EARTH_RADIUS): THREE.Vector3 {
   const phi = (90 - lat) * (Math.PI / 180);
@@ -338,7 +352,10 @@ export function latLngToVector3(lat: number, lng: number, radius = EARTH_RADIUS)
   return new THREE.Vector3(x, y, z);
 }
 
-export function vector3ToLatLng(v: THREE.Vector3): { lat: number; lng: number } {
+export function vector3ToLatLng(
+  v: THREE.Vector3,
+  precision = 5
+): { lat: number; lng: number } {
   const r = v.length();
   if (r === 0) return { lat: 0, lng: 0 };
   const lat = 90 - (Math.acos(Math.max(-1, Math.min(1, v.y / r))) * 180) / Math.PI;
@@ -347,8 +364,8 @@ export function vector3ToLatLng(v: THREE.Vector3): { lat: number; lng: number } 
   if (lng < -180) lng += 360;
   if (lng > 180) lng -= 360;
   return {
-    lat: Number(lat.toFixed(2)),
-    lng: Number(lng.toFixed(2)),
+    lat: Number(lat.toFixed(precision)),
+    lng: Number(lng.toFixed(precision)),
   };
 }
 
@@ -670,9 +687,10 @@ export interface GlobePersistedPrefs {
   satelliteMode?: RegionalSatelliteMode;
   sunPreset?: SunPreset;
   filterSmooth?: boolean;
+  showPlaceLabels?: boolean;
 }
 
-export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v1";
+export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v2";
 
 export interface ProjectedArcLabel {
   uuid: string;
@@ -711,6 +729,11 @@ export interface RegionalHudState {
   dateIso: string;
   swathKm: number;
   tier: RegionalZoomTier;
+  aerialActive: boolean;
+  aerialZoom: number;
+  aerialResolutionLabel: string;
+  altitudeKm: number;
+  depthTier: SatelliteDepthTier;
   loading: boolean;
   error: boolean;
   centerLat: number;
@@ -764,6 +787,7 @@ export interface GlobeSceneRefs {
   earthMat: THREE.ShaderMaterial;
   cloudMesh: THREE.Mesh;
   cloudMat: THREE.ShaderMaterial;
+  innerHazeMat: THREE.ShaderMaterial;
   atmoMat: THREE.ShaderMaterial;
   markersGroup: THREE.Group;
   arcsGroup: THREE.Group;

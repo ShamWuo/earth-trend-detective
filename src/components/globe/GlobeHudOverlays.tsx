@@ -4,7 +4,6 @@ import React, { useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
-  Cloud,
   GitBranch,
   GitCompare,
   Layers,
@@ -12,11 +11,14 @@ import {
   RotateCcw,
   Satellite,
   ScanSearch,
-  Sun,
   X,
 } from "lucide-react";
 import { GraphCameraDock } from "@/components/GraphCameraDock";
 import {
+  DEFAULT_REGIONAL_FOCUS_RADIUS,
+  DEFAULT_SATELLITE_CITY_RADIUS,
+  DEFAULT_SATELLITE_METRO_RADIUS,
+  DEFAULT_SATELLITE_STREET_RADIUS,
   GIBS_LAYERS,
   getGibsLayerColorbar,
   resolveGlobalFilterLayer,
@@ -25,8 +27,10 @@ import {
 import {
   ALL_RELATION_CATEGORIES,
   RELATION_CATEGORY_META,
+  formatMicroscopeNodeSummary,
   humanizeNodeText,
 } from "@/lib/plainLanguage";
+import { hasTerrestrialSurface, isMarineOrCoastalSurface } from "@/lib/earth/surfaceMask";
 import {
   formatGibsColorbarForUnit,
   type GlobalHudState,
@@ -64,6 +68,7 @@ interface GlobeHudOverlaysProps {
   timelineSlot?: React.ReactNode;
   onSelectNode: (node: ETGNode) => void;
   onSelectEdge?: (edge: ETGEdge) => void;
+  onProbeCoordinate?: (lat: number, lng: number) => void;
   onToggleCompareMode?: () => void;
   autoRotate: boolean;
   setAutoRotate: React.Dispatch<React.SetStateAction<boolean>>;
@@ -80,6 +85,8 @@ interface GlobeHudOverlaysProps {
   setShowPins: React.Dispatch<React.SetStateAction<boolean>>;
   satelliteMode: RegionalSatelliteMode;
   setSatelliteMode: React.Dispatch<React.SetStateAction<RegionalSatelliteMode>>;
+  showPlaceLabels: boolean;
+  setShowPlaceLabels: React.Dispatch<React.SetStateAction<boolean>>;
   filterSmooth: boolean;
   setFilterSmooth: React.Dispatch<React.SetStateAction<boolean>>;
   isRegionalZoom: boolean;
@@ -96,6 +103,8 @@ interface GlobeHudOverlaysProps {
   zoomIn: () => void;
   zoomOut: () => void;
   zoomToRegion: () => void;
+  zoomToDepth: (targetRadius: number) => void;
+  cycleSatelliteZoom: () => void;
   onRetryRegionalTile: () => void;
   onFocusSunPresetCamera: (preset: SunPreset) => void;
 }
@@ -115,6 +124,7 @@ const REGIONAL_SATELLITE_OPTIONS: Array<{
   detail: string;
 }> = [
   { id: "auto", label: "Auto", detail: "Matches topic" },
+  { id: "aerial", label: "Aerial HD", detail: "Cloud-free sat" },
   { id: "multi_slice", label: "4-Slice Split", detail: "NASA SVS Showcase" },
   { id: "winds", label: "Winds", detail: "MERRA-2 Winds" },
   { id: "precip", label: "Water / Rain", detail: "Water Vapor + Rain" },
@@ -128,35 +138,23 @@ const REGIONAL_SATELLITE_OPTIONS: Array<{
   { id: "off", label: "Off", detail: "Blue Marble" },
 ];
 
-const SUN_LABELS: Record<SunPreset, string> = {
-  live: "Sun: Live",
-  daylight: "Full Daylight",
-  americas: "Sun: Americas",
-  eurasia: "Sun: Eurasia",
-  night: "Sun: Night",
-};
-
 const ARC_LABELS: Record<GlobeArcMode, string> = {
-  all: "Links: All",
-  focus: "Links: Selected",
-  opposite: "Links: Opposite",
-  causal: "Links: Causal →",
-  dipoles: "Links: Top 6",
-  off: "Links: Hidden",
+  all: "All",
+  focus: "Focus",
+  opposite: "Opp.",
+  causal: "Causal",
+  dipoles: "Top 6",
+  off: "Off",
 };
 
-const QUICK_GLOBAL_FILTER_PILLS: Array<{ id: RegionalSatelliteMode; label: string }> = [
-  { id: "multi_slice", label: "4-Slice" },
-  { id: "winds", label: "Winds" },
-  { id: "precip", label: "Water / Rain" },
-  { id: "sst_anomaly", label: "Ocean Anomaly" },
-  { id: "thermal", label: "Thermal" },
-  { id: "air_temp", label: "Air Temp" },
-  { id: "aerosols", label: "Aerosols" },
-  { id: "ndvi", label: "NDVI" },
-  { id: "true_color", label: "True Color" },
-  { id: "night_viirs", label: "Night" },
-];
+const ARC_FULL_LABELS: Record<GlobeArcMode, string> = {
+  all: "Links: All",
+  focus: "Links: Focus",
+  opposite: "Links: Opposite",
+  causal: "Links: Causal",
+  dipoles: "Links: Top 6",
+  off: "Links: Off",
+};
 
 function ColorbarLegend({
   colorbar,
@@ -167,12 +165,12 @@ function ColorbarLegend({
 }) {
   const cb = formatGibsColorbarForUnit(colorbar, tempUnit);
   return (
-    <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
+    <div className="space-y-0.5 rounded-xs border border-border bg-surface-inset px-2 py-1">
       <div
-        className="etg-colorbar-track h-2 w-full rounded-xs"
+        className="etg-colorbar-track h-1.5 w-full rounded-xs"
         style={{ background: cb.gradientCss }}
       />
-      <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
+      <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[9.5px] text-text-muted">
         <span>{cb.minLabel}</span>
         {cb.midLabel && (
           <span className="text-text-subtle">{cb.midLabel}</span>
@@ -206,6 +204,7 @@ export function GlobeHudOverlays({
   timelineSlot,
   onSelectNode,
   onSelectEdge,
+  onProbeCoordinate,
   onToggleCompareMode,
   autoRotate,
   setAutoRotate,
@@ -222,6 +221,8 @@ export function GlobeHudOverlays({
   setShowPins,
   satelliteMode,
   setSatelliteMode,
+  showPlaceLabels,
+  setShowPlaceLabels,
   filterSmooth,
   setFilterSmooth,
   isRegionalZoom,
@@ -238,6 +239,8 @@ export function GlobeHudOverlays({
   zoomIn,
   zoomOut,
   zoomToRegion,
+  zoomToDepth,
+  cycleSatelliteZoom,
   onRetryRegionalTile,
   onFocusSunPresetCamera,
 }: GlobeHudOverlaysProps) {
@@ -308,10 +311,24 @@ export function GlobeHudOverlays({
   const isMultiSliceFilter = satelliteMode === "multi_slice";
   const activeGlobalMeta = activeGlobalFilter ? GIBS_LAYERS[activeGlobalFilter] : null;
   const earthFilterButtonLabel = isMultiSliceFilter
-    ? "Filter: 4-Slice Split"
-    : activeGlobalMeta
-      ? `Filter: ${activeGlobalMeta.shortLabel}`
-      : "Earth Filter";
+    ? "4-Slice"
+    : satelliteMode === "aerial"
+      ? "Aerial HD"
+      : activeGlobalMeta
+        ? activeGlobalMeta.shortLabel
+        : "Satellite";
+  const canShowAerialLabels =
+    satelliteMode !== "off" &&
+    satelliteMode !== "true_color" &&
+    satelliteMode !== "night_viirs";
+  const depthRingLabels =
+    regionalHud.depthTier === "ground"
+      ? { inner: "250 m block", outer: "1 km local" }
+      : regionalHud.depthTier === "city"
+        ? { inner: "2 km local", outer: "10 km urban" }
+        : regionalHud.depthTier === "metro"
+          ? { inner: "10 km urban", outer: "50 km MERRA-2" }
+          : { inner: "50 km MERRA-2", outer: "150 km mesoscale" };
 
   return (
     <>
@@ -346,7 +363,9 @@ export function GlobeHudOverlays({
                 type="button"
                 onClick={() => onSelectEdge?.(lbl.edge)}
                 style={{ left: `${lbl.x}px`, top: `${lbl.y}px` }}
-                className={`pointer-events-auto -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
+                className={`${
+                  compareMode ? "pointer-events-none opacity-60" : "pointer-events-auto"
+                } -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
                   lbl.isSelected
                     ? "border-amber-300 bg-amber-950 text-amber-300 ring-1 ring-amber-400"
                     : "border-border bg-surface text-text-primary hover:border-text-muted hover:bg-surface-elevated"
@@ -383,7 +402,20 @@ export function GlobeHudOverlays({
             <button
               key={lbl.uuid}
               type="button"
-              onClick={() => onSelectNode(lbl.node)}
+              onClick={() => {
+                if (
+                  compareMode &&
+                  onProbeCoordinate &&
+                  typeof lbl.node.properties.lat === "number" &&
+                  typeof lbl.node.properties.lng === "number" &&
+                  Number.isFinite(lbl.node.properties.lat) &&
+                  Number.isFinite(lbl.node.properties.lng)
+                ) {
+                  onProbeCoordinate(lbl.node.properties.lat, lbl.node.properties.lng);
+                  return;
+                }
+                onSelectNode(lbl.node);
+              }}
               style={{ left: `${lbl.x}px`, top: `${lbl.y}px` }}
               className={`pointer-events-auto -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
                 lbl.isSelected
@@ -418,9 +450,9 @@ export function GlobeHudOverlays({
       {!isRegionalZoom && (isMultiSliceFilter || activeGlobalMeta !== null) && (
         <section
           aria-label="Global NASA GIBS scientific Earth filter"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:left-[4.75rem] max-sm:w-[calc(100dvw-5.5rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
+          className="etg-hud-pill pointer-events-auto absolute top-2.5 left-12 z-10 max-sm:left-[3.25rem] max-sm:w-[calc(100dvw-4rem)] sm:w-[min(256px,calc(100dvw-4rem))] space-y-1.5 rounded-lg border border-border bg-surface/95 p-2 text-xs shadow-lg backdrop-blur-md"
         >
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start justify-between gap-1.5">
             <div className="flex min-w-0 items-center gap-1.5">
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${
@@ -429,9 +461,9 @@ export function GlobeHudOverlays({
                 aria-hidden="true"
               />
               <Satellite className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-              <span className="truncate font-semibold text-text-primary">
+              <span className="truncate font-semibold text-text-primary leading-tight">
                 {isMultiSliceFilter
-                  ? "NASA SVS 4-Slice Earth Composite"
+                  ? "NASA SVS 4-Slice"
                   : activeGlobalMeta?.label}
               </span>
               {globalHud.loading && (
@@ -444,18 +476,17 @@ export function GlobeHudOverlays({
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                aria-pressed={filterSmooth}
-                onClick={() => setFilterSmooth((v) => !v)}
-                title="Smooth quantized satellite contours and 1 km speckles"
-                className="hidden sm:inline-flex items-center rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[10px] font-semibold text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+                popoverTarget="etg-gibs-popover"
+                title="Switch NASA GIBS satellite layer"
+                className="hidden sm:inline-flex items-center rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
               >
-                Smooth
+                Layers…
               </button>
               <button
                 type="button"
                 onClick={() => setSatelliteMode("off")}
                 aria-label="Clear global Earth filter"
-                className="inline-flex items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
+                className="inline-flex items-center gap-0.5 rounded-sm border border-border-strong bg-surface-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
                 <span>Clear</span>
@@ -476,10 +507,10 @@ export function GlobeHudOverlays({
             </div>
           </div>
 
-          <div className="ws-numeric flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] text-text-muted">
+          <div className="ws-numeric flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[9.5px] text-text-muted">
             <span className="truncate">
               {isMultiSliceFilter
-                ? "MERRA-2 · IMERG · MODIS (Global + Borders)"
+                ? "MERRA-2 · IMERG · MODIS"
                 : activeGlobalMeta?.resolutionLabel}
             </span>
             {globalHud.dateIso && (
@@ -499,28 +530,28 @@ export function GlobeHudOverlays({
             {globalHud.error && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="text-rose-300">Archive fallback active</span>
+                <span className="text-rose-300">Archive fallback</span>
               </>
             )}
           </div>
 
           {isMultiSliceFilter ? (
-            <div className={`grid grid-cols-4 gap-1 rounded-xs border border-border bg-surface-inset p-1.5 text-[10px] ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
-              <div className="space-y-1">
-                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-emerald-800 to-lime-500" />
-                <div className="truncate font-medium text-text-primary">1. Canopy</div>
+            <div className={`grid grid-cols-4 gap-1 rounded-xs border border-border bg-surface-inset p-1 text-[9.5px] ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
+              <div className="space-y-0.5">
+                <div className="etg-colorbar-track h-1 rounded-xs bg-gradient-to-r from-emerald-800 to-lime-500" />
+                <div className="truncate font-medium text-text-primary">Canopy</div>
               </div>
-              <div className="space-y-1">
-                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-blue-900 via-cyan-400 to-amber-300" />
-                <div className="truncate font-medium text-text-primary">2. Winds</div>
+              <div className="space-y-0.5">
+                <div className="etg-colorbar-track h-1 rounded-xs bg-gradient-to-r from-blue-900 via-cyan-400 to-amber-300" />
+                <div className="truncate font-medium text-text-primary">Winds</div>
               </div>
-              <div className="space-y-1">
-                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-lime-400 via-amber-400 to-red-600" />
-                <div className="truncate font-medium text-text-primary">3. Precip. Water</div>
+              <div className="space-y-0.5">
+                <div className="etg-colorbar-track h-1 rounded-xs bg-gradient-to-r from-lime-400 via-amber-400 to-red-600" />
+                <div className="truncate font-medium text-text-primary">Precip.</div>
               </div>
-              <div className="space-y-1">
-                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-slate-600 to-slate-100" />
-                <div className="truncate font-medium text-text-primary">4. Clouds</div>
+              <div className="space-y-0.5">
+                <div className="etg-colorbar-track h-1 rounded-xs bg-gradient-to-r from-slate-600 to-slate-100" />
+                <div className="truncate font-medium text-text-primary">Clouds</div>
               </div>
             </div>
           ) : (
@@ -528,26 +559,6 @@ export function GlobeHudOverlays({
               <ColorbarLegend colorbar={activeGlobalMeta.colorbar} tempUnit={tempUnit} />
             )
           )}
-
-          <div className={`flex flex-wrap gap-1 border-t border-border pt-1.5 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
-            {QUICK_GLOBAL_FILTER_PILLS.map((pill) => {
-              const pressed =
-                pill.id === "multi_slice"
-                  ? isMultiSliceFilter
-                  : !isMultiSliceFilter && activeGlobalFilter === pill.id;
-              return (
-                <button
-                  key={pill.id}
-                  type="button"
-                  aria-pressed={pressed}
-                  onClick={() => setSatelliteMode(pill.id)}
-                  className="rounded-xs border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
-                >
-                  {pill.label}
-                </button>
-              );
-            })}
-          </div>
         </section>
       )}
 
@@ -555,41 +566,64 @@ export function GlobeHudOverlays({
       {isRegionalZoom && (
         <section
           aria-label="Regional NASA GIBS satellite overlay"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:left-[4.75rem] max-sm:w-[calc(100dvw-5.5rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
+          className="etg-hud-pill pointer-events-auto absolute top-2.5 left-12 z-10 max-sm:left-[3.25rem] max-sm:w-[calc(100dvw-4rem)] sm:w-[min(256px,calc(100dvw-4rem))] space-y-1.5 rounded-lg border border-border bg-surface/95 p-2 text-xs shadow-lg backdrop-blur-md"
         >
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start justify-between gap-1.5">
             <div className="flex min-w-0 items-center gap-1.5">
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${
                   regionalHud.error
                     ? "bg-rose-400"
-                    : regionalHud.layerId
-                      ? "bg-sky-400"
-                      : "bg-text-subtle"
+                    : regionalHud.aerialActive
+                      ? "bg-emerald-400"
+                      : regionalHud.layerId
+                        ? "bg-sky-400"
+                        : "bg-text-subtle"
                 }`}
                 aria-hidden="true"
               />
               <Satellite className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-              <span className="truncate font-semibold text-text-primary">
-                {activeGibsMeta
-                  ? activeGibsMeta.label
-                  : "Regional Vector View (Basemap Only)"}
+              <span className="truncate font-semibold text-text-primary leading-tight">
+                {regionalHud.aerialActive
+                  ? "Cloud-Free Sat"
+                  : activeGibsMeta
+                    ? activeGibsMeta.shortLabel
+                    : "Regional Vector"}
               </span>
+              {!regionalHud.aerialActive &&
+                activeGibsMeta?.isDataLayer &&
+                satelliteMode !== "off" && (
+                  <span className="shrink-0 rounded-xs border border-emerald-500/40 bg-emerald-950/70 px-1 py-0 text-[9px] font-semibold text-emerald-300">
+                    + Aerial
+                  </span>
+                )}
               {regionalHud.loading && (
                 <Loader2
-                  className="h-3.5 w-3.5 shrink-0 animate-spin text-sky-400"
-                  aria-label="Loading NASA GIBS satellite swath"
+                  className="h-3 w-3 shrink-0 animate-spin text-sky-400"
+                  aria-label="Loading high-resolution satellite imagery"
                 />
               )}
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              {canShowAerialLabels && (
+                <button
+                  type="button"
+                  aria-pressed={showPlaceLabels}
+                  onClick={() => setShowPlaceLabels((v) => !v)}
+                  className="inline-flex shrink-0 items-center rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-emerald-400/70 aria-pressed:bg-emerald-950/70 aria-pressed:text-emerald-200 cursor-pointer"
+                  title="Toggle geographic places and borders on satellite imagery"
+                >
+                  Labels
+                </button>
+              )}
               <button
                 type="button"
                 onClick={resetCamera}
-                className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
+                className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
+                title="Reset camera to global Earth view"
               >
-                <RotateCcw className="h-3 w-3" aria-hidden="true" />
-                <span>Global View</span>
+                <RotateCcw className="h-2.5 w-2.5" aria-hidden="true" />
+                <span>Global</span>
               </button>
               <button
                 type="button"
@@ -607,44 +641,111 @@ export function GlobeHudOverlays({
             </div>
           </div>
 
-          <div className="ws-numeric flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] text-text-muted">
-            <span className="truncate">
-              {activeGibsMeta ? activeGibsMeta.resolutionLabel : "50 / 150 km vector grid"}
-            </span>
-            <span aria-hidden="true">·</span>
-            <span>~{regionalHud.swathKm} km swath</span>
-            <span aria-hidden="true">·</span>
-            <span>{regionalHud.dateIso}</span>
+          <div className="ws-numeric flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[9.5px] text-text-muted">
+            {regionalHud.aerialActive ? (
+              <>
+                <span className="truncate">
+                  z{regionalHud.aerialZoom} · {regionalHud.aerialResolutionLabel}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>Alt {regionalHud.altitudeKm} km</span>
+                <span aria-hidden="true">·</span>
+                <span>~{regionalHud.swathKm} km</span>
+              </>
+            ) : (
+              <>
+                <span className="truncate">
+                  {activeGibsMeta ? activeGibsMeta.resolutionLabel : "Vector grid"}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>Alt {regionalHud.altitudeKm} km</span>
+                <span aria-hidden="true">·</span>
+                <span>{regionalHud.dateIso}</span>
+              </>
+            )}
           </div>
 
           {activeRegionalColorbar && (
             <ColorbarLegend colorbar={activeRegionalColorbar} tempUnit={tempUnit} />
           )}
 
-          <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-subtle ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
-              <span>50 km MERRA-2</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" aria-hidden="true" />
-              <span>150 km mesoscale</span>
-            </span>
+          <div
+            className={`space-y-1.5 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}
+          >
+            <div className="flex items-center justify-between gap-2 text-[9.5px] text-text-subtle">
+              <div className="flex items-center gap-2 truncate">
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
+                  <span>{depthRingLabels.inner}</span>
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-400" aria-hidden="true" />
+                  <span>{depthRingLabels.outer}</span>
+                </span>
+              </div>
+              <button
+                type="button"
+                popoverTarget="etg-gibs-popover"
+                title="Open NASA GIBS layer & spectral band picker"
+                className="shrink-0 rounded-xs border border-border bg-surface-inset px-1.5 py-px font-medium text-text-primary hover:border-sky-400 cursor-pointer"
+              >
+                {REGIONAL_SATELLITE_OPTIONS.find((o) => o.id === satelliteMode)?.label ?? earthFilterButtonLabel} ▾
+              </button>
+            </div>
+
+            <div className="grid grid-cols-4 gap-1" role="group" aria-label="Satellite zoom depth">
+              <button
+                type="button"
+                aria-pressed={
+                  regionalHud.depthTier === "corridor" || regionalHud.depthTier === "mesoscale"
+                }
+                onClick={() => zoomToDepth(DEFAULT_REGIONAL_FOCUS_RADIUS)}
+                className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+              >
+                Region
+              </button>
+              <button
+                type="button"
+                aria-pressed={regionalHud.depthTier === "metro"}
+                onClick={() => zoomToDepth(DEFAULT_SATELLITE_METRO_RADIUS)}
+                className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+              >
+                Metro
+              </button>
+              <button
+                type="button"
+                aria-pressed={regionalHud.depthTier === "city"}
+                onClick={() => zoomToDepth(DEFAULT_SATELLITE_CITY_RADIUS)}
+                className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+              >
+                City
+              </button>
+              <button
+                type="button"
+                aria-pressed={regionalHud.depthTier === "ground"}
+                onClick={() => zoomToDepth(DEFAULT_SATELLITE_STREET_RADIUS)}
+                className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+              >
+                Street
+              </button>
+            </div>
           </div>
 
           {regionalHud.error && (
             <div
               role="alert"
-              className="flex items-center justify-between gap-2 rounded-xs border border-rose-400 bg-rose-950 px-2 py-1.5 text-[11px] text-rose-300"
+              className="flex items-center justify-between gap-2 rounded-xs border border-rose-400 bg-rose-950 px-2 py-1 text-[10.5px] text-rose-300"
             >
               <span>
-                Failed to fetch NASA GIBS satellite tile — showing Blue Marble + geodesic rings.
+                {regionalHud.aerialActive
+                  ? "Failed to fetch high-res satellite tiles — showing base globe + geodesic rings."
+                  : "Failed to fetch NASA GIBS satellite tile — showing Blue Marble + geodesic rings."}
               </span>
               <button
                 type="button"
                 onClick={onRetryRegionalTile}
                 aria-label="Retry satellite tile"
-                className="shrink-0 cursor-pointer rounded-xs border border-rose-400 bg-rose-900 px-2 py-0.5 text-[10px] font-semibold text-rose-100 hover:bg-rose-800"
+                className="shrink-0 cursor-pointer rounded-xs border border-rose-400 bg-rose-900 px-1.5 py-0.5 text-[10px] font-semibold text-rose-100 hover:bg-rose-800"
               >
                 Retry
               </button>
@@ -654,58 +755,119 @@ export function GlobeHudOverlays({
           {!regionalHud.error &&
             satelliteMode !== "off" &&
             !regionalHud.layerId &&
+            !regionalHud.aerialActive &&
             Math.abs(regionalHud.centerLat) > 85 && (
-              <div className="rounded-xs border border-border-subtle bg-surface-inset px-2 py-1 text-[11px] text-text-muted">
-                NASA GIBS tile unavailable poleward of 85° (Web Mercator limit).
+              <div className="rounded-xs border border-border-subtle bg-surface-inset px-2 py-1 text-[10.5px] text-text-muted">
+                High-res satellite &amp; GIBS Web Mercator tiles unavailable poleward of 85°.
               </div>
             )}
-
-          <div
-            className={`grid grid-cols-3 gap-1 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}
-            role="group"
-            aria-label="Satellite spectral band"
-          >
-            {REGIONAL_SATELLITE_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                aria-pressed={satelliteMode === opt.id}
-                onClick={() => setSatelliteMode(opt.id)}
-                className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
         </section>
       )}
 
       {/* Left-Edge Vertical Camera Dock */}
-      <div className="absolute left-2.5 top-3 z-10 sm:left-3.5 sm:top-1/2 sm:-translate-y-1/2">
+      <div className="absolute left-2.5 top-2.5 z-10 sm:left-2.5 sm:top-1/2 sm:-translate-y-1/2">
         <GraphCameraDock
           orientation="vertical"
           showOrbitControls
           isOrbiting={autoRotate}
           onToggleOrbit={() => setAutoRotate((v) => !v)}
           onRecenter={resetCamera}
+          onSatelliteZoom={cycleSatelliteZoom}
+          isSatelliteZoom={isRegionalZoom}
           onZoomIn={zoomIn}
           onZoomOut={zoomOut}
         />
       </div>
 
-      {/* Coordinated Bottom HUD Bar: Globe Display Controls (Left) + Timeline Scrubber (Right) */}
+      {/* Coordinated Single-Row Bottom HUD Bar */}
       <div
-        className={`pointer-events-none absolute bottom-2 left-2 right-2 z-10 flex flex-wrap items-end justify-between gap-2 sm:bottom-3 sm:left-14 sm:right-4 ${
-          inspectorOpen ? "sm:right-[25.75rem] lg:right-[26.25rem]" : ""
+        className={`etg-stage-hud-row pointer-events-none absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-wrap items-center justify-between gap-1.5 sm:left-12 ${
+          inspectorOpen ? "sm:right-[22.75rem] xl:right-[23.75rem]" : "sm:right-2.5"
         } ${
           mobileSheetExpanded
             ? "max-sm:hidden"
             : inspectorOpen
-              ? "max-sm:bottom-[7.75rem]"
+              ? "max-sm:bottom-[7.5rem]"
               : ""
         }`}
       >
-        <div className="pointer-events-auto relative flex flex-col items-start gap-1.5">
+        <div className="pointer-events-auto relative flex flex-wrap items-center gap-1.5">
+          <div
+            ref={globeToolbarRef}
+            {...({ focusgroup: "toolbar wrap" } as Record<string, string>)}
+            onKeyDown={handleGlobeToolbarKeyDown}
+            onFocusCapture={handleGlobeToolbarFocusCapture}
+            role="toolbar"
+            aria-orientation="horizontal"
+            aria-label="Globe display controls"
+            className="etg-hud-pill inline-flex items-center gap-0.5 rounded-md bg-surface p-0.5 text-[11px]"
+          >
+            <button
+              type="button"
+              tabIndex={globeToolbarIdx === 0 ? 0 : -1}
+              popoverTarget="etg-globe-layers-popover"
+              aria-label="Globe layers and relation options"
+              className="etg-hud-btn inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-1.5 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
+              title="Customize globe overlays, lighting, arcs, pins, clouds, and relation categories"
+            >
+              <Layers className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
+              <span className="etg-cq-hide-narrow">Layers</span>
+            </button>
+
+            <button
+              type="button"
+              tabIndex={globeToolbarIdx === 1 ? 0 : -1}
+              onClick={cycleArcMode}
+              aria-label={ARC_FULL_LABELS[arcMode]}
+              title="Cycle globe relation arcs: Focus (selected spot), Opposite, Causal, Top 6, All, or Off"
+              className={`etg-hud-btn inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-sm border px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                arcMode === "opposite"
+                  ? "border-rose-400/50 bg-rose-950/60 text-rose-200"
+                  : arcMode === "causal"
+                    ? "border-emerald-400/50 bg-emerald-950/60 text-emerald-200"
+                    : arcMode === "dipoles" || arcMode === "all"
+                      ? "border-sky-400/50 bg-sky-950/60 text-sky-200"
+                      : "border-transparent text-text-muted hover:bg-surface-band hover:text-text-primary"
+              }`}
+            >
+              <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="etg-cq-hide-tight">{ARC_LABELS[arcMode]}</span>
+            </button>
+
+            {onToggleCompareMode && (
+              <button
+                type="button"
+                tabIndex={globeToolbarIdx === 2 ? 0 : -1}
+                aria-pressed={Boolean(compareMode)}
+                aria-label="Compare 2 spots on Earth"
+                title="Compare 2 spots on Earth"
+                onClick={onToggleCompareMode}
+                className="etg-hud-btn inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-1.5 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-cyan-400/60 aria-pressed:bg-cyan-950/60 aria-pressed:text-cyan-200 cursor-pointer"
+              >
+                <GitCompare className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="etg-cq-hide-narrow hidden sm:inline">
+                  {compareMode ? "Comparing" : "Compare"}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              tabIndex={globeToolbarIdx === (onToggleCompareMode ? 3 : 2) ? 0 : -1}
+              popoverTarget="etg-gibs-popover"
+              aria-label={earthFilterButtonLabel}
+              title="Global & regional NASA GIBS scientific Earth filters"
+              className={`etg-hud-btn inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-sm border px-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                isRegionalZoom || isMultiSliceFilter || activeGlobalFilter !== null
+                  ? "border-sky-400/50 bg-sky-950/60 text-sky-200"
+                  : "border-transparent text-text-muted hover:bg-surface-band hover:text-text-primary"
+              }`}
+            >
+              <Satellite className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
+              <span className="etg-cq-hide-tight hidden sm:inline">{earthFilterButtonLabel}</span>
+            </button>
+          </div>
+
           {(() => {
             const flagged = nodes
               .map((node) => ({
@@ -732,37 +894,32 @@ export function GlobeHudOverlays({
             const top = flagged[0];
             const isGlitch = top.cue.radarBadge === "SENSOR_GLITCH_RISK";
             const isCycle = top.cue.radarBadge === "FALSE_TREND_CYCLE";
+            const summaryTitle = `${humanizeNodeText(top.node.properties.name)} — ${formatMicroscopeNodeSummary(top.cue)}`;
+            const dotCls = isGlitch
+              ? "bg-rose-400"
+              : isCycle
+                ? "bg-violet-400"
+                : "bg-amber-400";
             return (
               <button
                 type="button"
                 onClick={() => onSelectNode(top.node)}
-                title={microscopeScan?.aiPerceptionBrief || top.cue.aiCue}
-                className={`etg-hud-pill ws-numeric inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
-                  isGlitch
-                    ? "border-rose-400 bg-rose-950 text-rose-300 hover:border-rose-300"
-                    : isCycle
-                      ? "border-violet-400 bg-purple-950 text-violet-300 hover:border-violet-300"
-                      : "border-amber-400 bg-amber-950 text-amber-300 hover:border-amber-300"
-                }`}
+                title={summaryTitle}
+                aria-label={`Focus AI Trend Microscope finding (${flagged.length} flagged): ${humanizeNodeText(top.node.properties.name)}`}
+                className="etg-hud-pill etg-hud-btn ws-numeric inline-flex h-[30px] items-center gap-1 rounded-md border-border bg-surface px-2 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
               >
-                <ScanSearch className="h-3 w-3 shrink-0" aria-hidden="true" />
-                <span>
-                  Microscope ({flagged.length}): {humanizeNodeText(top.node.properties.name)} ·{" "}
-                  {isGlitch
-                    ? "Sensor Glitch Risk"
-                    : isCycle
-                      ? `Cycle Alias ${Math.round(top.cue.dealiasing.oscillationShare * 100)}%`
-                      : `Early Onset ${Math.round(top.cue.onsetProb * 100)}%${top.cue.preMannKendallAlert ? " (Pre-MK)" : ""}`}
-                </span>
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotCls}`} aria-hidden="true" />
+                <ScanSearch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span className="etg-cq-hide-narrow">Microscope · </span>
+                <span>{flagged.length}</span>
               </button>
             );
           })()}
 
           {probedCoord && !inspectorOpen && (
-            <div className="etg-hud-pill ws-numeric inline-flex items-center gap-2 rounded-sm border-amber-400 bg-amber-950 px-2.5 py-1 font-mono text-[11px] text-amber-300">
+            <div className="etg-cq-hide-tight etg-hud-pill ws-numeric inline-flex h-[30px] items-center gap-1.5 rounded-md border-border bg-surface px-2 font-mono text-[10.5px] text-amber-300">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
               <span>
-                Probe{" "}
                 {probedCoord.lat >= 0
                   ? `${probedCoord.lat.toFixed(2)}°N`
                   : `${Math.abs(probedCoord.lat).toFixed(2)}°S`}
@@ -774,111 +931,11 @@ export function GlobeHudOverlays({
             </div>
           )}
 
-          <div
-            ref={globeToolbarRef}
-            {...({ focusgroup: "toolbar wrap" } as Record<string, string>)}
-            onKeyDown={handleGlobeToolbarKeyDown}
-            onFocusCapture={handleGlobeToolbarFocusCapture}
-            role="toolbar"
-            aria-orientation="horizontal"
-            aria-label="Globe display controls"
-            className="etg-hud-pill inline-flex flex-wrap items-center gap-1 rounded-md bg-surface p-1 text-[11px]"
-          >
-            <button
-              type="button"
-              tabIndex={globeToolbarIdx === 0 ? 0 : -1}
-              popoverTarget="etg-globe-layers-popover"
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
-              title="Customize visible globe arcs, pins, labels, clouds, and relation types"
-            >
-              <Layers className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-              <span>Layers</span>
-            </button>
-
-            <button
-              type="button"
-              tabIndex={globeToolbarIdx === 1 ? 0 : -1}
-              onClick={cycleArcMode}
-              aria-label={ARC_LABELS[arcMode]}
-              title="Cycle globe relation arcs: All, Selected spot, Opposite, Causal, Top 6, or Hidden"
-              className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
-                arcMode === "opposite"
-                  ? "border-rose-400 bg-rose-950 text-rose-300"
-                  : arcMode === "causal"
-                    ? "border-emerald-400 bg-emerald-950 text-emerald-300"
-                    : arcMode === "dipoles" || arcMode === "all"
-                      ? "border-sky-400 bg-sky-950 text-sky-300"
-                      : arcMode === "off"
-                        ? "border-transparent text-text-subtle hover:bg-surface-band hover:text-text-primary"
-                        : "border-transparent text-text-muted hover:bg-surface-band hover:text-text-primary"
-              }`}
-            >
-              <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>{ARC_LABELS[arcMode]}</span>
-            </button>
-
-            <button
-              type="button"
-              tabIndex={globeToolbarIdx === 2 ? 0 : -1}
-              aria-pressed={showClouds}
-              aria-label="Toggle 3D clouds"
-              onClick={() => setShowClouds((v) => !v)}
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-accent-fg aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
-            >
-              <Cloud className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="hidden sm:inline">Clouds</span>
-            </button>
-
-            {onToggleCompareMode && (
-              <button
-                type="button"
-                tabIndex={globeToolbarIdx === 3 ? 0 : -1}
-                aria-pressed={Boolean(compareMode)}
-                aria-label="Compare 2 spots on Earth"
-                onClick={onToggleCompareMode}
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-cyan-400 aria-pressed:bg-cyan-950 aria-pressed:text-cyan-300 cursor-pointer"
-              >
-                <GitCompare className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                <span className="hidden sm:inline">Compare 2 Spots</span>
-              </button>
-            )}
-
-            <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
-
-            <button
-              type="button"
-              tabIndex={globeToolbarIdx === (onToggleCompareMode ? 4 : 3) ? 0 : -1}
-              popoverTarget="etg-sun-popover"
-              aria-label={SUN_LABELS[sunPreset]}
-              title="Solar illumination preset"
-              className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-transparent px-2 py-1 text-[11px] font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
-            >
-              <Sun className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
-              <span className="hidden md:inline">{SUN_LABELS[sunPreset]}</span>
-            </button>
-
-            <button
-              type="button"
-              tabIndex={globeToolbarIdx === (onToggleCompareMode ? 5 : 4) ? 0 : -1}
-              popoverTarget="etg-gibs-popover"
-              aria-label={earthFilterButtonLabel}
-              title="Global & regional NASA GIBS scientific Earth filters"
-              className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
-                isRegionalZoom || isMultiSliceFilter || activeGlobalFilter !== null
-                  ? "border-sky-400 bg-sky-950 text-sky-300"
-                  : "border-transparent text-text-muted hover:bg-surface-band hover:text-text-primary"
-              }`}
-            >
-              <Satellite className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-              <span className="hidden sm:inline">{earthFilterButtonLabel}</span>
-            </button>
-          </div>
-
-          {/* Upward Layers & Relations Customization Popover */}
+          {/* Upward Layers, Lighting & Relations Customization Popover */}
           <div
             id="etg-globe-layers-popover"
             popover="auto"
-            className="etg-popover etg-popover-up w-72 space-y-3 p-3 text-xs"
+            className="etg-popover etg-popover-up w-72 space-y-2 p-2.5 text-xs"
           >
             <div>
               <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
@@ -887,11 +944,11 @@ export function GlobeHudOverlays({
               <div className="grid grid-cols-3 gap-1">
                 {(
                   [
-                    { id: "all", label: "All Links" },
                     { id: "focus", label: "Selected" },
                     { id: "opposite", label: "Opposite" },
                     { id: "causal", label: "Causal →" },
                     { id: "dipoles", label: "Top 6" },
+                    { id: "all", label: "All Links" },
                     { id: "off", label: "Hidden" },
                   ] as Array<{ id: GlobeArcMode; label: string }>
                 ).map((mode) => (
@@ -908,8 +965,43 @@ export function GlobeHudOverlays({
               </div>
             </div>
 
+            <div className="border-t border-border pt-2">
+              <div className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
+                <span>Solar Lighting</span>
+                {sunPreset === "live" && (
+                  <span className="font-mono text-[10px] text-amber-400">
+                    {liveUtcTime || "Live UTC"}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {(
+                  [
+                    { id: "live", label: "Live UTC" },
+                    { id: "daylight", label: "Full Daylight" },
+                    { id: "americas", label: "Americas" },
+                    { id: "eurasia", label: "Eurasia" },
+                    { id: "night", label: "Night Lights" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    aria-pressed={sunPreset === opt.id}
+                    onClick={() => {
+                      setSunPreset(opt.id);
+                      onFocusSunPresetCamera(opt.id);
+                    }}
+                    className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[11px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-accent-fg aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {onChangeEnabledCategories && (
-              <div className="border-t border-border pt-2.5">
+              <div className="border-t border-border pt-2">
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                   Relation Categories
                 </div>
@@ -947,7 +1039,7 @@ export function GlobeHudOverlays({
               </div>
             )}
 
-            <div className="border-t border-border pt-2.5">
+            <div className="border-t border-border pt-2">
               <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                 Globe Overlays
               </div>
@@ -968,7 +1060,7 @@ export function GlobeHudOverlays({
                     checked={showPins}
                     onChange={(e) => setShowPins(e.target.checked)}
                   />
-                  <span className="text-xs text-text-primary">Station & trend pins</span>
+                  <span className="text-xs text-text-primary">Station &amp; trend pins</span>
                 </label>
                 <label className="etg-check-label">
                   <input
@@ -992,16 +1084,27 @@ export function GlobeHudOverlays({
                   <input
                     type="checkbox"
                     className="checkbox-native"
-                    checked={sunPreset !== "daylight"}
-                    onChange={(e) => setSunPreset(e.target.checked ? "live" : "daylight")}
+                    checked={filterSmooth}
+                    onChange={(e) => setFilterSmooth(e.target.checked)}
                   />
-                  <span className="text-xs text-text-primary">Day / night terminator</span>
+                  <span className="text-xs text-text-primary">Smooth satellite pixels</span>
+                </label>
+                <label className="etg-check-label">
+                  <input
+                    type="checkbox"
+                    className="checkbox-native"
+                    checked={showPlaceLabels}
+                    onChange={(e) => setShowPlaceLabels(e.target.checked)}
+                  />
+                  <span className="text-xs text-text-primary">
+                    Place &amp; border labels (satellite zoom)
+                  </span>
                 </label>
               </div>
             </div>
 
             {onChangeTempUnit && (
-              <div className="flex items-center justify-between border-t border-border pt-2.5">
+              <div className="flex items-center justify-between border-t border-border pt-2">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                   Temperature Unit
                 </span>
@@ -1022,56 +1125,13 @@ export function GlobeHudOverlays({
             )}
           </div>
 
-          {/* Upward Lighting Popover */}
-          <div
-            id="etg-sun-popover"
-            popover="auto"
-            className="etg-popover etg-popover-up w-56 space-y-1.5 p-2.5"
-          >
-            <div className="flex items-center justify-between px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
-              <span>Solar Lighting</span>
-              {sunPreset === "live" && (
-                <span className="font-mono text-[10px] text-amber-400">{liveUtcTime}</span>
-              )}
-            </div>
-            {(
-              [
-                { id: "live", label: "Live Time (Dynamic)" },
-                { id: "daylight", label: "Full Daylight (Off)" },
-                { id: "americas", label: "Americas" },
-                { id: "eurasia", label: "Eurasia" },
-                { id: "night", label: "Night Lights" },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                aria-pressed={sunPreset === opt.id}
-                onClick={() => {
-                  setSunPreset(opt.id);
-                  onFocusSunPresetCamera(opt.id);
-                  const pop = document.getElementById("etg-sun-popover") as
-                    | (HTMLElement & { hidePopover?: () => void })
-                    | null;
-                  pop?.hidePopover?.();
-                }}
-                className="flex w-full items-center justify-between rounded-sm border border-transparent px-2.5 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-accent-fg aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
-              >
-                <span>{opt.label}</span>
-                {sunPreset === opt.id && (
-                  <span className="h-1.5 w-1.5 rounded-full bg-accent-fg" aria-hidden="true" />
-                )}
-              </button>
-            ))}
-          </div>
-
           {/* Upward Regional NASA GIBS Satellite Popover */}
           <div
             id="etg-gibs-popover"
             popover="auto"
-            className="etg-popover etg-popover-up w-64 space-y-2.5 p-2.5 text-xs"
+            className="etg-popover etg-popover-up w-72 space-y-2 p-2.5 text-xs"
           >
-            <div className="flex items-center justify-between px-1 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
+            <div className="flex items-center justify-between px-0.5 text-[10.5px] font-semibold uppercase tracking-wider text-text-subtle">
               <span>NASA GIBS Earth Filters</span>
               <span className="font-mono text-[10px] text-sky-400">
                 {isMultiSliceFilter
@@ -1091,7 +1151,7 @@ export function GlobeHudOverlays({
                   resetCamera();
                   hideGibsPopover();
                 }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-border-strong bg-surface-inset px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
+                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-border-strong bg-surface-inset px-2.5 py-1 text-[11.5px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Reset to Global View</span>
@@ -1103,24 +1163,37 @@ export function GlobeHudOverlays({
                   zoomToRegion();
                   hideGibsPopover();
                 }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-900 cursor-pointer"
+                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1 text-[11.5px] font-semibold text-sky-300 hover:bg-sky-900 cursor-pointer"
               >
                 <ScanSearch className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Zoom into Region</span>
               </button>
             )}
 
-            <div className="space-y-1 border-t border-border pt-2">
-              {REGIONAL_SATELLITE_OPTIONS.map((opt) => (
+            <div className="grid grid-cols-2 gap-1 border-t border-border pt-2">
+              {REGIONAL_SATELLITE_OPTIONS.filter((opt) => {
+                const targetCoord = isRegionalZoom
+                  ? { lat: regionalHud.centerLat, lng: regionalHud.centerLng }
+                  : probedCoord;
+                if (!targetCoord) return true;
+                if (opt.id === "sst_anomaly") {
+                  return isMarineOrCoastalSurface(targetCoord.lat, targetCoord.lng);
+                }
+                if (opt.id === "ndvi") {
+                  return hasTerrestrialSurface(targetCoord.lat, targetCoord.lng);
+                }
+                return true;
+              }).map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
                   aria-pressed={satelliteMode === opt.id}
                   onClick={() => setSatelliteMode(opt.id)}
-                  className="flex w-full items-center justify-between rounded-sm border border-transparent px-2.5 py-1 text-left text-xs font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
+                  title={opt.detail}
+                  className="flex flex-col items-start rounded-sm border border-border/60 bg-surface-inset/70 px-2 py-1 text-left text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
                 >
-                  <span>{opt.label}</span>
-                  <span className="font-mono text-[10px] text-text-faint">{opt.detail}</span>
+                  <span className="truncate w-full">{opt.label}</span>
+                  <span className="truncate w-full font-mono text-[9px] text-text-faint">{opt.detail}</span>
                 </button>
               ))}
             </div>
@@ -1128,7 +1201,7 @@ export function GlobeHudOverlays({
         </div>
 
         {timelineSlot && (
-          <div className="pointer-events-auto min-w-0 w-full flex-1 basis-[220px] sm:min-w-[260px] sm:basis-[340px] sm:max-w-[460px]">
+          <div className="pointer-events-auto min-w-0 max-sm:w-full flex-1 sm:max-w-[340px] lg:max-w-[380px]">
             {timelineSlot}
           </div>
         )}

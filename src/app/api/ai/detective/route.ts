@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEtgStore } from "@/lib/graph/etgStore";
+import { getEtgStore, type EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import {
   containsInjectionOrSpam,
   validateAndApplyGraphActionsAsync,
@@ -9,10 +9,28 @@ import {
 import { predictFromGraph } from "@/lib/graph/graphPredictor";
 import { scanTrendMicroscope } from "@/lib/graph/trendMicroscope";
 import { fetchEarthTimeSeries } from "@/lib/nasa/nasaPowerClient";
+import {
+  buildLiveTelemetryBriefingFallback,
+  sanitizeResearchDossier,
+} from "@/lib/research/dossierUtils";
+import { VERIFIED_CITATIONS } from "@/lib/research/curatedTrendDossiers";
+import {
+  buildNodeLiteratureQuery,
+  searchPeerReviewedEarthLiterature,
+  verifyAndFilterCitations,
+} from "@/lib/research/scholarlyLiteratureClient";
 import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
-import type { ETGDatasetId, GraphPredictionResult, TrendAnalysisSummary } from "@/types/etg";
+import type {
+  ETGDatasetId,
+  ETGNode,
+  ETGResearchDossier,
+  ETGScientificCitation,
+  GraphPredictionResult,
+  TrendAnalysisSummary,
+} from "@/types/etg";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 interface ChatTurn {
   role: "user" | "assistant";
@@ -89,12 +107,18 @@ function inferDeterministicActionsFromQuestion(
   return [];
 }
 
-function buildSystemInstruction(allowEdits: boolean): string {
+function buildSystemInstruction(allowEdits: boolean, synthesizeDossier = false): string {
   const base = [
     "You are the Earth Trend Detective AI inside an interactive NASA & Earth-system Knowledge Graph (ETG) workbench.",
-    "STRICT SCIENTIFIC ONTOLOGY RULE: Use ONLY the four ETG node classes — Concept (regions, Earth systems, satellites, community hardware), Signal (geo-pinned scientific observations), Insight (detected trends, dipoles, teleconnections), and Rule (corroboration gates) — along with epistemic edges (`drives_opposite`, `supersedes`, `corroborates`, `teleconnects`, etc.) and ETG Trend Microscope (`etg-trend-microscope-v1`) metrics. NEVER use SaaS or productivity terms such as Variable, Logic, Task, Goal, Doc, Note, Project, Calendar, Billing, or BKN.",
+    "STRICT SCIENTIFIC ONTOLOGY RULE: Use ONLY the four ETG node classes — Concept (regions, Earth systems, satellites, community hardware), Signal (geo-pinned scientific observations), Insight (detected trends, dipoles, teleconnections), and Rule (corroboration gates) — along with epistemic edges (`drives_opposite`, `contradicts`, `supersedes`, `corroborates`, `teleconnects`, etc.) and ETG Trend Microscope (`etg-trend-microscope-v1`) metrics. NEVER use SaaS or productivity terms such as Variable, Logic, Task, Goal, Doc, Note, Project, Calendar, Billing, or BKN.",
     "PROPORTIONALITY RULE: Match your tone and length to the user's message. If the user sends a typo/fragment (e.g. 'f'), a greeting ('hi'), or a brief question ('how many nodes?'), reply naturally in 1-2 short sentences — NEVER output a multi-paragraph telemetry report unless the user asks for analysis! When asked for scientific trend analysis, cite [uuid]s, Mann-Kendall p-values, and Theil-Sen slopes clearly.",
   ];
+
+  if (synthesizeDossier) {
+    base.push(
+      "RESEARCH DOSSIER SYNTHESIS MODE: Also include an `update_node` action targeting the focused node UUID with a structured `dossier` object: {\"abstract\":\"...\",\"physical_mechanism\":\"...\",\"empirical_findings\":[\"... (cite [uuid]s and p-values)\"],\"impacts\":[\"...\"],\"citations\":[{\"title\":\"...\",\"authors\":\"...\",\"journal\":\"...\",\"year\":2022,\"doi\":\"10.xxxx/...\"}],\"markdown_body\":\"...\",\"researched_by\":\"ai_detective\"}. Only cite real peer-reviewed studies and DOIs."
+    );
+  }
 
   if (!allowEdits) {
     base.push("Keep analytical answers concise and well-structured, citing node UUIDs in brackets.");
@@ -108,11 +132,11 @@ function buildSystemInstruction(allowEdits: boolean): string {
       "You may reference nodes created earlier in the same \"actions\" array as \"$0\", \"$1\", etc. Never propose mass deletions or unscientific edits.",
       "Respond ONLY with valid JSON matching: {\"briefing\": \"<natural response matching prompt scale>\", \"actions\": [...]}. Leave \"actions\": [] for greetings, fragments, or pure Q&A.",
       "Supported action objects:",
-      "- {\"type\":\"ingest_live_signal\",\"name\":\"...\",\"region\":\"...\",\"lat\":40.015,\"lng\":-105.2705,\"dataset\":\"nasa_power|wildfire|ocean_temp|air_quality|deforestation|hydrology\",\"connectToUuid\":\"optional-uuid|$0\",\"edgeType\":\"drives_opposite|teleconnects|corroborates|correlates_with|triggers|impacts|supports|amplifies|dampens|relates_to\",\"rationale\":\"...\"}",
+      "- {\"type\":\"ingest_live_signal\",\"name\":\"...\",\"region\":\"...\",\"lat\":40.015,\"lng\":-105.2705,\"dataset\":\"nasa_power|wildfire|ocean_temp|air_quality|deforestation|hydrology\",\"connectToUuid\":\"optional-uuid|$0\",\"edgeType\":\"drives_opposite|contradicts|teleconnects|corroborates|correlates_with|triggers|impacts|supports|amplifies|dampens|relates_to\",\"rationale\":\"...\"}",
       "- {\"type\":\"create_node\",\"label\":\"Concept|Signal|Insight|Rule\",\"name\":\"...\",\"description\":\"...\",\"region\":\"...\",\"lat\":40.0,\"lng\":-105.2,\"dataset\":\"optional\",\"relatedNodeUuids\":[\"...\"],\"rationale\":\"...\"}",
       "- {\"type\":\"create_insight\",\"name\":\"...\",\"description\":\"...\",\"region\":\"...\",\"relatedNodeUuids\":[\"...\"],\"rationale\":\"...\"}",
-      "- {\"type\":\"connect_nodes\",\"sourceUuid\":\"...|$0\",\"targetUuid\":\"...|$1\",\"edgeType\":\"drives_opposite|teleconnects|corroborates|correlates_with|triggers|impacts|supports|amplifies|dampens|relates_to\",\"rationale\":\"...\"}",
-      "- {\"type\":\"update_node\",\"uuid\":\"...\",\"name\":\"optional\",\"description\":\"optional\",\"region\":\"optional\",\"rationale\":\"...\"}",
+      "- {\"type\":\"connect_nodes\",\"sourceUuid\":\"...|$0\",\"targetUuid\":\"...|$1\",\"edgeType\":\"drives_opposite|contradicts|teleconnects|corroborates|correlates_with|triggers|impacts|supports|amplifies|dampens|relates_to\",\"rationale\":\"...\"}",
+      "- {\"type\":\"update_node\",\"uuid\":\"...\",\"name\":\"optional\",\"description\":\"optional\",\"region\":\"optional\",\"dossier\":{\"abstract\":\"...\",\"physical_mechanism\":\"...\",\"empirical_findings\":[\"...\"],\"citations\":[],\"markdown_body\":\"...\",\"researched_by\":\"ai_detective\"},\"rationale\":\"...\"}",
       "- {\"type\":\"revise_belief\",\"priorNodeUuid\":\"...\",\"newName\":\"...\",\"newDescription\":\"...\",\"rationale\":\"...\"}",
       "- {\"type\":\"discover_missing_links\",\"anchorUuid\":\"optional-uuid\",\"limit\":3}",
     ].join("\n")
@@ -150,6 +174,203 @@ function collectCitedNodes(
   return out;
 }
 
+function selectDomainCitationsForNode(node: ETGNode): ETGScientificCitation[] {
+  const p = node.properties;
+  const hay = `${p.name} ${p.description} ${p.region || ""} ${p.dataset || ""} ${(p.domain_tags ?? []).join(" ")}`.toLowerCase();
+  const cits: ETGScientificCitation[] = [];
+  const pushUnique = (c: ETGScientificCitation) => {
+    if (!cits.some((existing) => existing.doi === c.doi && existing.title === c.title)) {
+      cits.push(c);
+    }
+  };
+
+  if (
+    /arctic|polar|sea ice|utqiagvik|clyde|boreal|permafrost/.test(hay) ||
+    (typeof p.lat === "number" && p.lat >= 60)
+  ) {
+    pushUnique(VERIFIED_CITATIONS.rantanen2022Arctic);
+  }
+  if (/mackenzie|river|discharge|swot|hydro|flood|runoff|basin/.test(hay) || p.dataset === "hydrology") {
+    if (typeof p.lat === "number" && p.lat >= 55) {
+      pushUnique(VERIFIED_CITATIONS.feng2021ArcticRivers);
+    }
+  }
+  if (/chile|andes/.test(hay)) {
+    pushUnique(VERIFIED_CITATIONS.garreaud2020Chile);
+  }
+  if (/colorado|southwest|front range|boulder|denver|megadrought|vpd/.test(hay)) {
+    pushUnique(VERIFIED_CITATIONS.williams2022Megadrought);
+  }
+  if (p.dataset === "wildfire" || /wildfire|fire|aridity|vapor pressure|rh2m|vpd|smoke/.test(hay)) {
+    pushUnique(VERIFIED_CITATIONS.jain2022FireWeather);
+  }
+  if (/indian ocean|horn of africa|east africa|madagascar|maritime continent|indo-pacific|dipole/.test(hay)) {
+    pushUnique(VERIFIED_CITATIONS.saji1999Iod);
+    pushUnique(VERIFIED_CITATIONS.funk2008EastAfrica);
+  }
+  if (/atlantic|amoc|warming hole|nao|amo|subpolar|hamburg/.test(hay)) {
+    pushUnique(VERIFIED_CITATIONS.caesar2018Amoc);
+  }
+  pushUnique(VERIFIED_CITATIONS.ipccAr6Wg1);
+  return cits.slice(0, 4);
+}
+
+async function synthesizeDeterministicNodeDossier(
+  store: ReturnType<typeof getEtgStore>,
+  targetNode: ETGNode,
+  telemetry: TrendAnalysisSummary | null,
+  prediction: GraphPredictionResult | null,
+  liveLiterature: readonly ETGScientificCitation[] = []
+): Promise<{ dossier: ETGResearchDossier; updatedNode: ETGNode | null }> {
+  const snap: EtgGraphSnapshot = store.getSnapshot();
+  const nodesById = new Map(snap.nodes.map((n) => [n.uuid, n]));
+  const baseBrief = buildLiveTelemetryBriefingFallback(targetNode, snap.edges, nodesById);
+  const existingDossier = targetNode.properties.dossier;
+  const domainCitations = selectDomainCitationsForNode(targetNode);
+
+  const rawMerged: ETGScientificCitation[] = [...(existingDossier?.citations ?? [])];
+  for (const c of [...liveLiterature, ...baseBrief.citations, ...domainCitations]) {
+    if (
+      !rawMerged.some(
+        (m) => (c.doi && m.doi === c.doi) || m.title.toLowerCase() === c.title.toLowerCase()
+      )
+    ) {
+      rawMerged.push(c);
+    }
+  }
+  const { verified: verifiedCitations } = await verifyAndFilterCitations(rawMerged, {
+    timeoutMs: 2500,
+    strictDropUnverifiedNonAgency: false,
+  });
+  const mergedCitations = verifiedCitations.length > 0 ? verifiedCitations : rawMerged;
+
+  const extraFindings = [...(existingDossier?.empirical_findings ?? baseBrief.empirical_findings)];
+  if (telemetry) {
+    const telemetryBullet = `Statistical Significance Engine (${telemetry.provenance}): Theil-Sen slope ${telemetry.theilSen.slope >= 0 ? "+" : ""}${telemetry.theilSen.slope.toFixed(4)} ${telemetry.slopeUnit}, MK p=${telemetry.mannKendall.pValue.toFixed(4)} (Hamed-Rao adj p=${telemetry.mannKendall.pValueAdjusted.toFixed(4)})${telemetry.changePoint?.significant ? `, Pettitt change-point at ${telemetry.changePoint.date}` : ""}.`;
+    if (!extraFindings.some((f) => f.includes(telemetry.provenance) && f.includes("Hamed-Rao"))) {
+      extraFindings.unshift(telemetryBullet);
+    }
+  }
+  if (prediction) {
+    const predBullet = `Graph-Reading Predictor (${prediction.nextForecast.nextPeriodLabel}): forecast ${prediction.nextForecast.graphAwarePred.toFixed(2)} ± ${prediction.nextForecast.ci95HalfWidth.toFixed(2)} ${prediction.unit} (${prediction.skillLiftVsSelfPct >= 0 ? "+" : ""}${prediction.skillLiftVsSelfPct.toFixed(1)}% skill lift vs. univariate baseline).`;
+    if (!extraFindings.some((f) => f.includes("Graph-Reading Predictor"))) {
+      extraFindings.push(predBullet);
+    }
+  }
+
+  const candidateDossier = sanitizeResearchDossier({
+    abstract:
+      existingDossier?.abstract ||
+      (telemetry
+        ? `${targetNode.properties.name} (${targetNode.properties.region || `${telemetry.lat.toFixed(2)}°, ${telemetry.lng.toFixed(2)}°`}) exhibits a ${telemetry.verdict.toLowerCase()} of ${telemetry.theilSen.slope >= 0 ? "+" : ""}${telemetry.theilSen.slope.toFixed(4)} ${telemetry.slopeUnit} (MK p=${telemetry.mannKendall.pValue.toFixed(4)}, Hamed-Rao adj p=${telemetry.mannKendall.pValueAdjusted.toFixed(4)}).`
+        : baseBrief.abstract),
+    physical_mechanism: existingDossier?.physical_mechanism || baseBrief.physical_mechanism,
+    empirical_findings: extraFindings.slice(0, 10),
+    impacts: existingDossier?.impacts,
+    citations: mergedCitations,
+    markdown_body:
+      existingDossier?.markdown_body ||
+      [
+        `### Synthesis for \`${targetNode.uuid}\``,
+        "",
+        baseBrief.physical_mechanism,
+        "",
+        prediction
+          ? `Upstream graph topology currently accounts for a **${prediction.skillLiftVsSelfPct.toFixed(1)}%** predictive RMSE shift over single-node autoregression.`
+          : "All supporting signals and cross-region links remain inspectable directly inside the ETG provenance subgraph.",
+      ].join("\n"),
+    updated_at: new Date().toISOString(),
+    researched_by: existingDossier?.researched_by === "agency_curation" ? "agency_curation" : "ai_detective",
+  });
+
+  const finalDossier = candidateDossier ?? baseBrief;
+  const updatedNode = store.updateNode(targetNode.uuid, { dossier: finalDossier });
+  return { dossier: finalDossier, updatedNode };
+}
+
+async function sanitizeProposedActionCitations(
+  actions: ProposedGraphAction[]
+): Promise<ProposedGraphAction[]> {
+  const out: ProposedGraphAction[] = [];
+  for (const act of actions) {
+    if (
+      act &&
+      typeof act === "object" &&
+      act.type === "update_node" &&
+      act.dossier &&
+      typeof act.dossier === "object" &&
+      Array.isArray(act.dossier.citations) &&
+      act.dossier.citations.length > 0
+    ) {
+      const { verified } = await verifyAndFilterCitations(
+        act.dossier.citations as ETGScientificCitation[],
+        { timeoutMs: 2500, strictDropUnverifiedNonAgency: false }
+      );
+      out.push({
+        ...act,
+        dossier: {
+          ...act.dossier,
+          citations: verified,
+        },
+      });
+    } else {
+      out.push(act);
+    }
+  }
+  return out;
+}
+
+async function executeDetectiveActionsAndDossier(params: {
+  store: ReturnType<typeof getEtgStore>;
+  rawActions: ProposedGraphAction[];
+  wantsDossier: boolean;
+  targetNode: ETGNode | undefined;
+  telemetry: TrendAnalysisSummary | null;
+  prediction: GraphPredictionResult | null;
+  liveLiterature: readonly ETGScientificCitation[];
+}): Promise<{ applied: AppliedGraphActionResult[]; blocked: AppliedGraphActionResult[] }> {
+  const sanitizedActions = await sanitizeProposedActionCitations(params.rawActions);
+  const { applied, blocked } = await validateAndApplyGraphActionsAsync(
+    params.store,
+    sanitizedActions
+  );
+  if (params.wantsDossier && params.targetNode) {
+    const alreadyUpdated = applied.some(
+      (a) =>
+        a.action.type === "update_node" &&
+        a.action.uuid === params.targetNode!.uuid &&
+        Boolean(a.action.dossier)
+    );
+    if (!alreadyUpdated) {
+      const synth = await synthesizeDeterministicNodeDossier(
+        params.store,
+        params.targetNode,
+        params.telemetry,
+        params.prediction,
+        params.liveLiterature
+      );
+      if (synth.updatedNode) {
+        applied.push({
+          action: {
+            type: "update_node",
+            uuid: params.targetNode.uuid,
+            dossier: synth.dossier,
+            rationale: "Synthesized literature-grounded scientific dossier",
+          },
+          verdict: {
+            allowed: true,
+            rule: "ALLOWED_HELPFUL_MUTATION",
+            reason: "Synthesized scientific dossier on focused node.",
+          },
+          createdNodeUuid: params.targetNode.uuid,
+          summary: `Attached synthesized scientific dossier to "${params.targetNode.properties.name}" [${params.targetNode.uuid}]`,
+        });
+      }
+    }
+  }
+  return { applied, blocked };
+}
+
 const MAX_DETECTIVE_PROMPT_CHARS = 16_000;
 
 export async function POST(req: NextRequest) {
@@ -173,6 +394,7 @@ export async function POST(req: NextRequest) {
       dataset?: unknown;
       question?: unknown;
       applyEdits?: unknown;
+      synthesizeDossier?: unknown;
       proposedActions?: ProposedGraphAction[];
     };
 
@@ -313,9 +535,29 @@ export async function POST(req: NextRequest) {
       brief: microscope.aiPerceptionBrief,
     };
 
-    const allowEdits = body.applyEdits !== false;
+    const wantsDossier = body.synthesizeDossier === true;
+    const allowEdits = body.applyEdits !== false || wantsDossier;
     const explicitActions = Array.isArray(body.proposedActions) ? body.proposedActions : [];
-    const systemPrompt = buildSystemInstruction(allowEdits);
+    const systemPrompt = buildSystemInstruction(allowEdits, wantsDossier);
+
+    const wantsLiveLiterature =
+      !casualPrompt &&
+      (wantsDossier ||
+        /\b(paper|papers|literature|study|studies|cite|citation|doi|peer-reviewed|evidence|contradict)\b/i.test(
+          userPrompt
+        ));
+    let liveLiterature: ETGScientificCitation[] = [];
+    if (wantsLiveLiterature && targetNode) {
+      try {
+        liveLiterature = await searchPeerReviewedEarthLiterature(
+          buildNodeLiteratureQuery(targetNode),
+          3,
+          { timeoutMs: 2200 }
+        );
+      } catch {
+        liveLiterature = [];
+      }
+    }
 
     const buildGraphContextSnapshot = () =>
       [
@@ -347,6 +589,14 @@ export async function POST(req: NextRequest) {
                   `${p.source.properties.name} [${p.source.uuid}] -> ${p.target.properties.name} [${p.target.uuid}] (r=${p.correlationR ?? "N/A"}): ${p.rationale}`
               )
               .join(" | ")}`
+          : "",
+        liveLiterature.length > 0
+          ? `Verified Peer-Reviewed Literature (Crossref / Europe PMC):\n${liveLiterature
+              .map(
+                (c) =>
+                  `- "${c.title}" (${c.authors}, ${c.year})${c.doi ? ` [DOI: ${c.doi}]` : ""}${typeof c.citation_count === "number" ? ` (${c.citation_count} citations)` : ""}`
+              )
+              .join("\n")}`
           : "",
         snapshot.nodes.length > 0
           ? `Available Graph Nodes (sample):\n${snapshot.nodes
@@ -461,10 +711,15 @@ export async function POST(req: NextRequest) {
             const combinedActions = allowEdits
               ? [...explicitActions, ...parsed.actions]
               : [];
-            const { applied, blocked } = await validateAndApplyGraphActionsAsync(
+            const { applied, blocked } = await executeDetectiveActionsAndDossier({
               store,
-              combinedActions
-            );
+              rawActions: combinedActions,
+              wantsDossier,
+              targetNode: selectedNode,
+              telemetry,
+              prediction,
+              liveLiterature,
+            });
             const freshSnap = applied.length > 0 ? store.getSnapshot() : snapshot;
             return NextResponse.json({
               engine: "DeepSeek Chat + ETG Integrity Guard",
@@ -535,10 +790,15 @@ export async function POST(req: NextRequest) {
             const combinedActions = allowEdits
               ? [...explicitActions, ...parsed.actions]
               : [];
-            const { applied, blocked } = await validateAndApplyGraphActionsAsync(
+            const { applied, blocked } = await executeDetectiveActionsAndDossier({
               store,
-              combinedActions
-            );
+              rawActions: combinedActions,
+              wantsDossier,
+              targetNode: selectedNode,
+              telemetry,
+              prediction,
+              liveLiterature,
+            });
             const freshSnap = applied.length > 0 ? store.getSnapshot() : snapshot;
             return NextResponse.json({
               engine: `${geminiModel} + ETG Integrity Guard`,
@@ -573,14 +833,19 @@ export async function POST(req: NextRequest) {
           ),
         ]
       : [];
-    const { applied, blocked } = await validateAndApplyGraphActionsAsync(
+    const { applied, blocked } = await executeDetectiveActionsAndDossier({
       store,
-      deterministicActions
-    );
+      rawActions: deterministicActions,
+      wantsDossier,
+      targetNode,
+      telemetry,
+      prediction,
+      liveLiterature,
+    });
     const freshSnap = applied.length > 0 ? store.getSnapshot() : snapshot;
 
     // Proportional friendly response for short/casual messages when no edits happened
-    if (casualPrompt && applied.length === 0 && blocked.length === 0) {
+    if (casualPrompt && !wantsDossier && applied.length === 0 && blocked.length === 0) {
       const reply =
         userPrompt.length <= 3
           ? `Hey! Looks like a brief message ("${userPrompt}"). Ask about an Earth trend or tell me to add a live signal, create a node, or connect links (${snapshot.stats.totalNodes}N · ${snapshot.stats.totalEdges}E).`

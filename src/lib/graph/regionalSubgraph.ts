@@ -120,6 +120,8 @@ export function classifyRegionStringKind(
   if (
     isCoordOnlyRegion(trimmed) ||
     /^swot swath\s*\(/i.test(trimmed) ||
+    /\bcorridor\s*\(\d+\s*km\)/i.test(trimmed) ||
+    /\bredteam\b/i.test(trimmed) ||
     /^(wildfire|severe storm|volcano|flood|drought|dust and haze|sea and lake ice|landslide|manmade|snow|water color)s?\s*[-–—:]/i.test(
       trimmed
     ) ||

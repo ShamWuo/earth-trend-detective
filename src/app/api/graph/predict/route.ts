@@ -4,6 +4,7 @@ import { predictFromGraph, predictRegion } from "@/lib/graph/graphPredictor";
 import type { ETGDatasetId, GraphPredictionResult } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 interface PredictRequestParams {
   format?: string;

@@ -241,7 +241,10 @@ export function queryGraphOp(
     }
 
     if (searchLower) {
-      const hay = `${node.properties.name} ${node.properties.description} ${node.properties.region || ""} ${node.label}`.toLowerCase();
+      const citText = (node.properties.dossier?.citations ?? [])
+        .map((c) => `${c.title} ${c.authors} ${c.doi || ""}`)
+        .join(" ");
+      const hay = `${node.properties.name} ${node.properties.description} ${node.properties.region || ""} ${node.label} ${node.properties.dossier?.abstract || ""} ${node.properties.dossier?.physical_mechanism || ""} ${citText}`.toLowerCase();
       if (!hay.includes(searchLower)) return false;
     }
     return true;

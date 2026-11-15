@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
+import { validateDatasetForSurface } from "@/lib/earth/surfaceMask";
 import {
   fetchCurrentEarthConditionsDetailed,
   inferEmbeddedSeriesUnits,
@@ -27,6 +28,9 @@ import type {
   TrendAnalysisSummary,
 } from "@/types/etg";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+
 const VALID_DATASET_IDS = new Set<ETGDatasetId>([
   "nasa_power",
   "wildfire",
@@ -36,8 +40,6 @@ const VALID_DATASET_IDS = new Set<ETGDatasetId>([
   "hydrology",
   "community",
 ]);
-
-export const dynamic = "force-dynamic";
 
 function analyzeEmbeddedNodeSeries(
   node: ETGNode,
@@ -364,9 +366,22 @@ export async function GET(req: NextRequest) {
         ? null
         : "unavailable";
 
+    const primarySurfaceCheck =
+      resolvedLat !== null && resolvedLng !== null
+        ? validateDatasetForSurface(dataset, resolvedLat, resolvedLng)
+        : null;
+    const primaryApplicable = primarySurfaceCheck ? primarySurfaceCheck.applicable : true;
+
     const climatologicalFallback =
-      !primary && resolvedLat !== null && resolvedLng !== null
-        ? buildClimatologicalTrendSummary(resolvedLat, resolvedLng, dataset)
+      !primary &&
+      resolvedLat !== null &&
+      resolvedLng !== null &&
+      (primaryApplicable || hasFetchFailure)
+        ? buildClimatologicalTrendSummary(
+            resolvedLat,
+            resolvedLng,
+            primaryApplicable ? dataset : "nasa_power"
+          )
         : null;
 
     const resolvedProvenanceMode =
@@ -420,10 +435,15 @@ export async function GET(req: NextRequest) {
     const fault = classifyUpstreamFault(err, dataset ?? "nasa_power");
     budget.recordFault(fault);
     if (resolvedLat !== null && resolvedLng !== null) {
+      const fallbackSurface = validateDatasetForSurface(
+        dataset,
+        resolvedLat,
+        resolvedLng
+      );
       const climatologicalFallback = buildClimatologicalTrendSummary(
         resolvedLat,
         resolvedLng,
-        dataset
+        fallbackSurface.applicable ? dataset : "nasa_power"
       );
       return NextResponse.json({
         primary: climatologicalFallback,

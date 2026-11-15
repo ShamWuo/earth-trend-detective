@@ -188,23 +188,27 @@ export function WorkbenchQuickAddNodeForm({
   };
 
   return (
-    <div className="etg-hud-pill max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-md bg-surface shadow-2xl">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Plus className="h-4 w-4 text-accent-fg" />
-          <h2 className="text-sm font-semibold text-text-primary">Add Phenomenon to Graph</h2>
+    <div className="etg-hud-pill flex max-h-[calc(100dvh-4.25rem)] flex-col overflow-hidden rounded-md bg-surface shadow-2xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <Plus className="h-3.5 w-3.5 text-accent-fg" />
+          <h2 className="text-[13px] font-semibold text-text-primary">Add Phenomenon to Graph</h2>
         </div>
         <button
           type="button"
           onClick={onCloseQuickAdd}
           aria-label="Close node creator"
-          className="rounded-sm p-1 text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
+          className="etg-hud-btn inline-flex h-7 w-7 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      <form onSubmit={handleCreateNodeSubmit} className="space-y-3 p-3.5 text-xs">
+      <form
+        onSubmit={handleCreateNodeSubmit}
+        className="flex min-h-0 flex-1 flex-col text-xs"
+      >
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-2.5">
         <div>
           <label htmlFor={`${baseId}-new-name`} className="ws-eyebrow mb-1 block">
             Title
@@ -420,13 +424,16 @@ export function WorkbenchQuickAddNodeForm({
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-sm bg-accent px-3 py-2 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
-        >
-          {busy ? "Publishing Phenomenon…" : "Create Node in Knowledge Graph"}
-        </button>
+        </div>
+        <div className="shrink-0 border-t border-border bg-surface px-2.5 py-2">
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full rounded-sm bg-accent px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+          >
+            {busy ? "Publishing Phenomenon…" : "Create Node in Knowledge Graph"}
+          </button>
+        </div>
       </form>
     </div>
   );

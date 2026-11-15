@@ -1,5 +1,6 @@
 import path from "node:path";
 import { inferEarthSphere } from "@/lib/graph/cascadeTracer";
+import { resolveRuntimeDataDir } from "@/lib/runtimePaths";
 import {
   ETG_NODE_LABELS,
   FORBIDDEN_SAAS_LABELS,
@@ -15,7 +16,7 @@ import {
   type TimeSeriesPoint,
 } from "@/types/etg";
 
-export const DEFAULT_DATA_DIR = path.join(process.cwd(), ".data");
+export const DEFAULT_DATA_DIR = resolveRuntimeDataDir();
 export const LEGACY_CACHE_DIR = path.join(process.cwd(), ".etg-cache");
 export const STATE_FILENAME = "etg-state.json";
 export const SERIES_FILENAME = "etg-series.json";
@@ -487,6 +488,14 @@ export function computeEtgNodeTrustScore(node: ETGNode): number {
         ? Math.min(0.14, (lift / 25) * 0.14)
         : Math.max(-0.32, Math.min(0, (lift + 2) * 0.03))
       : 0;
+  const contraCount =
+    typeof node.properties.contradicting_sources_count === "number"
+      ? node.properties.contradicting_sources_count
+      : node.properties.contested
+        ? 1
+        : 0;
+  const contestedPenalty =
+    contraCount > 0 ? Math.min(0.18, contraCount * 0.06) : 0;
 
   if (
     typeof node.properties.trust_score === "number" &&
@@ -494,7 +503,10 @@ export function computeEtgNodeTrustScore(node: ETGNode): number {
   ) {
     const corrBonus = node.properties.corroborated ? 0.05 : 0;
     return Number(
-      Math.max(0.15, Math.min(1, node.properties.trust_score + corrBonus + liftAdj)).toFixed(4)
+      Math.max(
+        0.15,
+        Math.min(1, node.properties.trust_score + corrBonus + liftAdj - contestedPenalty)
+      ).toFixed(4)
     );
   }
 
@@ -521,7 +533,7 @@ export function computeEtgNodeTrustScore(node: ETGNode): number {
   if (typeof node.properties.p_value === "number" && node.properties.p_value < 0.05) {
     score += 0.04;
   }
-  score += liftAdj;
+  score += liftAdj - contestedPenalty;
   return Number(Math.max(0.15, Math.min(1, score)).toFixed(4));
 }
 

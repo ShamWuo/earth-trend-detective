@@ -51,17 +51,17 @@
   --blueprint-line: rgba(255, 255, 255, 0.045);
 
   /* Chromatic Foregrounds (AA contrast on Obsidian Dark) */
-  --fg-emerald-200: #a7f3d0;  --fg-emerald-300: #6ee7b7;  --fg-emerald-400: #34d399;
+  --fg-emerald-100: #d1fae5;  --fg-emerald-200: #a7f3d0;  --fg-emerald-300: #6ee7b7;  --fg-emerald-400: #34d399;
   --fg-rose-100:    #ffe4e6;  --fg-rose-200:    #fecdd3;  --fg-rose-300:    #fda4af;  --fg-rose-400:    #fb7185;
   --fg-amber-100:   #fef3c7;  --fg-amber-200:   #fde68a;  --fg-amber-300:   #fcd34d;  --fg-amber-400:   #fbbf24;
   --fg-sky-100:     #e0f2fe;  --fg-sky-200:     #bae6fd;  --fg-sky-300:     #7dd3fc;  --fg-sky-400:     #38bdf8;
-  --fg-indigo-300:  #c7d2fe;  --fg-indigo-400:  #a5b4fc;
-  --fg-purple-300:  #d8b4fe;  --fg-purple-400:  #c084fc;
-  --fg-violet-200:  #ddd6fe;  --fg-violet-300:  #c4b5fd;  --fg-violet-400:  #a78bfa;
-  --fg-cyan-300:    #67e8f9;  --fg-cyan-400:    #22d3ee;
-  --fg-blue-300:    #93c5fd;  --fg-blue-400:    #60a5fa;
-  --fg-orange-300:  #fdba74;  --fg-orange-400:  #fb923c;
-  --fg-teal-300:    #5eead4;  --fg-teal-400:    #2dd4bf;
+  --fg-indigo-200:  #c7d2fe;  --fg-indigo-300:  #c7d2fe;  --fg-indigo-400:  #a5b4fc;
+  --fg-purple-200:  #e9d5ff;  --fg-purple-300:  #d8b4fe;  --fg-purple-400:  #c084fc;
+  --fg-violet-100:  #ede9fe;  --fg-violet-200:  #ddd6fe;  --fg-violet-300:  #c4b5fd;  --fg-violet-400:  #a78bfa;
+  --fg-cyan-100:    #cffafe;  --fg-cyan-200:    #a5f3fc;  --fg-cyan-300:    #67e8f9;  --fg-cyan-400:    #22d3ee;
+  --fg-blue-200:    #bfdbfe;  --fg-blue-300:    #93c5fd;  --fg-blue-400:    #60a5fa;
+  --fg-orange-200:  #fed7aa;  --fg-orange-300:  #fdba74;  --fg-orange-400:  #fb923c;
+  --fg-teal-200:    #99f6e4;  --fg-teal-300:    #5eead4;  --fg-teal-400:    #2dd4bf;
 
   --fg-emerald-950: #022c22;
   --fg-rose-800: #9f1239;    --fg-rose-900: #881337;    --fg-rose-950: #4c0519;
@@ -109,17 +109,17 @@
     --button-primary-text: #ffffff;
     --blueprint-line: rgba(29, 78, 216, 0.045);
 
-    --fg-emerald-200: #064e3b;  --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
+    --fg-emerald-100: #064e3b;  --fg-emerald-200: #064e3b;  --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
     --fg-rose-100:    #881337;  --fg-rose-200:    #9f1239;  --fg-rose-300:    #881337;  --fg-rose-400:    #9f1239;
     --fg-amber-100:   #78350f;  --fg-amber-200:   #92400e;  --fg-amber-300:   #78350f;  --fg-amber-400:   #92400e;
-    --fg-sky-100:     #075985;  --fg-sky-200:     #0c4a6e;  --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
-    --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
-    --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
-    --fg-violet-200:  #4c1d95;  --fg-violet-300:  #5b21b6;  --fg-violet-400:  #6d28d9;
-    --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
-    --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
-    --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
-    --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
+    --fg-sky-100:     #0c4a6e;  --fg-sky-200:     #0c4a6e;  --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
+    --fg-indigo-200:  #312e81;  --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
+    --fg-purple-200:  #581c87;  --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
+    --fg-violet-100:  #4c1d95;  --fg-violet-200:  #4c1d95;  --fg-violet-300:  #5b21b6;  --fg-violet-400:  #6d28d9;
+    --fg-cyan-100:    #164e63;  --fg-cyan-200:    #155e75;  --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
+    --fg-blue-200:    #1e3a8a;  --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
+    --fg-orange-200:  #7c2d12;  --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
+    --fg-teal-200:    #134e4a;  --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
 
     --fg-emerald-950: #ecfdf5;
     --fg-rose-800: #fecdd3;    --fg-rose-900: #ffe4e6;    --fg-rose-950: #fff1f2;
@@ -165,17 +165,17 @@
   --button-primary-text: #ffffff;
   --blueprint-line: rgba(29, 78, 216, 0.045);
 
-  --fg-emerald-200: #064e3b;  --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
+  --fg-emerald-100: #064e3b;  --fg-emerald-200: #064e3b;  --fg-emerald-300: #064e3b;  --fg-emerald-400: #065f46;
   --fg-rose-100:    #881337;  --fg-rose-200:    #9f1239;  --fg-rose-300:    #881337;  --fg-rose-400:    #9f1239;
   --fg-amber-100:   #78350f;  --fg-amber-200:   #92400e;  --fg-amber-300:   #78350f;  --fg-amber-400:   #92400e;
-  --fg-sky-100:     #075985;  --fg-sky-200:     #0c4a6e;  --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
-  --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
-  --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
-  --fg-violet-200:  #4c1d95;  --fg-violet-300:  #5b21b6;  --fg-violet-400:  #6d28d9;
-  --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
-  --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
-  --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
-  --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
+  --fg-sky-100:     #0c4a6e;  --fg-sky-200:     #0c4a6e;  --fg-sky-300:     #0c4a6e;  --fg-sky-400:     #075985;
+  --fg-indigo-200:  #312e81;  --fg-indigo-300:  #312e81;  --fg-indigo-400:  #3730a3;
+  --fg-purple-200:  #581c87;  --fg-purple-300:  #581c87;  --fg-purple-400:  #6b21a8;
+  --fg-violet-100:  #4c1d95;  --fg-violet-200:  #4c1d95;  --fg-violet-300:  #5b21b6;  --fg-violet-400:  #6d28d9;
+  --fg-cyan-100:    #164e63;  --fg-cyan-200:    #155e75;  --fg-cyan-300:    #164e63;  --fg-cyan-400:    #155e75;
+  --fg-blue-200:    #1e3a8a;  --fg-blue-300:    #1e3a8a;  --fg-blue-400:    #1e40af;
+  --fg-orange-200:  #7c2d12;  --fg-orange-300:  #7c2d12;  --fg-orange-400:  #9a3412;
+  --fg-teal-200:    #134e4a;  --fg-teal-300:    #134e4a;  --fg-teal-400:    #115e59;
 
   --fg-emerald-950: #ecfdf5;
   --fg-rose-800: #fecdd3;    --fg-rose-900: #ffe4e6;    --fg-rose-950: #fff1f2;

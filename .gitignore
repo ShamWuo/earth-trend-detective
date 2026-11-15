@@ -5,9 +5,11 @@ node_modules/
 .next/
 out/
 
-# Local ETG persistence cache
+# Local ETG persistence cache & blind export staging
 .etg-cache/
 .data/
+.blind-export/
+ml/weights/*.onnx
 __pycache__/
 
 # Env

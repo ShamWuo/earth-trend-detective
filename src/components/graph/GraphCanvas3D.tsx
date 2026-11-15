@@ -80,8 +80,8 @@ export function GraphCanvas3D({
   const prefersReducedMotion =
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const [isOrbiting, setIsOrbiting] = useState(!prefersReducedMotion);
-  const isOrbitingRef = useRef(!prefersReducedMotion);
+  const [isOrbiting, setIsOrbiting] = useState(false);
+  const isOrbitingRef = useRef(false);
   isOrbitingRef.current = isOrbiting;
   const inspectorOpenRef = useRef(inspectorOpen);
   inspectorOpenRef.current = inspectorOpen;
@@ -363,7 +363,7 @@ export function GraphCanvas3D({
 
     // Interaction: pointer orbit, right/middle/shift pan, WASD free-flight, click pick
     const raycaster = new THREE.Raycaster();
-    raycaster.params.Line = { threshold: 3.6 };
+    raycaster.params.Line = { threshold: 1.4 };
     const pointerNdc = new THREE.Vector2();
     let isDragging = false;
     let isPanning = false;
@@ -531,7 +531,7 @@ export function GraphCanvas3D({
         e.clientX - pointerDownPos.x,
         e.clientY - pointerDownPos.y
       );
-      if (draggedDistance < 6 && totalMove < 6 && e.button === 0) {
+      if (draggedDistance < 10 && totalMove < 10 && e.button === 0) {
         const { nodeUuid: hitUuid, edge: hitEdge } = pickTargetAt(e.clientX, e.clientY);
         if (hitUuid) {
           const found = focusStateRef.current.nodeById.get(hitUuid);
@@ -550,6 +550,10 @@ export function GraphCanvas3D({
         } else if (hitEdge && onSelectEdgeRef.current) {
           onSelectEdgeRef.current(hitEdge);
         } else {
+          hoveredUuidRef.current = null;
+          hoveredEdgeUuidRef.current = null;
+          setHoveredUuid(null);
+          setHoveredEdgeUuid(null);
           onClearSelectionRef.current?.();
         }
       }
@@ -1025,8 +1029,8 @@ export function GraphCanvas3D({
         {/* Floating clickable + Wire pill suggestions for discovered candidate links in 3D */}
         {candidateLinks.length > 0 && onAcceptCandidateLink && (
           <div
-            className={`pointer-events-auto absolute bottom-4 z-20 flex max-w-xs flex-col gap-1.5 ${
-              inspectorOpen ? "right-4 lg:right-[27rem]" : "right-4"
+            className={`pointer-events-auto absolute bottom-3 z-20 flex max-w-sm flex-col gap-1 ${
+              inspectorOpen ? "right-3 sm:right-[23rem] xl:right-[24rem]" : "right-3"
             }`}
           >
             {candidateLinks.slice(0, 3).map((cand) => (
@@ -1034,10 +1038,20 @@ export function GraphCanvas3D({
                 key={cand.id}
                 type="button"
                 onClick={() => onAcceptCandidateLink(cand)}
-                className="etg-hud-pill flex items-center justify-between gap-2 rounded-md border border-violet-400 bg-surface px-3 py-1.5 text-left text-[11px] hover:border-violet-300 cursor-pointer"
+                title={`+ Wire: ${humanizeNodeText(cand.sourceName)} → ${humanizeNodeText(cand.targetName)}`}
+                className="etg-hud-pill flex items-center justify-between gap-1.5 rounded-md border border-violet-400 bg-surface px-2.5 py-1 text-left text-[10.5px] hover:border-violet-300 cursor-pointer"
               >
-                <span className="truncate text-text-primary">
-                  + Wire: {cand.sourceName.slice(0, 14)} → {cand.targetName.slice(0, 14)}
+                <span className="flex min-w-0 items-center gap-1 text-text-primary">
+                  <span className="shrink-0 font-semibold text-violet-300">+ Wire:</span>
+                  <span className="min-w-0 max-w-[7.75rem] truncate">
+                    {humanizeNodeText(cand.sourceName)}
+                  </span>
+                  <span className="shrink-0 text-text-muted" aria-hidden="true">
+                    →
+                  </span>
+                  <span className="min-w-0 max-w-[7.75rem] truncate">
+                    {humanizeNodeText(cand.targetName)}
+                  </span>
                 </span>
                 <span className="shrink-0 font-mono ws-numeric text-[10px] text-violet-300">
                   {cand.pearsonR !== undefined ? `r=${cand.pearsonR.toFixed(2)}` : `${Math.round(cand.score * 100)}%`}
@@ -1057,7 +1071,7 @@ export function GraphCanvas3D({
         const src = nodeById.get(activeEdge.source_uuid);
         const tgt = nodeById.get(activeEdge.target_uuid);
         return (
-          <div className="etg-hud-pill pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md bg-surface px-3.5 py-2 text-xs shadow-lg">
+          <div className="etg-hud-pill pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-md bg-surface px-2.5 py-1 text-[11px] shadow-lg">
             <div
               className={`flex items-center gap-2 font-semibold ${
                 activeEdge.type === "drives_opposite"
@@ -1099,7 +1113,7 @@ export function GraphCanvas3D({
       })()}
 
       {/* Left-Edge Vertical Camera Dock */}
-      <div className="absolute left-3.5 top-1/2 z-10 -translate-y-1/2">
+      <div className="absolute left-2.5 top-1/2 z-10 -translate-y-1/2">
         <GraphCameraDock
           orientation="vertical"
           showOrbitControls

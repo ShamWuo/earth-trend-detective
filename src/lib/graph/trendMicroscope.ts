@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRuntimeDataDir } from "@/lib/runtimePaths";
 import type {
   ETGDatasetId,
   ETGEdge,
@@ -590,21 +591,28 @@ export function loadLocalTrendMicroscopeWeights(options?: {
   rootDir?: string;
 }): PortableTrendMicroscopeWeightsV1 | null {
   if (!options?.rootDir) {
-    const dataPath = path.join(process.cwd(), ".data", "etg-trend-microscope-v1.json");
-    try {
-      if (fs.existsSync(dataPath)) {
-        const stat = fs.statSync(dataPath);
-        if (
-          cachedMicroscopeWeights?.filePath === dataPath &&
-          cachedMicroscopeWeights.mtimeMs === stat.mtimeMs
-        ) {
-          return cachedMicroscopeWeights.weights;
+    const runtimeOverrideCandidates = Array.from(
+      new Set([
+        path.join(resolveRuntimeDataDir(), "etg-trend-microscope-v1.json"),
+        path.join(process.cwd(), ".data", "etg-trend-microscope-v1.json"),
+      ])
+    );
+    for (const dataPath of runtimeOverrideCandidates) {
+      try {
+        if (fs.existsSync(dataPath)) {
+          const stat = fs.statSync(dataPath);
+          if (
+            cachedMicroscopeWeights?.filePath === dataPath &&
+            cachedMicroscopeWeights.mtimeMs === stat.mtimeMs
+          ) {
+            return cachedMicroscopeWeights.weights;
+          }
+          const hit = parseMicroscopeWeightsV1(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
+          if (hit) return hit;
         }
-        const hit = parseMicroscopeWeightsV1(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
-        if (hit) return hit;
+      } catch {
+        // Fall through to tracked weights bundle
       }
-    } catch {
-      // Fall through to tracked weights bundle
     }
 
     const trackedPath = path.join(process.cwd(), "ml", "weights", "etg-trend-microscope-v1.json");
@@ -1047,7 +1055,8 @@ export function scanTrendMicroscope(
 
   const activeNodes: ActiveSeriesNode[] = [];
   for (const n of mergedNodes) {
-    const s = n.properties.series ?? store.getNodeSeries(n.uuid);
+    const rawSeries = n.properties.series ?? store.getNodeSeries(n.uuid);
+    const s = rawSeries?.filter((pt) => Number.isFinite(pt.t) && Number.isFinite(pt.value));
     if (!s || s.length < 6) continue;
     const scale = inferNodeTemporalScale(n, s);
     const trust = store.computeNodeTrustScore

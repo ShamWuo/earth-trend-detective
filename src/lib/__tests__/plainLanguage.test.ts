@@ -8,6 +8,8 @@ import {
   findNearbyFilteredNodes,
   formatCompactLag,
   formatCoordShort,
+  formatMicroscopeLinkSummary,
+  formatMicroscopeNodeSummary,
   formatRelationForDisplay,
   humanizeNodeText,
 } from "@/lib/plainLanguage";
@@ -16,6 +18,8 @@ import type {
   ETGEdge,
   ETGNode,
   ETGRelationshipType,
+  LinkTrendMicroscopeCue,
+  NodeTrendMicroscopeCue,
   TrendAnalysisSummary,
 } from "@/types/etg";
 
@@ -377,7 +381,7 @@ describe("plainLanguage translators", () => {
     expect(rainDigest.anomalyFormatted).toBe("+0.50 mm/d");
   });
 
-  it("classifies all 16 ETGRelationshipTypes and formats directional vs symmetric relations", () => {
+  it("classifies all 17 ETGRelationshipTypes and formats directional vs symmetric relations", () => {
     const allTypes: ETGRelationshipType[] = [
       "drives_opposite",
       "leads",
@@ -391,6 +395,7 @@ describe("plainLanguage translators", () => {
       "relates_to",
       "hypothesized_link",
       "corroborates",
+      "contradicts",
       "supports",
       "verified_by",
       "monitors",
@@ -403,6 +408,7 @@ describe("plainLanguage translators", () => {
     expect(classifyRelationCategory("leads")).toBe("causal");
     expect(classifyRelationCategory("teleconnects")).toBe("coupled");
     expect(classifyRelationCategory("corroborates")).toBe("corroboration");
+    expect(classifyRelationCategory("contradicts")).toBe("corroboration");
 
     const anchorNode: ETGNode = {
       uuid: "node-a",
@@ -575,5 +581,80 @@ describe("plainLanguage translators", () => {
     expect(formatCompactLag(1, "years")).toBe("1 yr");
     expect(formatCompactLag(-5, "days")).toBe("-5 d");
     expect(formatCompactLag(3, "months")).toBe("3 mos");
+  });
+
+  it("ignores legacy Corridor/redteam labels and formats Microscope cues in plain language", () => {
+    const legacyNode: ETGNode = {
+      uuid: "signal-solar-cheyenne-n",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "Cheyenne, WY Solar Flux",
+        description: "Solar station",
+        region: "N Corridor (156 km)",
+        lat: 41.14,
+        lng: -104.82,
+        importance: 7,
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const redteamNode: ETGNode = {
+      uuid: "signal-redteam-1",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "redteam test",
+        description: "legacy",
+        region: "redteam",
+        lat: 40.0,
+        lng: -105.0,
+        importance: 5,
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    expect(describeGeographicZone(41.14, -104.82, [legacyNode])).not.toContain("Corridor");
+    expect(describeGeographicZone(41.14, -104.82, [legacyNode])).toBe("Northern Mid-Latitudes");
+    expect(describeGeographicZone(40.0, -105.0, [redteamNode])).not.toContain("redteam");
+
+    const nodeCue: NodeTrendMicroscopeCue = {
+      uuid: "n1",
+      name: "Denver Solar",
+      radarBadge: "SENSOR_GLITCH_RISK",
+      onsetProb: 0.2,
+      preMannKendallAlert: false,
+      mkAbsZ: 1.4,
+      emergingDirection: "decreasing",
+      leadStepsAhead: 2,
+      dealiasing: {
+        secularShare: 0.12,
+        oscillationShare: 0.31,
+        artifactShare: 0.57,
+        falseTrendProb: 0.88,
+      },
+      trustGate: 0.45,
+      aiCue: "[n1] badge=SENSOR_GLITCH_RISK | z_mk=1.4",
+    };
+    const nodeSummary = formatMicroscopeNodeSummary(nodeCue);
+    expect(nodeSummary).toContain("57%");
+    expect(nodeSummary).not.toContain("badge=");
+    expect(nodeSummary).not.toContain("z_mk=");
+
+    const linkCue: LinkTrendMicroscopeCue = {
+      sourceUuid: "a",
+      targetUuid: "b",
+      sourceName: "Niño 3.4",
+      targetName: "Amazon",
+      alreadyWired: false,
+      trueCouplingProb: 0.14,
+      confounderProb: 0.82,
+      polarity: "none",
+      optimalLagSteps: 1,
+      rawPeakR: 0.74,
+      cleanPeakR: 0.18,
+      aiCue: "raw_r=0.74 P_illusion=82%",
+    };
+    const linkSummary = formatMicroscopeLinkSummary(linkCue);
+    expect(linkSummary).toContain("82%");
+    expect(linkSummary).not.toContain("P_illusion");
   });
 });

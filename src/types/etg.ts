@@ -38,7 +38,8 @@ export type ETGRelationshipType =
   | "advects_to"
   | "triggers"
   | "impacts"
-  | "hypothesized_link";
+  | "hypothesized_link"
+  | "contradicts";
 
 export type ETGPhenomenonType =
   | "climate_trend"
@@ -74,10 +75,46 @@ export interface ETGDatasetMeta {
   whyItMatters: string;
 }
 
+export interface ETGScientificCitation {
+  title: string;
+  authors: string;
+  journal?: string;
+  year: number;
+  doi?: string;
+  url?: string;
+  doi_verified?: boolean;
+  citation_count?: number;
+  verified_at?: string;
+  source?: "crossref" | "openalex" | "europe_pmc" | "curated";
+  abstract_snippet?: string;
+  claim_stance?: "supports" | "neutral" | "challenges";
+  stance_rationale?: string;
+}
+
+export interface ETGResearchDossier {
+  /** 1-3 sentence executive scientific summary */
+  abstract: string;
+  /** Radiative, atmospheric, oceanic, cryospheric, or hydrological mechanism */
+  physical_mechanism: string;
+  /** Quantitative empirical bullets citing MK p-values, Theil-Sen slopes, r/r*, and [node-uuid]s */
+  empirical_findings: string[];
+  /** Downstream ecological, cryospheric, hydrological, or societal Earth impacts */
+  impacts?: string[];
+  /** Peer-reviewed scientific literature & agency assessment citations */
+  citations: ETGScientificCitation[];
+  /** Optional long-form Markdown narrative body (<= 16,000 chars) */
+  markdown_body?: string;
+  /** ISO 8601 timestamp of synthesis/revision */
+  updated_at: string;
+  /** Authoring provenance */
+  researched_by?: "agency_curation" | "ai_detective" | "human";
+}
+
 export interface ETGNodeProperties {
   name: string;
   concept_name?: string;
   description: string;
+  dossier?: ETGResearchDossier;
   status?: "Active" | "Provisional" | "Superseded" | "Monitoring";
   importance?: number;
   lat?: number;
@@ -119,6 +156,9 @@ export interface ETGNodeProperties {
   source_system?: string;
   corroborated?: boolean;
   independent_sources_count?: number;
+  effective_independent_sources?: number;
+  contradicting_sources_count?: number;
+  contested?: boolean;
   tags?: string[];
   custom_metadata?: Record<string, string | number | boolean>;
   [key: string]: unknown;
@@ -149,6 +189,11 @@ export interface ETGEdgeProperties {
   causal_polarity?: "positive" | "negative" | "complex";
   custom_label?: string;
   predictive_lift_pct?: number;
+  p_value?: number;
+  fdr_q_value?: number;
+  partial_r?: number;
+  multivariate_partial_r?: number;
+  mediated_by?: string;
   cross_scale?: boolean;
   valid_from?: string;
   superseded_at?: string;
@@ -436,6 +481,8 @@ export interface CrossRegionComparison {
   classification: "opposite_teleconnection" | "co_trending" | "decoupled";
   isSecularDriftOnly?: boolean;
   fdrQValue?: number;
+  effectiveN?: number;
+  partialR?: number;
   alignedPoints: Array<{
     date: string;
     zA: number;
@@ -489,8 +536,16 @@ export interface CorroborationAudit {
     label: ETGNodeLabel;
     producerType: ETGProducerType;
   }>;
+  contradictingSources?: Array<{
+    uuid: string;
+    name: string;
+    label: ETGNodeLabel;
+    producerType: ETGProducerType;
+  }>;
   distinctProducerTypes: ETGProducerType[];
+  effectiveIndependentSources?: number;
   corroborated: boolean;
+  contested?: boolean;
   requiredSources: number;
   gateRuleUuid: string;
 }

@@ -69,6 +69,7 @@ export function IngestionModal({
   const [whUnit, setWhUnit] = useState("");
   const [whDataset, setWhDataset] = useState<ETGDatasetId>("community");
   const [whStatus, setWhStatus] = useState<string>("");
+  const [whLiveTelemetryBanner, setWhLiveTelemetryBanner] = useState<string>("");
 
   // Community Submission state (no hardcoded coordinates)
   const [obsName, setObsName] = useState("");
@@ -240,6 +241,116 @@ export function IngestionModal({
     }
   };
 
+  const ingestLiveGroundStation = async () => {
+    setRunning(true);
+    setWhStatus("");
+    setWhLiveTelemetryBanner("");
+    const stationId = "kden-denver-ground-01";
+    const stationLat = 39.74;
+    const stationLng = -104.99;
+    try {
+      const omUrl =
+        `https://api.open-meteo.com/v1/forecast?latitude=${stationLat}&longitude=${stationLng}` +
+        `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation&wind_speed_unit=ms`;
+      const omRes = await fetch(omUrl);
+      if (!omRes.ok) {
+        throw new Error(`Live station telemetry HTTP ${omRes.status}`);
+      }
+      const omJson = (await omRes.json()) as {
+        current?: {
+          time?: string;
+          temperature_2m?: number;
+          relative_humidity_2m?: number;
+          wind_speed_10m?: number;
+          shortwave_radiation?: number;
+        };
+      };
+      const cur = omJson.current;
+      const tempC =
+        typeof cur?.temperature_2m === "number" && Number.isFinite(cur.temperature_2m)
+          ? Number(cur.temperature_2m.toFixed(2))
+          : null;
+      if (tempC === null) {
+        throw new Error("Live station telemetry returned missing temperature_2m reading");
+      }
+      const swWm2 =
+        typeof cur?.shortwave_radiation === "number" && Number.isFinite(cur.shortwave_radiation)
+          ? Number(cur.shortwave_radiation.toFixed(1))
+          : null;
+      const rhPct =
+        typeof cur?.relative_humidity_2m === "number" && Number.isFinite(cur.relative_humidity_2m)
+          ? Number(cur.relative_humidity_2m.toFixed(0))
+          : null;
+      const wsMs =
+        typeof cur?.wind_speed_10m === "number" && Number.isFinite(cur.wind_speed_10m)
+          ? Number(cur.wind_speed_10m.toFixed(1))
+          : null;
+
+      let nwsDesc: string | null = null;
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2500);
+        const nwsRes = await fetch("https://api.weather.gov/stations/KDEN/observations/latest", {
+          headers: { Accept: "application/geo+json" },
+          signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (nwsRes.ok) {
+          const nwsJson = (await nwsRes.json()) as { properties?: { textDescription?: string } };
+          if (typeof nwsJson?.properties?.textDescription === "string" && nwsJson.properties.textDescription.trim()) {
+            nwsDesc = nwsJson.properties.textDescription.trim();
+          }
+        }
+      } catch {
+        // Optional NWS METAR enrichment falls back to Open-Meteo surface telemetry
+      }
+
+      const observedAt =
+        typeof cur?.time === "string" && cur.time.length >= 10
+          ? cur.time.endsWith("Z")
+            ? cur.time
+            : `${cur.time}:00Z`
+          : new Date().toISOString();
+
+      setWhNodeId(stationId);
+      setWhDataset("nasa_power");
+      setWhLat(String(stationLat));
+      setWhLng(String(stationLng));
+      setWhValue(String(tempC));
+      setWhUnit("°C");
+
+      const liveTitle = `Live Ground Station (Denver KDEN): ${tempC} °C${swWm2 !== null ? `, ${swWm2} W/m²` : ""}${rhPct !== null ? `, RH ${rhPct}%` : ""}${wsMs !== null ? `, Wind ${wsMs} m/s` : ""}${nwsDesc ? ` · NWS: ${nwsDesc}` : ""}`;
+      setWhLiveTelemetryBanner(`${liveTitle} · Observed ${observedAt}`);
+
+      const res = await fetch(`/api/graph/nodes/${encodeURIComponent(stationId)}/webhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device_id: stationId,
+          dataset: "nasa_power",
+          lat: stationLat,
+          lng: stationLng,
+          value: tempC,
+          unit: "°C",
+          confidence: nwsDesc ? 0.96 : 0.93,
+          observed_at: observedAt,
+          title: liveTitle,
+        }),
+      });
+      const data = await res.json();
+      setWhStatus(
+        res.ok
+          ? `Ingested live ground-station Signal "${data.signalNode?.uuid}" · linked to ${data.linkedInsights?.length ?? 0} trend(s).`
+          : data.error || "Live station webhook failed"
+      );
+      if (res.ok) await onIngested();
+    } catch (err) {
+      setWhStatus(err instanceof Error ? err.message : "Live ground-station fetch failed");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const submitCommunitySignal = async (e: React.FormEvent) => {
     e.preventDefault();
     setRunning(true);
@@ -374,7 +485,7 @@ export function IngestionModal({
     >
       <div ref={contentRef} className="flex flex-1 min-h-0 flex-col bg-surface text-text-primary">
       {/* Dialog Header */}
-      <div className="flex items-center justify-between border-b border-border bg-surface-band px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border bg-surface-band px-3.5 py-2">
         <div>
           <h2 id={titleId} className="text-sm font-semibold text-text-primary">
             Real Dataset, Hardware &amp; AI-Native Ingestion
@@ -387,7 +498,7 @@ export function IngestionModal({
           type="button"
           onClick={() => dialogRef.current?.close("close-button")}
           aria-label="Close ingestion modal"
-          className="inline-flex h-8 w-8 items-center justify-center rounded border border-border text-text-muted hover:text-text-primary cursor-pointer"
+          className="etg-hud-btn inline-flex h-7 w-7 items-center justify-center rounded border border-border text-text-muted hover:text-text-primary cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
@@ -398,7 +509,7 @@ export function IngestionModal({
         role="tablist"
         aria-label="Data ingestion channels"
         onKeyDown={handleTabKeyDown}
-        className="etg-tablist bg-surface text-xs"
+        className="etg-tablist !gap-1 !px-3.5 bg-surface text-xs"
       >
         <button
           ref={(el) => {
@@ -411,9 +522,9 @@ export function IngestionModal({
           aria-controls={`${baseId}-panel-dataset`}
           tabIndex={tab === "dataset" ? 0 : -1}
           onClick={() => setTab("dataset")}
-          className="etg-tab flex items-center gap-1.5"
+          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
         >
-          <FileSpreadsheet className="h-3.5 w-3.5" />
+          <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
           Dataset Import
         </button>
         <button
@@ -427,9 +538,9 @@ export function IngestionModal({
           aria-controls={`${baseId}-panel-agencies`}
           tabIndex={tab === "agencies" ? 0 : -1}
           onClick={() => setTab("agencies")}
-          className="etg-tab flex items-center gap-1.5"
+          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
         >
-          <Satellite className="h-3.5 w-3.5" />
+          <Satellite className="h-3.5 w-3.5 shrink-0" />
           Agency Hub (12)
         </button>
         <button
@@ -443,9 +554,9 @@ export function IngestionModal({
           aria-controls={`${baseId}-panel-mcp`}
           tabIndex={tab === "mcp" ? 0 : -1}
           onClick={() => setTab("mcp")}
-          className="etg-tab flex items-center gap-1.5"
+          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
         >
-          <Bot className="h-3.5 w-3.5" />
+          <Bot className="h-3.5 w-3.5 shrink-0" />
           MCP &amp; OpenAPI (16)
         </button>
         <button
@@ -459,9 +570,9 @@ export function IngestionModal({
           aria-controls={`${baseId}-panel-webhook`}
           tabIndex={tab === "webhook" ? 0 : -1}
           onClick={() => setTab("webhook")}
-          className="etg-tab flex items-center gap-1.5"
+          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
         >
-          <Cpu className="h-3.5 w-3.5" />
+          <Cpu className="h-3.5 w-3.5 shrink-0" />
           Sensor Webhook
         </button>
         <button
@@ -475,22 +586,22 @@ export function IngestionModal({
           aria-controls={`${baseId}-panel-community`}
           tabIndex={tab === "community" ? 0 : -1}
           onClick={() => setTab("community")}
-          className="etg-tab flex items-center gap-1.5"
+          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
         >
-          <Globe2 className="h-3.5 w-3.5" />
+          <Globe2 className="h-3.5 w-3.5 shrink-0" />
           Field Signal
         </button>
       </div>
 
       {/* Scroll Body — padding lives inside child containers, never directly on [role="tabpanel"] */}
-      <div className="flex-1 overflow-y-auto text-xs">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain text-xs">
         <div
           id={`${baseId}-panel-dataset`}
           role="tabpanel"
           aria-labelledby={`${baseId}-tab-dataset`}
           hidden={tab !== "dataset"}
         >
-          <div className="space-y-4 p-4">
+          <div className="space-y-3 p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
                 <div className="font-semibold text-text-primary">
@@ -607,7 +718,7 @@ export function IngestionModal({
                 <textarea
                   id={`${baseId}-ds-content`}
                   name="dataset_content"
-                  rows={6}
+                  rows={4}
                   required
                   placeholder={"name,lat,lng,year,value,unit,dataset\nBoreal Station,61.2,-149.9,2000,-1.2,°C,nasa_power\n..."}
                   value={dsContent}
@@ -651,7 +762,7 @@ export function IngestionModal({
           aria-labelledby={`${baseId}-tab-agencies`}
           hidden={tab !== "agencies"}
         >
-          <div className="space-y-4 p-4">
+          <div className="space-y-3 p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
                 <div className="font-semibold text-text-primary">
@@ -762,7 +873,7 @@ export function IngestionModal({
           aria-labelledby={`${baseId}-tab-mcp`}
           hidden={tab !== "mcp"}
         >
-          <div className="space-y-3 p-4">
+          <div className="space-y-2.5 p-3.5">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <div className="ws-inset p-2">
                 <div className="ws-eyebrow">Streamable HTTP</div>
@@ -890,7 +1001,31 @@ export function IngestionModal({
           aria-labelledby={`${baseId}-tab-webhook`}
           hidden={tab !== "webhook"}
         >
-          <div className="p-4">
+          <div className="space-y-2.5 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-text-primary">
+                Live Ground-Station Telemetry -&gt; Webhook
+              </div>
+              <div className="mt-0.5 text-[11px] text-text-muted">
+                Pulls real-time surface observations (Denver KDEN / Open-Meteo irradiance, temperature, RH, wind) and ingests into the ETG graph with provenance.
+              </div>
+              {whLiveTelemetryBanner && (
+                <div className="mt-1.5 font-mono text-[11px] text-sky-300">
+                  {whLiveTelemetryBanner}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => void ingestLiveGroundStation()}
+              disabled={running}
+              className="inline-flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+            >
+              <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{running ? "Streaming…" : "Fetch & Ingest Live KDEN"}</span>
+            </button>
+          </div>
           <form onSubmit={sendWebhook} className="space-y-3">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
@@ -1020,8 +1155,8 @@ export function IngestionModal({
           aria-labelledby={`${baseId}-tab-community`}
           hidden={tab !== "community"}
         >
-          <div className="p-4">
-          <form onSubmit={submitCommunitySignal} className="space-y-3">
+          <div className="p-3.5">
+          <form onSubmit={submitCommunitySignal} className="space-y-2.5">
             <div>
               <label htmlFor={`${baseId}-obs-name`} className="ws-eyebrow mb-1 block">
                 Observation Title

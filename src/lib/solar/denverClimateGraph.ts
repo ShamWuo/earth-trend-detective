@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRuntimeDataDir } from "@/lib/runtimePaths";
 import {
   classifyHttpStatusFault,
   classifyUpstreamFault,
@@ -8,6 +9,10 @@ import {
   type TelemetryBudget,
 } from "@/lib/earth/upstreamResilience";
 import type { UpstreamFaultDetail } from "@/types/etg";
+import {
+  loadGlobalGnnSummary,
+  predictLatestGlobalGnnTomorrow,
+} from "./globalGnnInference";
 
 export interface ClimateGraphNode {
   id: string;
@@ -26,17 +31,18 @@ export interface DailyWeatherRow {
   allsky: number; // ALLSKY_SFC_SW_DWN (kWh/m^2/day)
   clrsky: number; // CLRSKY_SFC_SW_DWN (kWh/m^2/day)
   kt: number; // Clearness index = allsky / max(clrsky, 0.5)
+  cloudAmt?: number; // NASA POWER CLOUD_AMT (%)
   t2m: number; // C
   rh2m: number; // %
   precip: number; // mm/day
   ws10m: number; // m/s
   wd10m: number; // degrees FROM which wind blows (0=N, 90=E, 180=S, 270=W)
   ps?: number; // surface pressure kPa
-  eveCloudPct?: number; // 18:00-23:00 America/Denver mean cloud cover (%)
-  eveCloud23Pct?: number; // 23:00 America/Denver cloud cover (%)
-  eveRhPct?: number; // 18:00-23:00 America/Denver mean relative humidity (%)
-  eveWsMs?: number; // 18:00-23:00 America/Denver mean wind speed (m/s)
-  eveWdDeg?: number; // 23:00 America/Denver wind direction (deg)
+  eveCloudPct?: number; // 18:00-23:00 local solar mean cloud cover (%)
+  eveCloud23Pct?: number; // 23:00 local solar cloud cover (%)
+  eveRhPct?: number; // 18:00-23:00 local solar mean relative humidity (%)
+  eveWsMs?: number; // 18:00-23:00 local solar mean wind speed (m/s)
+  eveWdDeg?: number; // 23:00 local solar wind direction (deg)
   evePsTrendHpa?: number; // 23:00 minus 18:00 surface pressure tendency (hPa)
 }
 
@@ -107,6 +113,55 @@ export interface FailureCase {
   explanation: string;
 }
 
+export interface GlobalGnnTomorrowPrediction {
+  modelId: string;
+  variant: "denver_adapter" | "zeroshot";
+  p10: number;
+  q268: number;
+  p50: number;
+  p90: number;
+  probStormPct: number;
+  prechargeRecommended: boolean;
+  inferenceMs: number;
+}
+
+export interface GlobalGnnBenchmarkSummary {
+  modelId: string;
+  paramCount: number;
+  trainCities: number;
+  totalStations: number;
+  global5CityMeanSkillPct: number;
+  global5CityCities: Array<{
+    cityId: string;
+    name: string;
+    regime: string;
+    nTest: number;
+    persistenceRmse: number;
+    localEveRmse: number;
+    rmse: number;
+    skillPct: number;
+    pVsLocalEve: number;
+  }>;
+  denverZeroshot?: {
+    rmse: number;
+    skillPct: number;
+    stormF1: number;
+    stormRecallPct: number;
+    savingsUsd: number;
+  };
+  denverAdapted?: {
+    rmse: number;
+    skillPct: number;
+    stormF1: number;
+    stormRecallPct: number;
+    savingsUsd: number;
+    pVsPersistence: number;
+    pVsLocalEve: number;
+    pCostVsLocalEve: number;
+  };
+  nTestDays: number;
+}
+
 export interface TomorrowDecision {
   forecastDate: string;
   latestObservedDate: string;
@@ -129,6 +184,7 @@ export interface TomorrowDecision {
   windFromDeg: number;
   windSpeedMs: number;
   rationale: string;
+  globalGnn?: GlobalGnnTomorrowPrediction;
 }
 
 export interface SolarGraphAnalysisResult {
@@ -160,6 +216,9 @@ export interface SolarGraphAnalysisResult {
   tomorrow: TomorrowDecision;
   economics: MicrogridEconomicSummary;
   topFailure: FailureCase;
+  globalGnnBenchmark?: GlobalGnnBenchmarkSummary;
+  isDynamicLocation?: boolean;
+  targetCoords?: { lat: number; lng: number };
   provenanceMode?: "live" | "cached" | "climatological_fallback";
   upstreamFault?: UpstreamFaultDetail;
   upstreamFaults?: UpstreamFaultDetail[];
@@ -671,15 +730,27 @@ function pairedSquaredErrorPValue(
 export function runThreeWaySolarEvaluation(
   seriesByNode: Record<string, DailyWeatherRow[]>,
   splitYyyymmdd = "20250101",
-  liveBridgeSource = "NASA POWER Daily (CERES SYN1deg & MERRA-2)"
+  liveBridgeSource = "NASA POWER Daily (CERES SYN1deg & MERRA-2)",
+  options?: {
+    nodes?: ClimateGraphNode[];
+    cityLabel?: string;
+    isDenver?: boolean;
+  }
 ): SolarGraphAnalysisResult {
-  const rawTargetSeries = seriesByNode["denver-target"];
+  const evalNodes =
+    options?.nodes && options.nodes.length === 7 ? options.nodes : DENVER_CLIMATE_NODES;
+  const targetNode = evalNodes[0];
+  const isDenver = options?.isDenver ?? targetNode.id === "denver-target";
+  const cityLabel =
+    options?.cityLabel ?? (isDenver ? "Denver, CO (Front Range)" : targetNode.name);
+
+  const rawTargetSeries = seriesByNode[targetNode.id] ?? seriesByNode["denver-target"];
   if (!rawTargetSeries || rawTargetSeries.length < 60) {
-    throw new Error("Insufficient Denver target observations for 3-way evaluation.");
+    throw new Error(`Insufficient target observations (${targetNode.name}) for 3-way evaluation.`);
   }
   const targetSeries = [...rawTargetSeries].sort((a, b) => a.date.localeCompare(b.date));
 
-  const neighborNodes = DENVER_CLIMATE_NODES.filter((n) => n.role === "upwind_neighbor");
+  const neighborNodes = evalNodes.filter((n) => n.role === "upwind_neighbor");
   const neighborMaps = new Map<string, Map<string, DailyWeatherRow>>();
   for (const node of neighborNodes) {
     const m = new Map<string, DailyWeatherRow>();
@@ -773,7 +844,13 @@ export function runThreeWaySolarEvaluation(
       const nPrecip = nRow ? nRow.precip : 0;
       const nEve = nRow ? resolveEvening(nRow) : eve;
 
-      const w = computeUpwindWeight(today.wd10m, node.lat, node.lng);
+      const w = computeUpwindWeight(
+        today.wd10m,
+        node.lat,
+        node.lng,
+        targetNode.lat,
+        targetNode.lng
+      );
       upwindKtNum += w * nKt;
       upwindPrecipNum += w * Math.min(nPrecip, 30);
       upwindKtDen += w;
@@ -781,7 +858,13 @@ export function runThreeWaySolarEvaluation(
       if (nPrecip > maxNeighborPrecip) maxNeighborPrecip = nPrecip;
       neighborKts.push(nKt);
 
-      const wEve = computeUpwindWeight(eve.eveWdDeg, node.lat, node.lng);
+      const wEve = computeUpwindWeight(
+        eve.eveWdDeg,
+        node.lat,
+        node.lng,
+        targetNode.lat,
+        targetNode.lng
+      );
       upwindEveCloudNum += wEve * nEve.eveCloud23Pct;
       upwindEveRhNum += wEve * nEve.eveRhPct;
       upwindEveDen += wEve;
@@ -1101,14 +1184,20 @@ export function runThreeWaySolarEvaluation(
   let dominantUpwindNode = "None (calm)";
   let bestWeight = -1;
   const latestNeighborMap = new Map<string, DailyWeatherRow>();
-  const enrichedNodes = DENVER_CLIMATE_NODES.map((node) => {
+  const enrichedNodes = evalNodes.map((node) => {
     const nSeries = seriesByNode[node.id] ?? [];
     const nLatest = nSeries[nSeries.length - 1] ?? latest;
     latestNeighborMap.set(node.id, nLatest);
     const w =
       node.role === "target"
         ? 1.0
-        : computeUpwindWeight(latestEve.eveWdDeg, node.lat, node.lng);
+        : computeUpwindWeight(
+            latestEve.eveWdDeg,
+            node.lat,
+            node.lng,
+            targetNode.lat,
+            targetNode.lng
+          );
     if (node.role === "upwind_neighbor" && w > bestWeight) {
       bestWeight = w;
       dominantUpwindNode = `${node.name} (${node.direction})`;
@@ -1143,6 +1232,84 @@ export function runThreeWaySolarEvaluation(
       ? 60
       : 35;
 
+  const gnnPred = predictLatestGlobalGnnTomorrow(
+    evalNodes,
+    seriesByNode,
+    isDenver ? "denver_adapter" : "zeroshot"
+  );
+  const globalGnn = gnnPred
+    ? {
+        modelId: "etg-global-gnn-v3",
+        variant: gnnPred.variant,
+        p10: Number(gnnPred.p10.toFixed(2)),
+        q268: Number(gnnPred.q268.toFixed(2)),
+        p50: Number(gnnPred.p50.toFixed(2)),
+        p90: Number(gnnPred.p90.toFixed(2)),
+        probStormPct: Number((gnnPred.stormProb * 100).toFixed(1)),
+        prechargeRecommended:
+          gnnPred.q268 < LOW_SOLAR_THRESHOLD_KWH || gnnPred.stormProb >= 0.27,
+        inferenceMs: gnnPred.inferenceMs,
+      }
+    : undefined;
+
+  const summary = loadGlobalGnnSummary();
+  let globalGnnBenchmark: GlobalGnnBenchmarkSummary | undefined;
+  if (summary) {
+    const cities = (summary.global_5city_benchmark ?? []).map((c) => ({
+      cityId: c.city_id,
+      name: c.name,
+      regime: c.regime,
+      nTest: c.n_test,
+      persistenceRmse: c.persistence_rmse,
+      localEveRmse: c.local_eve_rmse,
+      rmse: c.global_gnn_rmse,
+      skillPct: c.global_gnn_skill_pct,
+      pVsLocalEve: c.p_vs_local_eve,
+    }));
+    const meanSkill =
+      cities.length > 0
+        ? Number(
+            (cities.reduce((acc, c) => acc + c.skillPct, 0) / cities.length).toFixed(2)
+          )
+        : 0;
+    const zs = summary.denver_showcase?.global_gnn_zeroshot;
+    const ad = summary.denver_showcase?.global_gnn_adapted;
+    globalGnnBenchmark = {
+      modelId: "etg-global-gnn-v3",
+      paramCount: 2_043_212,
+      trainCities: summary.train_cities,
+      totalStations: summary.total_stations,
+      global5CityMeanSkillPct: meanSkill,
+      global5CityCities: cities,
+      ...(zs
+        ? {
+            denverZeroshot: {
+              rmse: zs.rmse,
+              skillPct: zs.skill_pct,
+              stormF1: zs.storm_f1,
+              stormRecallPct: zs.storm_capture_recall_pct,
+              savingsUsd: zs.savings_usd ?? 0,
+            },
+          }
+        : {}),
+      ...(ad
+        ? {
+            denverAdapted: {
+              rmse: ad.rmse,
+              skillPct: ad.skill_pct,
+              stormF1: ad.storm_f1,
+              stormRecallPct: ad.storm_capture_recall_pct,
+              savingsUsd: ad.savings_usd ?? 0,
+              pVsPersistence: ad.p_vs_persistence ?? 1,
+              pVsLocalEve: ad.p_vs_local_eve ?? 1,
+              pCostVsLocalEve: ad.p_cost_vs_local_eve ?? 1,
+            },
+          }
+        : {}),
+      nTestDays: summary.denver_showcase?.n_test ?? 0,
+    };
+  }
+
   const tomorrow: TomorrowDecision = {
     forecastDate: nextIsoDate(latest.date),
     latestObservedDate: formatIsoDate(latest.date),
@@ -1167,6 +1334,7 @@ export function runThreeWaySolarEvaluation(
     rationale: chargeBatteryOvernight
       ? `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d; P(ALLSKY < 3.5) = ${tmrGraphRisk.probStormPct.toFixed(1)}%) is below calibrated threshold ${tauGraph.toFixed(2)} kWh/m²/d with upwind flow from ${dominantUpwindNode}. Bayes expected shortfall penalty ($${tmrGraphRisk.expectedShortfallPenaltyUsd.toFixed(2)} at $0.205/kWh) vs. false-cycle risk ($${tmrGraphRisk.expectedFalsePrechargeCostUsd.toFixed(2)} from $26.25 cycle). Pre-charge to ${recommendedReservePct}% overnight.`
       : `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d; P(ALLSKY < 3.5) = ${tmrGraphRisk.probStormPct.toFixed(1)}%) clears the calibrated ${tauGraph.toFixed(2)} kWh/m²/d threshold. Bayes rule (${tmrGraphRisk.bayesOptimalPrecharge ? "PRE-CHARGE" : "HOLD"}) compares $${tmrGraphRisk.expectedShortfallPenaltyUsd.toFixed(2)} expected shortfall ($0.205/kWh) vs. $${tmrGraphRisk.expectedFalsePrechargeCostUsd.toFixed(2)} false-cycle cost ($26.25 cycle). Keep overnight reserve at ${recommendedReservePct}%.`,
+    ...(globalGnn ? { globalGnn } : {}),
   };
 
   const recentTestSeries = testSamples.slice(-45).map((s, idx) => {
@@ -1182,10 +1350,14 @@ export function runThreeWaySolarEvaluation(
   });
 
   return {
-    city: "Denver, CO (Front Range)",
-    userPersona: "Denver K-12 School / Community Microgrid Operator",
+    city: cityLabel,
+    userPersona: isDenver
+      ? "Denver K-12 School / Community Microgrid Operator"
+      : `${cityLabel} Community / Facility Solar Microgrid Operator`,
     decisionRule: `Pre-charge backup battery overnight if Graph+Evening forecast < ${tauGraph.toFixed(2)} kWh/m²/day (calibrated for true < ${LOW_SOLAR_THRESHOLD_KWH} kWh/m²/day events)`,
-    dataSource: "NASA POWER Daily (CERES/MERRA-2) + Open-Meteo Evening Hourly (18:00–23:00 MST)",
+    dataSource: isDenver
+      ? "NASA POWER Daily (CERES/MERRA-2) + Open-Meteo Evening Hourly (18:00–23:00 MST)"
+      : `NASA POWER Daily (CERES/MERRA-2) + Live 7-Node Ring Forecast (${targetNode.lat.toFixed(2)}°, ${targetNode.lng.toFixed(2)}°)`,
     trainRange: `${formatIsoDate(trainSamples[0].nextDate)} to ${formatIsoDate(trainSamples[trainSamples.length - 1].nextDate)}`,
     testRange: `${formatIsoDate(testSamples[0].nextDate)} to ${formatIsoDate(testSamples[testSamples.length - 1].nextDate)}`,
     trainDays: trainSamples.length,
@@ -1196,13 +1368,28 @@ export function runThreeWaySolarEvaluation(
     tomorrow,
     economics,
     topFailure,
+    ...(globalGnnBenchmark ? { globalGnnBenchmark } : {}),
+    isDynamicLocation: !isDenver,
+    targetCoords: {
+      lat: Number(targetNode.lat.toFixed(4)),
+      lng: Number(targetNode.lng.toFixed(4)),
+    },
     recentTestSeries,
   };
 }
 
 const SOLAR_CACHE = new Map<string, { expiresAt: number; result: SolarGraphAnalysisResult }>();
 const SOLAR_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
-const SOLAR_CACHE_FILE = path.join(process.cwd(), ".data", "solar-graph-cache.json");
+const BUNDLED_DENVER_SEED_FILE = path.join(
+  process.cwd(),
+  "ml",
+  "weights",
+  "denver-solar-seed-v4.json"
+);
+
+function getSolarCacheFilePath(): string {
+  return path.join(resolveRuntimeDataDir(), "solar-graph-cache.json");
+}
 
 function isFileCacheEnabled(): boolean {
   return process.env.NODE_ENV !== "test" && !process.env.VITEST;
@@ -1212,14 +1399,40 @@ export function clearDenverSolarCache(): void {
   SOLAR_CACHE.clear();
 }
 
+export function readBundledDenverSeed(
+  startYear = 2019,
+  endYear = new Date().getUTCFullYear()
+): SolarGraphAnalysisResult | null {
+  if (!isFileCacheEnabled() || startYear !== 2019 || endYear < 2025) return null;
+  try {
+    if (!fs.existsSync(/*turbopackIgnore: true*/ BUNDLED_DENVER_SEED_FILE)) {
+      return null;
+    }
+    const raw = fs.readFileSync(/*turbopackIgnore: true*/ BUNDLED_DENVER_SEED_FILE, "utf8");
+    const parsed = JSON.parse(raw) as Partial<SolarGraphAnalysisResult> | null;
+    if (
+      parsed &&
+      parsed.metrics?.graphAware &&
+      parsed.tomorrow &&
+      Array.isArray(parsed.nodes)
+    ) {
+      return parsed as SolarGraphAnalysisResult;
+    }
+  } catch {
+    // Optional seed artifact missing or unreadable
+  }
+  return null;
+}
+
 function readPersistentSolarCache(
   key: string,
   options?: { allowStale?: boolean }
 ): SolarGraphAnalysisResult | null {
   if (!isFileCacheEnabled()) return null;
   try {
-    if (!fs.existsSync(SOLAR_CACHE_FILE)) return null;
-    const raw = fs.readFileSync(SOLAR_CACHE_FILE, "utf8");
+    const cacheFile = getSolarCacheFilePath();
+    if (!fs.existsSync(cacheFile)) return null;
+    const raw = fs.readFileSync(cacheFile, "utf8");
     const parsed = JSON.parse(raw) as Record<
       string,
       { expiresAt?: number; result?: SolarGraphAnalysisResult }
@@ -1243,18 +1456,19 @@ function writePersistentSolarCache(
 ): void {
   if (!isFileCacheEnabled()) return;
   try {
-    const dir = path.dirname(SOLAR_CACHE_FILE);
+    const cacheFile = getSolarCacheFilePath();
+    const dir = path.dirname(cacheFile);
     fs.mkdirSync(dir, { recursive: true });
     let existing: Record<string, { expiresAt: number; result: SolarGraphAnalysisResult }> = {};
-    if (fs.existsSync(SOLAR_CACHE_FILE)) {
+    if (fs.existsSync(cacheFile)) {
       try {
-        existing = JSON.parse(fs.readFileSync(SOLAR_CACHE_FILE, "utf8")) as typeof existing;
+        existing = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as typeof existing;
       } catch {
         existing = {};
       }
     }
     existing[key] = { expiresAt, result };
-    fs.writeFileSync(SOLAR_CACHE_FILE, JSON.stringify(existing), "utf8");
+    fs.writeFileSync(cacheFile, JSON.stringify(existing), "utf8");
   } catch {
     // Non-fatal if cache cannot be written
   }
@@ -1268,7 +1482,7 @@ async function fetchWithRetry(
   budget?: TelemetryBudget,
   sourceLabel = "Solar Telemetry Upstream"
 ): Promise<Response> {
-  const cappedTimeout = Math.min(timeoutMs, 1100);
+  const cappedTimeout = Math.max(250, timeoutMs);
   let lastError: unknown;
   const retryDelayMs = process.env.NODE_ENV === "test" ? 10 : 40;
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -1434,9 +1648,24 @@ async function fetchOpenMeteoArchiveRows(
   return parseOpenMeteoDailyRows(json, node.lat);
 }
 
-function parseNasaPowerDailyPayload(json: {
-  properties?: { parameter?: Record<string, Record<string, number>> };
-}, nodeName: string): DailyWeatherRow[] {
+function parseNasaPowerDailyPayload(
+  json: {
+    geometry?: { coordinates?: number[] };
+    properties?: { parameter?: Record<string, Record<string, number>> };
+  },
+  nodeName: string,
+  nodeToUpdate?: ClimateGraphNode
+): DailyWeatherRow[] {
+  const elevCoord = Number(json.geometry?.coordinates?.[2]);
+  if (
+    nodeToUpdate &&
+    nodeToUpdate.elevationM <= 0 &&
+    Number.isFinite(elevCoord) &&
+    elevCoord > -900
+  ) {
+    nodeToUpdate.elevationM = Math.max(0, Math.round(elevCoord));
+  }
+
   const p = json.properties?.parameter;
   if (!p?.ALLSKY_SFC_SW_DWN || !p?.CLRSKY_SFC_SW_DWN) {
     throw new Error(`Missing solar parameters from NASA POWER for ${nodeName}`);
@@ -1452,12 +1681,18 @@ function parseNasaPowerDailyPayload(json: {
     const ws10m = Number(p.WS10M?.[date] ?? 3);
     const wd10m = Number(p.WD10M?.[date] ?? 270);
     const ps = Number(p.PS?.[date] ?? 83);
+    const cloudAmtRaw = p.CLOUD_AMT?.[date];
+    const cloudAmt =
+      typeof cloudAmtRaw === "number" && Number.isFinite(cloudAmtRaw) && cloudAmtRaw > -900
+        ? Math.max(0, Math.min(100, cloudAmtRaw))
+        : undefined;
     if (allsky <= -900 || clrsky <= -900 || !Number.isFinite(allsky)) continue;
     rows.push({
       date,
       allsky,
       clrsky,
       kt: allsky / Math.max(clrsky, 0.5),
+      ...(cloudAmt !== undefined ? { cloudAmt } : {}),
       t2m: t2m <= -900 ? 10 : t2m,
       rh2m: rh2m <= -900 ? 50 : rh2m,
       precip: precip <= -900 ? 0 : precip,
@@ -1473,9 +1708,10 @@ async function fetchNodeNasaPowerRows(
   node: ClimateGraphNode,
   start: string,
   primaryEnd: string,
-  budget?: TelemetryBudget
+  budget?: TelemetryBudget,
+  perRequestTimeoutMs = 1100
 ): Promise<DailyWeatherRow[]> {
-  const params = "ALLSKY_SFC_SW_DWN,CLRSKY_SFC_SW_DWN,T2M,RH2M,PRECTOTCORR,WS10M,WD10M,PS";
+  const params = "ALLSKY_SFC_SW_DWN,CLRSKY_SFC_SW_DWN,CLOUD_AMT,T2M,RH2M,PRECTOTCORR,WS10M,WD10M,PS";
   const headers = {
     Accept: "application/json",
     "User-Agent": "EarthTrendDetective/1.0 (NASA-Space-Apps)",
@@ -1487,7 +1723,7 @@ async function fetchNodeNasaPowerRows(
 
   let res = await fetchWithRetry(
     buildUrl(primaryEnd),
-    1100,
+    perRequestTimeoutMs,
     headers,
     2,
     budget,
@@ -1496,7 +1732,7 @@ async function fetchNodeNasaPowerRows(
   if ((res.status === 400 || res.status === 422) && primaryEnd > "20251231") {
     res = await fetchWithRetry(
       buildUrl("20251231"),
-      1100,
+      perRequestTimeoutMs,
       headers,
       2,
       budget,
@@ -1504,12 +1740,13 @@ async function fetchNodeNasaPowerRows(
     );
   }
   const json = await parseUpstreamJson<{
+    geometry?: { coordinates?: number[] };
     properties?: { parameter?: Record<string, Record<string, number>> };
   }>(res, `NASA POWER Daily (${node.name})`);
   if (!json || typeof json !== "object") {
     throw new Error(`Malformed NASA POWER payload for ${node.name}`);
   }
-  return parseNasaPowerDailyPayload(json, node.name);
+  return parseNasaPowerDailyPayload(json, node.name, node);
 }
 
 interface EveningHourlyFields {
@@ -1532,7 +1769,10 @@ interface OpenMeteoHourlyNodePayload {
   };
 }
 
-function aggregateEveningHours(payload: OpenMeteoHourlyNodePayload): Map<string, EveningHourlyFields> {
+function aggregateEveningHours(
+  payload: OpenMeteoHourlyNodePayload,
+  utcOffsetHours?: number
+): Map<string, EveningHourlyFields> {
   const out = new Map<string, EveningHourlyFields>();
   const h = payload.hourly;
   if (!h?.time || h.time.length === 0) return out;
@@ -1554,9 +1794,16 @@ function aggregateEveningHours(payload: OpenMeteoHourlyNodePayload): Map<string,
     const ts = h.time[i];
     const sep = ts.indexOf("T");
     if (sep < 0) continue;
-    const hour = Number(ts.slice(sep + 1, sep + 3));
+    let hour = Number(ts.slice(sep + 1, sep + 3));
+    let yyyymmdd = ts.slice(0, sep).replace(/-/g, "");
+    if (utcOffsetHours !== undefined) {
+      const utcMs = Date.parse(`${ts.slice(0, 13)}:00:00Z`);
+      if (!Number.isFinite(utcMs)) continue;
+      const localDt = new Date(utcMs + utcOffsetHours * 3_600_000);
+      hour = localDt.getUTCHours();
+      yyyymmdd = localDt.toISOString().slice(0, 10).replace(/-/g, "");
+    }
     if (!Number.isFinite(hour) || hour < 18 || hour > 23) continue;
-    const yyyymmdd = ts.slice(0, sep).replace(/-/g, "");
     let bucket = grouped.get(yyyymmdd);
     if (!bucket) {
       bucket = { clouds: [], rhs: [], wss: [] };
@@ -1617,7 +1864,8 @@ async function fetchEveningHourlyByNode(
   startIso: string,
   archiveEndIso: string,
   includeForecastBridge: boolean,
-  budget?: TelemetryBudget
+  budget?: TelemetryBudget,
+  options?: { utcOffsetHours?: number; skipArchive?: boolean; timeoutMs?: number }
 ): Promise<{ byNode: Map<string, Map<string, EveningHourlyFields>>; hasData: boolean }> {
   const byNode = new Map<string, Map<string, EveningHourlyFields>>();
   for (const n of nodes) byNode.set(n.id, new Map());
@@ -1625,13 +1873,14 @@ async function fetchEveningHourlyByNode(
   const lats = nodes.map((n) => n.lat).join(",");
   const lngs = nodes.map((n) => n.lng).join(",");
   const vars = "cloud_cover,surface_pressure,relative_humidity_2m,wind_speed_10m,wind_direction_10m";
+  const requestTimeoutMs = options?.timeoutMs ?? 1100;
   let hasData = false;
 
   const mergeResponse = (json: unknown) => {
     const items = (Array.isArray(json) ? json : [json]) as OpenMeteoHourlyNodePayload[];
     for (let idx = 0; idx < Math.min(items.length, nodes.length); idx++) {
       const nodeMap = byNode.get(nodes[idx].id);
-      const parsed = aggregateEveningHours(items[idx] ?? {});
+      const parsed = aggregateEveningHours(items[idx] ?? {}, options?.utcOffsetHours);
       if (nodeMap && parsed.size > 0) {
         hasData = true;
         for (const [date, vals] of parsed.entries()) {
@@ -1642,7 +1891,7 @@ async function fetchEveningHourlyByNode(
   };
 
   const fetchArchiveHourly = async () => {
-    if (archiveEndIso < startIso) return;
+    if (options?.skipArchive || archiveEndIso < startIso) return;
     try {
       const archiveUrl =
         `https://archive-api.open-meteo.com/v1/archive?latitude=${lats}&longitude=${lngs}` +
@@ -1650,7 +1899,7 @@ async function fetchEveningHourlyByNode(
         `&wind_speed_unit=ms&timezone=America%2FDenver`;
       const res = await fetchWithRetry(
         archiveUrl,
-        1100,
+        requestTimeoutMs,
         undefined,
         1,
         budget,
@@ -1665,12 +1914,13 @@ async function fetchEveningHourlyByNode(
   const fetchForecastHourly = async () => {
     if (!includeForecastBridge) return;
     try {
+      const tz = options?.utcOffsetHours !== undefined ? "UTC" : "America%2FDenver";
       const forecastUrl =
         `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lngs}` +
-        `&hourly=${vars}&past_days=7&forecast_days=1&wind_speed_unit=ms&timezone=America%2FDenver`;
+        `&hourly=${vars}&past_days=7&forecast_days=1&wind_speed_unit=ms&timezone=${tz}`;
       const res = await fetchWithRetry(
         forecastUrl,
-        1100,
+        requestTimeoutMs,
         undefined,
         1,
         budget,
@@ -1687,13 +1937,12 @@ async function fetchEveningHourlyByNode(
   return { byNode, hasData };
 }
 
-/**
- * Deterministic Colorado Front Range 7-node synthetic solar & synoptic advection baseline
- * used when both NASA POWER and Open-Meteo upstream services fail or time out.
- */
-export function buildDenverSolarClimatologicalFallback(
+function buildClimatologicalFallbackForNodes(
+  nodes: ClimateGraphNode[],
+  cityLabel: string,
   startYear = 2022,
-  endYear = 2025
+  endYear = 2025,
+  isDenver = true
 ): SolarGraphAnalysisResult {
   const safeStart = Math.max(2015, Math.min(2023, Math.trunc(startYear)));
   const safeEnd = Math.max(safeStart + 2, Math.min(2026, Math.trunc(endYear)));
@@ -1702,9 +1951,9 @@ export function buildDenverSolarClimatologicalFallback(
   const startMs = endMs - (totalDays - 1) * 86_400_000;
 
   const seriesByNode: Record<string, DailyWeatherRow[]> = {};
-  for (const [nodeIdx, node] of DENVER_CLIMATE_NODES.entries()) {
+  for (const [nodeIdx, node] of nodes.entries()) {
     const rows: DailyWeatherRow[] = [];
-    const leadDays = node.id === "silverthorne-w" || node.id === "berthoud-nw" ? 1 : nodeIdx === 0 ? 0 : 0.5;
+    const leadDays = nodeIdx === 1 ? 1 : nodeIdx === 0 ? 0 : 0.5;
 
     for (let i = 0; i < totalDays; i++) {
       const dt = new Date(startMs + i * 86_400_000);
@@ -1713,7 +1962,7 @@ export function buildDenverSolarClimatologicalFallback(
       const doy = dayOfYear(date);
       const clrsky = computeClearSkyFallbackKwh(node.lat, doy);
       const tStormIndex = i + leadDays;
-      // Periodic Front Range Pacific/upslope storm troughs (non-random, reproducible)
+      // Periodic synoptic wave troughs (deterministic, reproducible)
       const inStorm =
         (Math.floor(tStormIndex) % 13 === 0 || Math.floor(tStormIndex) % 19 === 0) &&
         Math.sin(tStormIndex * 0.45 + nodeIdx * 0.15) > -0.25;
@@ -1721,7 +1970,12 @@ export function buildDenverSolarClimatologicalFallback(
         ? Math.max(0.28, 0.42 + Math.sin(i * 0.7) * 0.08)
         : Math.min(0.84, 0.68 + Math.sin(i * 0.31 + nodeIdx * 0.2) * 0.09);
       const allsky = Number((clrsky * kt).toFixed(3));
-      const seasonalTemp = 9.5 - (node.elevationM - 1609) * 0.0055 + Math.sin(((doy - 105) / 365) * Math.PI * 2) * 14.2;
+      const baseTemp = 26 - Math.abs(node.lat) * 0.42;
+      const seasonalPhase = node.lat >= 0 ? doy - 105 : doy + 77;
+      const seasonalTemp =
+        baseTemp -
+        Math.max(0, node.elevationM - 500) * 0.0055 +
+        Math.sin((seasonalPhase / 365) * Math.PI * 2) * 12.5;
 
       rows.push({
         date,
@@ -1729,14 +1983,14 @@ export function buildDenverSolarClimatologicalFallback(
         clrsky: Number(clrsky.toFixed(3)),
         kt: Number(kt.toFixed(4)),
         t2m: Number((seasonalTemp + (inStorm ? -5.4 : 1.1)).toFixed(2)),
-        rh2m: inStorm ? 78 : 39,
+        rh2m: inStorm ? 78 : 42,
         precip: inStorm ? 5.6 : 0,
         ws10m: inStorm ? 6.8 : 3.2,
-        wd10m: inStorm && node.id === "silverthorne-w" ? 275 : inStorm ? 290 : 255,
-        ps: 83.2 - (node.elevationM - 1609) * 0.0085,
+        wd10m: inStorm && nodeIdx === 1 ? 275 : inStorm ? 290 : 255,
+        ps: 101.3 * Math.exp(-Math.max(0, node.elevationM) / 8434.5),
         eveCloudPct: inStorm ? 82 : 24,
         eveCloud23Pct: inStorm ? 86 : 21,
-        eveRhPct: inStorm ? 76 : 36,
+        eveRhPct: inStorm ? 76 : 38,
         eveWsMs: inStorm ? 6.4 : 2.9,
         eveWdDeg: inStorm ? 278 : 252,
         evePsTrendHpa: inStorm ? -3.4 : 0.6,
@@ -1745,25 +1999,45 @@ export function buildDenverSolarClimatologicalFallback(
     seriesByNode[node.id] = rows;
   }
 
+  const targetSeries = seriesByNode[nodes[0].id] ?? [];
   const splitIdx = Math.floor(totalDays * 0.72);
-  const splitDate = seriesByNode["denver-target"][splitIdx]?.date ?? `${safeEnd}0101`;
+  const splitDate = targetSeries[splitIdx]?.date ?? `${safeEnd}0101`;
   const result = runThreeWaySolarEvaluation(
     seriesByNode,
     splitDate,
-    "Front Range Climatological Baseline (Offline/Outage Fallback)"
+    `${cityLabel} Climatological Baseline (Offline/Outage Fallback)`,
+    { nodes, cityLabel, isDenver }
   );
-  result.dataSource =
-    "Colorado Front Range Physical Climatological Baseline (NASA POWER + Open-Meteo Offline Fallback)";
+  result.dataSource = isDenver
+    ? "Colorado Front Range Physical Climatological Baseline (NASA POWER + Open-Meteo Offline Fallback)"
+    : `${cityLabel} Physical Climatological Baseline (NASA POWER Offline Fallback)`;
   result.provenanceMode = "climatological_fallback";
   return result;
+}
+
+/**
+ * Deterministic Colorado Front Range 7-node synthetic solar & synoptic advection baseline
+ * used when both NASA POWER and Open-Meteo upstream services fail or time out.
+ */
+export function buildDenverSolarClimatologicalFallback(
+  startYear = 2022,
+  endYear = 2025
+): SolarGraphAnalysisResult {
+  return buildClimatologicalFallbackForNodes(
+    DENVER_CLIMATE_NODES,
+    "Denver, CO (Front Range)",
+    startYear,
+    endYear,
+    true
+  );
 }
 
 export async function fetchDenverSolarClimateGraph(
   startYear = 2019,
   endYear = new Date().getUTCFullYear(),
-  options?: { forceRefresh?: boolean }
+  options?: { forceRefresh?: boolean; timeoutMs?: number }
 ): Promise<SolarGraphAnalysisResult> {
-  const key = `v3:${startYear}:${endYear}`;
+  const key = `v4:${startYear}:${endYear}`;
   if (!options?.forceRefresh) {
     const cached = SOLAR_CACHE.get(key);
     if (cached && cached.expiresAt > Date.now()) {
@@ -1791,13 +2065,20 @@ export async function fetchDenverSolarClimateGraph(
   let usedOpenMeteoBridge = false;
   let usedOpenMeteoArchiveFallback = false;
 
-  const budget = createTelemetryBudget(1500);
+  const routeBudgetMs =
+    options?.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 1500;
+  const perRequestTimeoutMs =
+    routeBudgetMs > 2000
+      ? Math.min(12000, Math.floor(routeBudgetMs * 0.7))
+      : 1100;
+  const budget = createTelemetryBudget(routeBudgetMs);
   const eveningPromise = fetchEveningHourlyByNode(
     DENVER_CLIMATE_NODES,
     `${startYear}-01-01`,
     archiveEndIso,
     includeCurrentYear,
-    budget
+    budget,
+    { timeoutMs: perRequestTimeoutMs }
   );
 
   const buildDegradedResult = (): SolarGraphAnalysisResult => {
@@ -1820,6 +2101,20 @@ export async function fetchDenverSolarClimateGraph(
         elapsedMs: budget.elapsedMs(),
       };
     }
+    if (!options?.forceRefresh) {
+      const bundledSeed = readBundledDenverSeed(startYear, endYear);
+      if (bundledSeed) {
+        SOLAR_CACHE.set(key, {
+          expiresAt: Date.now() + 1000 * 60 * 15,
+          result: bundledSeed,
+        });
+        return {
+          ...bundledSeed,
+          provenanceMode: "cached",
+          elapsedMs: budget.elapsedMs(),
+        };
+      }
+    }
     const fallback = buildDenverSolarClimatologicalFallback(startYear, endYear);
     return {
       ...fallback,
@@ -1830,14 +2125,20 @@ export async function fetchDenverSolarClimateGraph(
 
   const runLivePipeline = async (): Promise<SolarGraphAnalysisResult> => {
     const entries: Array<readonly [string, DailyWeatherRow[]]> = [];
-    const batchSize = 4;
+    const batchSize = DENVER_CLIMATE_NODES.length;
     for (let i = 0; i < DENVER_CLIMATE_NODES.length; i += batchSize) {
       const batch = DENVER_CLIMATE_NODES.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async (node) => {
           let rows: DailyWeatherRow[];
           try {
-            rows = await fetchNodeNasaPowerRows(node, start, primaryEnd, budget);
+            rows = await fetchNodeNasaPowerRows(
+              node,
+              start,
+              primaryEnd,
+              budget,
+              perRequestTimeoutMs
+            );
             if (rows.length === 0) {
               throw new Error(`NASA POWER returned 0 valid rows for ${node.name}`);
             }
@@ -1947,5 +2248,280 @@ export async function fetchDenverSolarClimateGraph(
     budget.recordFault(classifyUpstreamFault(err, "Solar Microgrid Pipeline"));
     await eveningPromise.catch(() => null);
     return buildDegradedResult();
+  }
+}
+
+const DYNAMIC_RING_DIRECTIONS: ReadonlyArray<readonly [string, number]> = [
+  ["W", 270],
+  ["NNW", 330],
+  ["NNE", 30],
+  ["E", 90],
+  ["SSE", 150],
+  ["SSW", 210],
+];
+
+function offsetRingCoordinate(
+  latDeg: number,
+  lngDeg: number,
+  bearingDegVal: number,
+  distKm = 115
+): { lat: number; lng: number } {
+  const R = 6371;
+  const lat1 = latDeg * TO_RAD;
+  const lng1 = lngDeg * TO_RAD;
+  const brg = bearingDegVal * TO_RAD;
+  const ang = distKm / R;
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(ang) + Math.cos(lat1) * Math.sin(ang) * Math.cos(brg)
+  );
+  const lng2 =
+    lng1 +
+    Math.atan2(
+      Math.sin(brg) * Math.sin(ang) * Math.cos(lat1),
+      Math.cos(ang) - Math.sin(lat1) * Math.sin(lat2)
+    );
+  const normalizedLng = (((lng2 * TO_DEG + 540) % 360) - 180);
+  return {
+    lat: Number((lat2 * TO_DEG).toFixed(4)),
+    lng: Number(normalizedLng.toFixed(4)),
+  };
+}
+
+export function buildDynamicSolarRingNodes(
+  lat: number,
+  lng: number,
+  label?: string
+): ClimateGraphNode[] {
+  const safeLat = Math.max(-65, Math.min(65, Number(lat.toFixed(4))));
+  const safeLng = Number((((lng + 540) % 360) - 180).toFixed(4));
+  const cleanLabel =
+    label?.trim() || `${safeLat.toFixed(2)}°, ${safeLng.toFixed(2)}°`;
+
+  const nodes: ClimateGraphNode[] = [
+    {
+      id: "target-center",
+      name: `${cleanLabel} (Target)`,
+      role: "target",
+      direction: "CENTER",
+      distanceKm: 0,
+      lat: safeLat,
+      lng: safeLng,
+      elevationM: 0,
+      rationale: "Selected global microgrid & solar forecasting point.",
+    },
+  ];
+
+  for (const [dir, brg] of DYNAMIC_RING_DIRECTIONS) {
+    const pos = offsetRingCoordinate(safeLat, safeLng, brg, 115);
+    nodes.push({
+      id: `ring-${dir.toLowerCase()}`,
+      name: `${cleanLabel} (${dir})`,
+      role: "upwind_neighbor",
+      direction: dir,
+      distanceKm: 115,
+      lat: pos.lat,
+      lng: pos.lng,
+      elevationM: 0,
+      rationale: `115 km upwind/surrounding synoptic ring station (${dir}).`,
+    });
+  }
+
+  return nodes;
+}
+
+export async function fetchSolarClimateGraphForLocation(params: {
+  lat?: number;
+  lng?: number;
+  name?: string;
+  startYear?: number;
+  endYear?: number;
+  forceRefresh?: boolean;
+}): Promise<SolarGraphAnalysisResult> {
+  const rawLat = params.lat;
+  const rawLng = params.lng;
+  const hasCustomCoords =
+    typeof rawLat === "number" &&
+    Number.isFinite(rawLat) &&
+    typeof rawLng === "number" &&
+    Number.isFinite(rawLng);
+
+  if (
+    !hasCustomCoords ||
+    (Math.abs(rawLat - 39.74) < 0.15 && Math.abs(rawLng + 104.99) < 0.15)
+  ) {
+    return fetchDenverSolarClimateGraph(
+      params.startYear,
+      params.endYear,
+      params.forceRefresh !== undefined ? { forceRefresh: params.forceRefresh } : undefined
+    );
+  }
+
+  const now = new Date();
+  const currentYear = now.getUTCFullYear();
+  const dynStartYear = Math.max(2023, params.startYear ?? 2023);
+  const dynEndYear = Math.min(currentYear, params.endYear ?? currentYear);
+  const safeLat = Math.max(-65, Math.min(65, rawLat));
+  const safeLng = ((rawLng + 540) % 360) - 180;
+  const cityLabel =
+    params.name?.trim() || `${safeLat.toFixed(2)}°, ${safeLng.toFixed(2)}°`;
+
+  const cacheKey = `v4:dyn:${safeLat.toFixed(2)}:${safeLng.toFixed(2)}:${dynStartYear}:${dynEndYear}`;
+  if (!params.forceRefresh) {
+    const cached = SOLAR_CACHE.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { ...cached.result, provenanceMode: "cached" };
+    }
+    const persisted = readPersistentSolarCache(cacheKey);
+    if (persisted) {
+      SOLAR_CACHE.set(cacheKey, {
+        expiresAt: Date.now() + SOLAR_CACHE_TTL_MS,
+        result: persisted,
+      });
+      return { ...persisted, provenanceMode: "cached" };
+    }
+  }
+
+  const ringNodes = buildDynamicSolarRingNodes(safeLat, safeLng, cityLabel);
+  const todayYyyymmdd = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const laggedYyyymmdd = new Date(now.getTime() - 5 * 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+    .replace(/-/g, "");
+  const start = `${dynStartYear}0101`;
+  const includeCurrentYear = dynEndYear >= currentYear;
+  const primaryEnd = includeCurrentYear ? laggedYyyymmdd : `${dynEndYear}1231`;
+  const archiveEndIso = formatIsoDate(primaryEnd);
+  const utcOffsetHours = Math.round(safeLng / 15);
+
+  const budget = createTelemetryBudget(1500);
+  const eveningPromise = fetchEveningHourlyByNode(
+    ringNodes,
+    `${dynStartYear}-01-01`,
+    archiveEndIso,
+    includeCurrentYear,
+    budget,
+    { utcOffsetHours, skipArchive: true }
+  );
+
+  const buildDynamicDegraded = (): SolarGraphAnalysisResult => {
+    const staleMem = SOLAR_CACHE.get(cacheKey);
+    const faults = budget.faults;
+    if (staleMem) {
+      return {
+        ...staleMem.result,
+        provenanceMode: "cached",
+        ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+        elapsedMs: budget.elapsedMs(),
+      };
+    }
+    const staleDisk = readPersistentSolarCache(cacheKey, { allowStale: true });
+    if (staleDisk) {
+      return {
+        ...staleDisk,
+        provenanceMode: "cached",
+        ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+        elapsedMs: budget.elapsedMs(),
+      };
+    }
+    const fallback = buildClimatologicalFallbackForNodes(
+      ringNodes,
+      cityLabel,
+      dynStartYear,
+      dynEndYear,
+      false
+    );
+    return {
+      ...fallback,
+      ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+      elapsedMs: budget.elapsedMs(),
+    };
+  };
+
+  let usedBridge = false;
+  const runDynamicPipeline = async (): Promise<SolarGraphAnalysisResult> => {
+    const entries = await Promise.all(
+      ringNodes.map(async (node) => {
+        let rows: DailyWeatherRow[];
+        try {
+          rows = await fetchNodeNasaPowerRows(node, start, primaryEnd, budget);
+          if (rows.length === 0) {
+            throw new Error(`NASA POWER returned 0 valid rows for ${node.name}`);
+          }
+        } catch (err) {
+          budget.recordFault(classifyUpstreamFault(err, `NASA POWER Daily (${node.name})`));
+          throw err;
+        }
+
+        if (includeCurrentYear && rows.length > 0 && budget.remainingMs() > 200) {
+          const lastObsDate = rows[rows.length - 1].date;
+          const lastClrsky = rows[rows.length - 1].clrsky;
+          const bridgeRows = await fetchOpenMeteoBridgeRows(node, lastClrsky, budget);
+          for (const br of bridgeRows) {
+            if (br.date > lastObsDate && br.date <= todayYyyymmdd) {
+              rows.push(br);
+              usedBridge = true;
+            }
+          }
+        }
+        return [node.id, rows] as const;
+      })
+    );
+
+    const eveningHourly = await eveningPromise;
+    for (const [nodeId, rows] of entries) {
+      const eveMap = eveningHourly.byNode.get(nodeId);
+      if (!eveMap || eveMap.size === 0) continue;
+      for (const row of rows) {
+        const eve = eveMap.get(row.date);
+        if (eve) {
+          row.eveCloudPct = eve.eveCloudPct;
+          row.eveCloud23Pct = eve.eveCloud23Pct;
+          row.eveRhPct = eve.eveRhPct;
+          row.eveWsMs = eve.eveWsMs;
+          row.eveWdDeg = eve.eveWdDeg;
+          row.evePsTrendHpa = eve.evePsTrendHpa;
+        }
+      }
+    }
+
+    const seriesByNode = Object.fromEntries(entries);
+    const targetSeries = seriesByNode["target-center"] ?? [];
+    const latestTargetDate = targetSeries[targetSeries.length - 1]?.date ?? "";
+    const splitYyyymmdd =
+      latestTargetDate >= "20250301"
+        ? "20250101"
+        : targetSeries.length >= 60
+          ? targetSeries[Math.floor(targetSeries.length * 0.72)].date
+          : `${dynEndYear}0101`;
+
+    const eveSuffix = eveningHourly.hasData ? " + 18:00–23:00 Hourly Advection" : "";
+    const bridgeLabel = usedBridge
+      ? `NASA POWER Daily + Open-Meteo Real-Time Bridge${eveSuffix}`
+      : `NASA POWER Daily (CERES SYN1deg & MERRA-2)${eveSuffix}`;
+
+    const result = runThreeWaySolarEvaluation(seriesByNode, splitYyyymmdd, bridgeLabel, {
+      nodes: ringNodes,
+      cityLabel,
+      isDenver: false,
+    });
+    result.provenanceMode = "live";
+    if (budget.faults.length > 0) {
+      result.upstreamFault = budget.faults[0];
+      result.upstreamFaults = budget.faults;
+    }
+    result.elapsedMs = budget.elapsedMs();
+
+    const expiresAt = Date.now() + SOLAR_CACHE_TTL_MS;
+    SOLAR_CACHE.set(cacheKey, { expiresAt, result });
+    writePersistentSolarCache(cacheKey, expiresAt, result);
+    return result;
+  };
+
+  try {
+    return await budget.raceWithFallback(runDynamicPipeline(), buildDynamicDegraded);
+  } catch (err) {
+    budget.recordFault(classifyUpstreamFault(err, "Dynamic Solar Ring Pipeline"));
+    await eveningPromise.catch(() => null);
+    return buildDynamicDegraded();
   }
 }

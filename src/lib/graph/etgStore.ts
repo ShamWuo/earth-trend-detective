@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolveRuntimeDataDir } from "@/lib/runtimePaths";
 import { compareRegionalSeries } from "@/lib/stats/trendEngine";
 import type {
   CandidateLinkSuggestion,
@@ -11,6 +12,7 @@ import type {
   ETGNode,
   ETGNodeLabel,
   ETGRelationshipType,
+  ETGResearchDossier,
   ETGWorkspaceBundle,
   EtgActivityEntry,
   GraphMlDatasetExport,
@@ -126,7 +128,7 @@ export class EtgStore {
     } else {
       const isTestEnv =
         process.env.NODE_ENV === "test" || Boolean(process.env.VITEST);
-      this.persistDir = isTestEnv ? null : DEFAULT_DATA_DIR;
+      this.persistDir = isTestEnv ? null : resolveRuntimeDataDir();
     }
     this.ctx = this.createContext();
     loadInitialStateOp(this.ctx);
@@ -635,6 +637,12 @@ export class EtgStore {
     amplification_ratio?: number;
     shared_shift_year?: number;
     weight?: number;
+    p_value?: number;
+    fdr_q_value?: number;
+    partial_r?: number;
+    multivariate_partial_r?: number;
+    mediated_by?: string;
+    predictive_lift_pct?: number;
     authored_by?: ETGAuthorType;
     causal_polarity?: ETGEdgeProperties["causal_polarity"];
     custom_label?: string;
@@ -671,8 +679,17 @@ export class EtgStore {
     let optLag = input.optimal_lag_steps;
     let lagUnit = input.lag_unit;
     let mechanism = input.mechanism;
+    let edgePVal = input.p_value;
 
-    if (input.autoEnrichSeries !== false && corrR === undefined) {
+    const isEpistemicOrMetaEdge =
+      input.type === "supports" ||
+      input.type === "corroborates" ||
+      input.type === "contradicts" ||
+      input.type === "monitors" ||
+      input.type === "verified_by" ||
+      input.type === "supersedes";
+
+    if (input.autoEnrichSeries !== false && !isEpistemicOrMetaEdge && corrR === undefined) {
       const seriesA = this.getNodeSeries(srcNode.uuid);
       const seriesB = this.getNodeSeries(dstNode.uuid);
       if (seriesA && seriesB && seriesA.length >= 6 && seriesB.length >= 6) {
@@ -688,6 +705,9 @@ export class EtgStore {
           });
           corrR = comp.pearsonR;
           detR = comp.detrendedR;
+          if (edgePVal === undefined) {
+            edgePVal = comp.isSecularDriftOnly ? comp.detrendedPValue : comp.pValue;
+          }
           if (optLag === undefined) optLag = comp.optimalLagSteps;
           if (!lagUnit) lagUnit = comp.lagUnit;
           if (!mechanism) mechanism = comp.mechanism;
@@ -704,7 +724,9 @@ export class EtgStore {
 
     const polarity: ETGEdgeProperties["causal_polarity"] =
       input.causal_polarity ??
-      (input.type === "drives_opposite" || input.type === "dampens"
+      (input.type === "drives_opposite" ||
+      input.type === "dampens" ||
+      input.type === "contradicts"
         ? "negative"
         : corrR !== undefined && corrR < -0.2
           ? "negative"
@@ -729,6 +751,26 @@ export class EtgStore {
         amplification_ratio: input.amplification_ratio,
         shared_shift_year: input.shared_shift_year,
         weight: Number(derivedWeight.toFixed(3)),
+        ...(typeof edgePVal === "number" && Number.isFinite(edgePVal)
+          ? { p_value: Number(edgePVal.toFixed(6)) }
+          : {}),
+        ...(typeof input.fdr_q_value === "number" && Number.isFinite(input.fdr_q_value)
+          ? { fdr_q_value: Number(input.fdr_q_value.toFixed(6)) }
+          : {}),
+        ...(typeof input.partial_r === "number" && Number.isFinite(input.partial_r)
+          ? { partial_r: Number(input.partial_r.toFixed(4)) }
+          : {}),
+        ...(typeof input.multivariate_partial_r === "number" &&
+        Number.isFinite(input.multivariate_partial_r)
+          ? { multivariate_partial_r: Number(input.multivariate_partial_r.toFixed(4)) }
+          : {}),
+        ...(typeof input.mediated_by === "string" && input.mediated_by.trim()
+          ? { mediated_by: input.mediated_by.trim().slice(0, 120) }
+          : {}),
+        ...(typeof input.predictive_lift_pct === "number" &&
+        Number.isFinite(input.predictive_lift_pct)
+          ? { predictive_lift_pct: Number(input.predictive_lift_pct.toFixed(2)) }
+          : {}),
         authored_by: input.authored_by ?? "human",
         causal_polarity: polarity,
         custom_label: input.custom_label,
@@ -739,7 +781,11 @@ export class EtgStore {
 
     this.edges.set(uuid, edge);
 
-    if (input.type === "supports" || input.type === "corroborates") {
+    if (
+      input.type === "supports" ||
+      input.type === "corroborates" ||
+      input.type === "contradicts"
+    ) {
       this.evaluateCorroboration(input.target_uuid, false);
     }
 
@@ -855,6 +901,7 @@ export class EtgStore {
 
   reviseBelief(params: {
     priorNodeUuid: string;
+    newNodeUuid?: string;
     newName: string;
     newDescription: string;
     rationale: string;
@@ -865,6 +912,7 @@ export class EtgStore {
     theil_sen_slope?: number;
     series?: ETGNode["properties"]["series"];
     observed_at?: string;
+    dossier?: ETGResearchDossier;
     silent?: boolean;
   }): {
     priorNode: ETGNode;

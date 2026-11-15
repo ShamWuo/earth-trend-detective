@@ -126,5 +126,16 @@ describe("GET /api/earth/gibs proxy", () => {
     expect(bordersUpstreamUrl).toContain("Coastlines,Reference_Features");
     expect(bordersUpstreamUrl).toContain("FORMAT=image/png");
     expect(bordersUpstreamUrl).toContain("TRANSPARENT=TRUE");
+
+    const historicalSstRes = await getGibsTile(
+      new NextRequest(
+        "http://localhost:3000/api/earth/gibs?layer=sst_anomaly&scope=global&bbox=-180,-90,180,90&width=2048&height=1024&time=2015-12-15"
+      )
+    );
+    expect(historicalSstRes.status).toBe(200);
+    const historicalSstUrl = String(spy.mock.calls[2]?.[0] ?? "");
+    expect(historicalSstUrl).toContain(
+      "LAYERS=GHRSST_L4_MUR25_Sea_Surface_Temperature_Anomalies"
+    );
   });
 });

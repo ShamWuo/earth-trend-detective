@@ -100,9 +100,9 @@ export function ThemeToggle() {
       onClick={handleToggle}
       aria-label={nextLabel}
       title={nextLabel}
-      className="inline-flex h-8 w-8 items-center justify-center rounded border border-border bg-surface-elevated text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
+      className="etg-hud-btn inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface-elevated text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
     >
-      {resolvedScheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+      {resolvedScheme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
     </button>
   );
 }

@@ -180,8 +180,8 @@ export function GraphCanvas2D({
       const cx = (bounds.minX + bounds.maxX) / 2;
       const cy = (bounds.minY + bounds.maxY) / 2;
       const nextCam = {
-        panX: -cx * fitZoom - rightInset / 2,
-        panY: -cy * fitZoom,
+        panX: -cx * fitZoom - rightInset / 2 + (width >= 900 ? 40 : 0),
+        panY: -cy * fitZoom - 16,
         zoom: fitZoom,
       };
       if (animate) {
@@ -350,7 +350,7 @@ export function GraphCanvas2D({
 
     const dx = e.clientX - st.startClientX;
     const dy = e.clientY - st.startClientY;
-    if (Math.hypot(dx, dy) > 4) st.moved = true;
+    if (Math.hypot(dx, dy) > 8) st.moved = true;
 
     if (st.mode === "pan") {
       setCamera((prev) => ({
@@ -487,93 +487,17 @@ export function GraphCanvas2D({
     };
   };
 
-  // De-overlap 2D regional headers above top node cards
-  const headerBaseOffset =
-    detailTier === "dots" ? 30 * Math.min(1.8, dotScale2D) : CARD_HEIGHT / 2 + 28;
-  const headerPillScale = 1 / Math.max(0.28, Math.min(1, camera.zoom));
-  const placedHeaderRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-  const placedRegionHeaders2D =
-    layoutMode === "force"
-      ? [...regionClusters2D]
-          .sort((a, b) => {
-            const aSel = selectedRegionScope === a.id ? 1 : 0;
-            const bSel = selectedRegionScope === b.id ? 1 : 0;
-            if (aSel !== bSel) return bSel - aSel;
-            return b.count - a.count;
-          })
-          .map((cluster) => {
-            const shortLabel =
-              cluster.label.length > 26 ? `${cluster.label.slice(0, 24)}…` : cluster.label;
-            const labelText = `${shortLabel.toUpperCase()} · ${cluster.count}`;
-            const pillW = Math.max(110, labelText.length * 6.8 + 26);
-            const worldWHeader = pillW * headerPillScale;
-            const worldHHeader = 26 * headerPillScale;
-            const x = cluster.centroid.x;
-            let y = cluster.minY - headerBaseOffset;
-            for (let step = 0; step < 4; step++) {
-              const box = {
-                left: x - worldWHeader / 2 - 8,
-                right: x + worldWHeader / 2 + 8,
-                top: y - worldHHeader / 2 - 4,
-                bottom: y + worldHHeader / 2 + 4,
-              };
-              const overlaps = placedHeaderRects.some(
-                (b) => !(box.right < b.left || box.left > b.right || box.bottom < b.top || box.top > b.bottom)
-              );
-              if (!overlaps) {
-                placedHeaderRects.push(box);
-                break;
-              }
-              y -= worldHHeader + 6;
-            }
-            return { cluster, labelText, pillW, x, y, pillScale: headerPillScale };
-          })
-      : [];
+  // Keep 2D graph uncluttered: hide always-on region headers and dot labels (labels appear on hover, selection, or search)
+  const placedRegionHeaders2D: Array<{
+    cluster: (typeof regionClusters2D)[number];
+    labelText: string;
+    pillW: number;
+    x: number;
+    y: number;
+    pillScale: number;
+  }> = [];
 
   const placedDotLabelUuids2D = new Set<string>();
-  if (detailTier === "dots") {
-    const dotCandidates: ScreenLabelCandidate[] = [];
-    for (const node of nodes) {
-      const p = positions.get(node.uuid);
-      if (!p) continue;
-      const isSelected = node.uuid === selectedNodeUuid;
-      const isHovered = node.uuid === hoveredNodeUuid;
-      const isSearchHit = matchingUuids.has(node.uuid);
-      const isNeighbor = activeNeighbors ? activeNeighbors.has(node.uuid) : false;
-      const isSuperseded =
-        node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
-      const microBadge = resolveMicroscopeNodeBadge(microscopeByNode[node.uuid], isLightTheme);
-
-      let priority = 20;
-      if (node.label === "Insight") priority += 120;
-      else if (node.label === "Concept") priority += 80;
-      else if (node.label === "Rule") priority += 30;
-      if (dipoleNodeUuids2D.has(node.uuid)) priority += 70;
-      if (microBadge) priority += 65;
-      if (isSuperseded) priority -= 30;
-      if (regionSpotlight?.localNodeSet.has(node.uuid)) priority += 140;
-      if (isNeighbor) priority += 240;
-      if (isSearchHit) priority += 420;
-      if (isHovered) priority += 750;
-      if (isSelected) priority += 1000;
-
-      const clean = humanizeNodeText(node.properties.name);
-      const trunc = clean.length > 28 ? `${clean.slice(0, 26)}…` : clean;
-      const r = computeDotRadius2D(node, dotScale2D);
-      dotCandidates.push({
-        uuid: node.uuid,
-        title: trunc,
-        label: node.label,
-        color: resolveEtgNodeColor(node),
-        x: p.x * camera.zoom,
-        y: (p.y + r + 14 * Math.min(2, dotScale2D)) * camera.zoom,
-        priority,
-      });
-    }
-    for (const item of selectNonOverlappingLabels(dotCandidates, 28, 12, 8)) {
-      placedDotLabelUuids2D.add(item.uuid);
-    }
-  }
 
   const nodeAvoidBoxes2D = nodes
     .map((node) => {
@@ -1081,7 +1005,7 @@ export function GraphCanvas2D({
       </svg>
 
       {/* Bottom-left Minimap + Camera Dock */}
-      <div className="absolute bottom-3 left-3.5 z-10 flex flex-col items-start gap-2.5">
+      <div className="absolute bottom-2.5 left-2.5 z-10 flex flex-col items-start gap-2">
         <Graph2DMinimap
           nodes={nodes}
           positions={positions}

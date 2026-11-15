@@ -139,11 +139,11 @@ export function WorkbenchEdgeComposerForm({
   const tgtNode = nodeById.get(edgeTargetUuid);
 
   return (
-    <div className="etg-hud-pill max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-md bg-surface shadow-2xl">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <GitBranchPlus className="h-4 w-4 text-amber-400" />
-          <h2 className="text-sm font-semibold text-text-primary">
+    <div className="etg-hud-pill flex max-h-[calc(100dvh-5.75rem)] flex-col overflow-hidden rounded-md bg-surface shadow-2xl">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <GitBranchPlus className="h-3.5 w-3.5 text-amber-400" />
+          <h2 className="text-[13px] font-semibold text-text-primary">
             {selectedEdge ? "Edit Graph Connection" : "Connect Phenomena"}
           </h2>
         </div>
@@ -154,15 +154,16 @@ export function WorkbenchEdgeComposerForm({
             if (selectedEdge && !pendingConnectPair) onClose();
           }}
           aria-label="Close connection composer"
-          className="rounded-sm p-1 text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
+          className="etg-hud-btn inline-flex h-7 w-7 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      <form onSubmit={handleSaveEdge} className="space-y-3 p-3.5 text-xs">
+      <form onSubmit={handleSaveEdge} className="flex min-h-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain p-2.5 text-xs">
         {/* Directed Endpoints + Swap */}
-        <div className="rounded-md border border-border bg-surface-inset p-2.5 space-y-2">
+        <div className="rounded-md border border-border bg-surface-inset p-2 space-y-1.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
               <label htmlFor={`${baseId}-edge-src`} className="ws-eyebrow block">
@@ -347,11 +348,13 @@ export function WorkbenchEdgeComposerForm({
           </div>
         )}
 
-        <div className="flex items-center gap-2 pt-1">
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-2.5 py-2">
           <button
             type="submit"
             disabled={busy}
-            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-sm bg-accent px-3 py-2 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-sm bg-accent px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
           >
             <Check className="h-3.5 w-3.5" />
             {selectedEdge ? "Save Edge Changes" : "Wire Causal Link"}
@@ -361,7 +364,7 @@ export function WorkbenchEdgeComposerForm({
               type="button"
               disabled={busy}
               onClick={() => void onDeleteEdge(selectedEdge.properties.uuid)}
-              className="inline-flex items-center gap-1 rounded-sm border border-rose-400 bg-rose-950 px-3 py-2 text-xs font-semibold text-rose-300 hover:border-rose-300 disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-sm border border-rose-400 bg-rose-950 px-2.5 py-1.5 text-xs font-semibold text-rose-300 hover:border-rose-300 disabled:opacity-50 cursor-pointer"
             >
               <Unlink className="h-3.5 w-3.5" />
               Unlink

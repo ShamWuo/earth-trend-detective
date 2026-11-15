@@ -11,6 +11,8 @@ import type {
   ETGEdge,
   ETGNode,
   ETGRelationshipType,
+  LinkTrendMicroscopeCue,
+  NodeTrendMicroscopeCue,
   RelationCategory,
   TemperatureUnit,
   TrendAnalysisSummary,
@@ -76,7 +78,15 @@ export function formatCoordShort(lat: number, lng: number): string {
 }
 
 function isCoordinateOnlyRegion(region: string): boolean {
-  return /^-?\d+(?:\.\d+)?°,\s*-?\d+(?:\.\d+)?°$/.test(region.trim());
+  const trimmed = region.trim();
+  if (!trimmed) return true;
+  if (/^-?\d+(?:\.\d+)?°,\s*-?\d+(?:\.\d+)?°$/.test(trimmed)) return true;
+  if (!/[a-zA-Z]{2,}/.test(trimmed)) return true;
+  if (/\bcorridor\s*\(\d+\s*km\)/i.test(trimmed)) return true;
+  if (/^(unknown|unassigned|custom|sensor|esp32|redteam|empirical series)$/i.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -85,17 +95,32 @@ function isCoordinateOnlyRegion(region: string): boolean {
 export function describeGeographicZone(
   lat: number,
   lng: number,
-  nearbyNode?: ETGNode | null
+  nearbyNode?: ETGNode | ReadonlyArray<ETGNode> | null
 ): string {
-  const region = nearbyNode?.properties.region?.trim();
-  if (
-    region &&
-    !isCoordinateOnlyRegion(region) &&
-    typeof nearbyNode?.properties.lat === "number" &&
-    typeof nearbyNode?.properties.lng === "number" &&
-    haversineDistanceKm(lat, lng, nearbyNode.properties.lat, nearbyNode.properties.lng) <= 350
-  ) {
-    return `Near ${region}`;
+  const candidates: ReadonlyArray<ETGNode> = Array.isArray(nearbyNode)
+    ? nearbyNode
+    : nearbyNode
+      ? [nearbyNode]
+      : [];
+
+  let bestNamed: { region: string; distKm: number } | null = null;
+  for (const node of candidates) {
+    const region = node?.properties.region?.trim();
+    if (
+      !region ||
+      isCoordinateOnlyRegion(region) ||
+      typeof node?.properties.lat !== "number" ||
+      typeof node?.properties.lng !== "number"
+    ) {
+      continue;
+    }
+    const distKm = haversineDistanceKm(lat, lng, node.properties.lat, node.properties.lng);
+    if (distKm <= 350 && (!bestNamed || distKm < bestNamed.distKm)) {
+      bestNamed = { region, distKm };
+    }
+  }
+  if (bestNamed) {
+    return `Near ${bestNamed.region}`;
   }
 
   if (lat >= 66.5) return "Arctic Region";
@@ -167,8 +192,15 @@ function extractParameterShort(parameter: string, dataset: ETGDatasetId): string
   if (/\bt2m\b/.test(lower)) return "T2M Air";
   if (/\bvpd\b/.test(lower)) return "Vapor Pressure Deficit";
   if (/\bprectotcorr\b/.test(lower)) return "Precip";
-  if (/\bgwetprof\b/.test(lower)) return "Soil Moist.";
-  if (/\bts\b/.test(lower)) return "Skin Temp";
+  if (/marine precip/.test(lower)) return "Marine Precip";
+  if (/\bgwetroot\b|\bgwetprof\b|root-zone|soil wetness|soil moist/.test(lower)) {
+    return "Soil Moist.";
+  }
+  if (/\brh2m\b|relative humidity/.test(lower)) return "Rel. Humidity";
+  if (/\baod_55\b|\baod\b|aerosol optical/.test(lower)) return "Aerosols";
+  if (/nino\s*3\.?4|niño\s*3\.?4/.test(lower)) return "Niño 3.4";
+  if (/\bahccd\b/.test(lower)) return "AHCCD";
+  if (/\bts\b|skin temp/.test(lower)) return "Skin Temp";
   if (/\bevptrns\b/.test(lower)) return "Canopy ET";
   if (/\ballsky_sfc_sw_dwn\b/.test(lower)) return "Solar SW";
   if (lower.includes("discharge")) return "River Flow";
@@ -209,6 +241,8 @@ function resolveTopicHeadline(summary: TrendAnalysisSummary): {
       unitLower.includes("kwh"));
   const isWindSpeed =
     dataset === "nasa_power" && /\bws10m\b|\bws50m\b|\bwind/.test(paramLower);
+  const isHumidity =
+    /\brh2m\b|relative humidity/.test(paramLower) || unitLower.includes("% rh");
   const effectiveSig = mannKendall.significant && (mannKendall.significantAdjusted ?? true);
 
   if (!effectiveSig || mannKendall.direction === "no_trend") {
@@ -217,11 +251,17 @@ function resolveTopicHeadline(summary: TrendAnalysisSummary): {
         ? "Steady solar irradiance"
         : isWindSpeed
           ? "Steady wind speeds"
-          : "Steady temperatures",
+          : isHumidity
+            ? "Steady relative humidity"
+            : "Steady temperatures",
       wildfire: isVpd ? "Steady fire-weather aridity" : "Typical peak heat",
       hydrology: isDischarge ? "Steady river flow" : "Steady rainfall & moisture",
-      ocean_temp: isSeaIceMetric ? "Steady sea ice extent" : "Steady surface warmth",
-      deforestation: isEvap ? "Steady evapotranspiration" : "Steady land moisture",
+      ocean_temp: isSeaIceMetric ? "Steady sea ice extent" : "Steady sea surface warmth",
+      deforestation: isEvap
+        ? "Steady evapotranspiration"
+        : isHumidity
+          ? "Steady vegetation moisture"
+          : "Steady land moisture",
       air_quality: paramLower.includes("co2")
         ? "Steady CO₂ levels"
         : isPm25
@@ -250,6 +290,12 @@ function resolveTopicHeadline(summary: TrendAnalysisSummary): {
         tone,
       };
     }
+    if (isHumidity) {
+      return {
+        headline: rising ? "Higher relative humidity" : "Drier air (lower RH)",
+        tone,
+      };
+    }
     return { headline: rising ? "Warming steadily" : "Cooling trend", tone };
   }
   if (dataset === "wildfire") {
@@ -271,11 +317,17 @@ function resolveTopicHeadline(summary: TrendAnalysisSummary): {
     if (isSeaIceMetric) {
       return { headline: rising ? "Sea ice expanding" : "Sea ice shrinking", tone };
     }
-    return { headline: rising ? "Surface warming" : "Surface cooling", tone };
+    return { headline: rising ? "Sea surface warming" : "Sea surface cooling", tone };
   }
   if (dataset === "deforestation") {
     if (isEvap) {
       return { headline: rising ? "Higher canopy water flux" : "Lower canopy water flux", tone };
+    }
+    if (isHumidity) {
+      return {
+        headline: rising ? "Moister near-surface air (RH)" : "Drier near-surface air (RH)",
+        tone,
+      };
     }
     return { headline: rising ? "Greening / moister" : "Drying / canopy stress", tone };
   }
@@ -593,7 +645,7 @@ export const RELATION_CATEGORY_META: Record<
   },
 };
 
-/** Canonical list of all 16 ETG relationship types. */
+/** Canonical list of all 17 ETG relationship types. */
 export const ALL_ETG_RELATIONSHIP_TYPES: readonly ETGRelationshipType[] = [
   "drives_opposite",
   "leads",
@@ -607,6 +659,7 @@ export const ALL_ETG_RELATIONSHIP_TYPES: readonly ETGRelationshipType[] = [
   "relates_to",
   "hypothesized_link",
   "corroborates",
+  "contradicts",
   "supports",
   "verified_by",
   "monitors",
@@ -627,7 +680,7 @@ export function getRelationshipTypesForFilter(
   );
 }
 
-/** Classify any of the 16 ETGRelationshipTypes into one of four top-level UI/globe categories. */
+/** Classify any of the 17 ETGRelationshipTypes into one of four top-level UI/globe categories. */
 export function classifyRelationCategory(
   type: ETGRelationshipType
 ): RelationCategory {
@@ -647,6 +700,7 @@ export function classifyRelationCategory(
     case "hypothesized_link":
       return "coupled";
     case "corroborates":
+    case "contradicts":
     case "supports":
     case "verified_by":
     case "monitors":
@@ -724,6 +778,10 @@ function describeRelationVerb(
       return incoming
         ? { badgeText: "Corroborated by", verbPhrase: "corroborated by" }
         : { badgeText: "Corroborates", verbPhrase: "corroborates" };
+    case "contradicts":
+      return incoming
+        ? { badgeText: "Contradicted by", verbPhrase: "contradicted by" }
+        : { badgeText: "Contradicts", verbPhrase: "contradicts" };
     case "supports":
       return incoming
         ? { badgeText: "Supported by", verbPhrase: "supported by" }
@@ -865,4 +923,51 @@ export function formatCompactLag(steps: number, lagUnit: string): string {
           ? "d"
           : lagUnit.trim();
   return `${steps} ${unitLabel}`;
+}
+
+/**
+ * Formats an AI Trend Microscope node finding in clear, human-readable scientific prose
+ * instead of exposing raw token dumps (`badge=..., z_mk=..., P_onset=...`).
+ */
+export function formatMicroscopeNodeSummary(cue: NodeTrendMicroscopeCue): string {
+  const pct = (v: number) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+  const lead = Number.isFinite(cue.leadStepsAhead) ? Math.max(0, Math.round(cue.leadStepsAhead)) : 0;
+  const dir =
+    cue.emergingDirection === "increasing"
+      ? "upward"
+      : cue.emergingDirection === "decreasing"
+        ? "downward"
+        : "neutral";
+
+  switch (cue.radarBadge) {
+    case "SENSOR_GLITCH_RISK":
+      return `Potential sensor jump or abrupt artifact (${pct(cue.dealiasing.artifactShare)} step-change energy). Verify local calibration before citing as a physical trend.`;
+    case "FALSE_TREND_CYCLE":
+      return `Driven mostly by recurring seasonal or multi-year cycles (${pct(cue.dealiasing.oscillationShare)} cyclical variance) rather than a persistent long-term trend.`;
+    case "EARLY_ONSET":
+      return `Early ${dir} shift (${pct(cue.onsetProb)} likelihood${lead > 0 ? `, ~${lead}-step early lead` : ""}) emerging ahead of a standard |z|=${cue.mkAbsZ.toFixed(1)} detection threshold.`;
+    case "SECULAR_ACCELERATION":
+      return `Persistent long-term ${dir} shift (${pct(cue.dealiasing.secularShare)} secular signal, Mann-Kendall |z|=${cue.mkAbsZ.toFixed(1)}).`;
+    default:
+      return `Routine fluctuations within normal historical bounds (${pct(cue.trustGate)} signal quality score).`;
+  }
+}
+
+/**
+ * Formats a Trend Microscope cross-location coupling/confounder finding cleanly.
+ */
+export function formatMicroscopeLinkSummary(cue: LinkTrendMicroscopeCue): string {
+  const pct = (v: number) => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+  if (cue.confounderProb >= 0.55) {
+    return `Likely shared seasonal timing or third-factor confounder (${pct(cue.confounderProb)} likelihood): raw correlation r=${cue.rawPeakR.toFixed(2)} weakens to r=${cue.cleanPeakR.toFixed(2)} after removing trends and seasons.`;
+  }
+  const kind =
+    cue.polarity === "drives_opposite"
+      ? "opposite-direction coupling"
+      : cue.polarity === "co_trending"
+        ? "in-phase co-movement"
+        : "weak alignment";
+  const lagText =
+    cue.optimalLagSteps > 0 ? ` with a ~${cue.optimalLagSteps}-step lead/lag` : "";
+  return `Detected ${kind}${lagText} (${pct(cue.trueCouplingProb)} physical coupling score, de-trended r=${cue.cleanPeakR.toFixed(2)}).`;
 }

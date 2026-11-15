@@ -8,11 +8,13 @@ import type { ETGDatasetId, ETGNode } from "@/types/etg";
 interface VariableGuidePopoverButtonProps {
   label?: string;
   compact?: boolean;
+  iconOnly?: boolean;
 }
 
 export function VariableGuidePopoverButton({
   label = "? Variable Guide",
   compact = false,
+  iconOnly = false,
 }: VariableGuidePopoverButtonProps) {
   const guideId = useId();
   const [guideOpen, setGuideOpen] = useState(false);
@@ -23,15 +25,18 @@ export function VariableGuidePopoverButton({
         type="button"
         popoverTarget={guideId}
         aria-expanded={guideOpen}
+        aria-label={iconOnly ? "Open Student Variable Guide" : undefined}
         title="Plain-English guide to every NASA satellite and physical Earth variable"
         className={
-          compact
-            ? "etg-guide-trigger inline-flex items-center gap-1 rounded-sm border border-border bg-surface-elevated px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
-            : "etg-guide-trigger inline-flex items-center gap-1 rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
+          iconOnly
+            ? "etg-guide-trigger inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface-inset text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
+            : compact
+              ? "etg-guide-trigger inline-flex items-center gap-1 rounded-sm border border-border bg-surface-elevated px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
+              : "etg-guide-trigger inline-flex items-center gap-1 rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
         }
       >
-        <HelpCircle className="h-3 w-3 text-accent-fg" aria-hidden="true" />
-        <span>{label}</span>
+        <HelpCircle className="h-3.5 w-3.5 text-accent-fg" aria-hidden="true" />
+        {!iconOnly && <span>{label}</span>}
       </button>
 
       <div
@@ -118,16 +123,16 @@ export function DatasetSelector({
   const allSelected = activeTopics.length === 0;
 
   return (
-    <section aria-labelledby="dataset-selector-heading" className="space-y-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <section aria-labelledby="dataset-selector-heading" className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex items-center gap-1.5">
           <Layers className="h-3.5 w-3.5 text-accent-fg" aria-hidden="true" />
           <h2 id="dataset-selector-heading" className="ws-eyebrow">
             Topics to Show
           </h2>
         </div>
-        <div className="flex items-center gap-2">
-          <VariableGuidePopoverButton />
+        <div className="flex items-center gap-1.5">
+          <VariableGuidePopoverButton compact />
           {!allSelected && (
             <button
               type="button"
@@ -140,12 +145,12 @@ export function DatasetSelector({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1">
         <button
           type="button"
           aria-pressed={allSelected}
           onClick={onResetTopics}
-          className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs transition-colors cursor-pointer ${
+          className={`inline-flex items-center gap-1 rounded-sm border px-2 py-1 text-[11.5px] transition-colors cursor-pointer ${
             allSelected
               ? "border-accent-fg bg-amber-950 font-semibold text-amber-300"
               : "border-border bg-surface-inset text-text-muted hover:border-border-strong hover:text-text-primary"
@@ -167,7 +172,7 @@ export function DatasetSelector({
               type="button"
               aria-pressed={active}
               onClick={() => onToggleTopic(ds.id)}
-              className={`inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1 rounded-sm border px-2 py-1 text-[11.5px] transition-colors cursor-pointer ${
                 active
                   ? "border-accent-fg bg-amber-950 font-semibold text-amber-300"
                   : "border-border bg-surface-inset text-text-muted hover:border-border-strong hover:text-text-primary"

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import { validateGraphAction } from "@/lib/graph/graphGuard";
 import { materializeDenverSolarGraphIntoEtg } from "@/lib/graph/graphPredictor";
+import { sanitizeResearchDossier } from "@/lib/research/dossierUtils";
 import type {
   ETGAuthorType,
   ETGDatasetId,
@@ -9,6 +10,7 @@ import type {
   ETGNodeLabel,
   ETGNodeProperties,
   ETGRelationshipType,
+  ETGResearchDossier,
   ETGWorkspaceBundle,
 } from "@/types/etg";
 
@@ -194,6 +196,11 @@ export async function POST(req: NextRequest) {
       const rawDataset = typeof props.dataset === "string" ? props.dataset : undefined;
       const datasetForGuard =
         rawDataset === "co2" ? "air_quality" : (rawDataset as ETGDatasetId | undefined);
+      const rawDossier = props.dossier;
+      if (rawDossier !== undefined && rawDossier !== null) {
+        const cleanDossier = sanitizeResearchDossier(rawDossier);
+        if (cleanDossier) props.dossier = cleanDossier;
+      }
 
       return validateGraphAction(store, {
         type: "create_node",
@@ -204,6 +211,9 @@ export async function POST(req: NextRequest) {
         lat: parsedLat,
         lng: parsedLng,
         dataset: datasetForGuard,
+        ...(rawDossier !== undefined && rawDossier !== null
+          ? { dossier: rawDossier as ETGResearchDossier }
+          : {}),
       });
     };
 
@@ -393,6 +403,10 @@ export async function PATCH(req: NextRequest) {
       const nextName = typeof patchObj.name === "string" ? patchObj.name.trim() : undefined;
       const nextDesc = typeof patchObj.description === "string" ? patchObj.description.trim() : undefined;
       const nextRegion = typeof patchObj.region === "string" ? patchObj.region.trim() : undefined;
+      const hasDossierPatch = patchObj.dossier !== undefined && patchObj.dossier !== null;
+      const sanitizedDossier = hasDossierPatch
+        ? sanitizeResearchDossier(patchObj.dossier)
+        : undefined;
       const verdict = validateGraphAction(store, {
         type: "update_node",
         uuid: body.nodeUuid,
@@ -403,6 +417,7 @@ export async function PATCH(req: NextRequest) {
           nextRegion !== undefined && nextRegion !== (existingNode.properties.region ?? "").trim()
             ? nextRegion
             : undefined,
+        ...(hasDossierPatch ? { dossier: patchObj.dossier as ETGResearchDossier } : {}),
         rationale:
           typeof patchObj.rationale === "string" && patchObj.rationale.trim().length >= 6
             ? patchObj.rationale
@@ -415,9 +430,14 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      const { rationale: _ignoredRationale, ...restPatchObj } = patchObj;
+      if (hasDossierPatch && sanitizedDossier) {
+        restPatchObj.dossier = sanitizedDossier;
+      }
+
       const updated = store.updateNode(
         body.nodeUuid,
-        patchObj as Partial<ETGNodeProperties> & { label?: string; is_provisional?: boolean }
+        restPatchObj as Partial<ETGNodeProperties> & { label?: string; is_provisional?: boolean }
       );
       if (!updated) {
         return NextResponse.json({ error: "Node not found" }, { status: 404 });

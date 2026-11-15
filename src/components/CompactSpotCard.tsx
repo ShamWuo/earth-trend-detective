@@ -2,7 +2,7 @@
 
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, ArrowRight, BookOpenText, GitBranch, GitCompare, PlusCircle } from "lucide-react";
 import { DATASET_BY_ID } from "@/lib/datasets";
 import { isTemperatureUnitString } from "@/lib/earth/currentConditionsClient";
 import {
@@ -26,6 +26,7 @@ import {
   type CompactSpotCardProps,
   DEFAULT_SPOT_VIEW_PREFS,
   SPOT_VIEW_PREFS_KEY,
+  type SpotInspectorTab,
   type SpotViewPrefs,
   summaryKey,
 } from "@/components/spot/spotCardShared";
@@ -95,11 +96,15 @@ export function CompactSpotCard({
   onCommitToGraph,
   onCommitRelation,
   onOpenInGraphWorkbench,
+  onOpenBriefing,
+  onSatelliteZoomSpot,
+  onOpenSolarForSpot,
   onGraphUpdated,
   onClose,
 }: CompactSpotCardProps) {
   const [prefs, setPrefs] = useState<SpotViewPrefs>(DEFAULT_SPOT_VIEW_PREFS);
   const [prefsHydrated, setPrefsHydrated] = useState(false);
+  const [activeTab, setActiveTab] = useState<SpotInspectorTab>("overview");
   const [localRelationFilter, setLocalRelationFilter] = useState<"all" | RelationCategory>("all");
   const [committing, setCommitting] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -397,6 +402,20 @@ export function CompactSpotCard({
   );
   const isComparingTwoSpots = Boolean(comparison && primary && secondary);
   const isCompareHeader = isComparingTwoSpots || Boolean(comparePending && loading);
+
+  // Sync tab selection when switching between single-spot exploration and 2-spot comparisons
+  useEffect(() => {
+    if (isCompareHeader || Boolean(selectedEdge)) {
+      setActiveTab((prev) => (prev === "science" ? "science" : "relations"));
+      return;
+    }
+    setActiveTab("overview");
+  }, [selectionKey, isCompareHeader, selectedEdge]);
+  const zoneCandidateNodes = useMemo(
+    () => [...nearbyMatching.map((m) => m.node), ...allNodes],
+    [nearbyMatching, allNodes]
+  );
+
   const rawLabelA =
     activeGuidedCase?.spotAName ||
     (sourceNode?.properties.region && !sourceNode.properties.region.includes("°")
@@ -405,9 +424,9 @@ export function CompactSpotCard({
         ? humanizeNodeText(sourceNode.properties.name)
         : null) ||
     (primary
-      ? describeGeographicZone(primary.lat, primary.lng, nearbyMatching[0]?.node)
+      ? describeGeographicZone(primary.lat, primary.lng, zoneCandidateNodes)
       : coord
-        ? describeGeographicZone(coord.lat, coord.lng, nearbyMatching[0]?.node)
+        ? describeGeographicZone(coord.lat, coord.lng, zoneCandidateNodes)
         : "Spot A");
   const rawLabelB =
     activeGuidedCase?.spotBName ||
@@ -416,7 +435,7 @@ export function CompactSpotCard({
       : targetNode
         ? humanizeNodeText(targetNode.properties.name)
         : null) ||
-    (secondary ? describeGeographicZone(secondary.lat, secondary.lng, null) : "Spot B");
+    (secondary ? describeGeographicZone(secondary.lat, secondary.lng, allNodes) : "Spot B");
 
   const needZoneDisambiguation =
     isComparingTwoSpots && rawLabelA === rawLabelB && Boolean(primary && secondary);
@@ -434,7 +453,7 @@ export function CompactSpotCard({
     : selectedNode
       ? humanizeNodeText(selectedNode.properties.name)
       : coord
-        ? describeGeographicZone(coord.lat, coord.lng, nearbyMatching[0]?.node)
+        ? describeGeographicZone(coord.lat, coord.lng, zoneCandidateNodes)
         : "Selected Spot";
 
   const activeDigest = activeSummary ? describeTrendPlainly(activeSummary, tempUnit) : null;
@@ -486,9 +505,16 @@ export function CompactSpotCard({
       if (activeTopics.length > 0 && !activeTopics.includes(d.dataset)) return false;
       if (visibleDatasetSet.has(d.dataset)) return false;
       if (d.dataset === "community" && hasLocalCommunityMatch) return false;
+      if (
+        d.status === "unavailable" &&
+        activeTopics.length === 0 &&
+        visibleSummaries.length > 0
+      ) {
+        return false;
+      }
       return true;
     });
-  }, [diagnostics, activeTopics, visibleDatasetSet, hasLocalCommunityMatch]);
+  }, [diagnostics, activeTopics, visibleDatasetSet, hasLocalCommunityMatch, visibleSummaries.length]);
 
   const failedFeedLabels = useMemo(() => {
     const labels: string[] = [];
@@ -632,7 +658,7 @@ export function CompactSpotCard({
   };
 
   return (
-    <div className="relative flex max-sm:max-h-[54dvh] sm:max-h-[calc(100dvh-5rem)] w-full flex-col overflow-hidden rounded-md border border-border bg-surface shadow-2xl">
+    <div className="relative flex max-sm:max-h-[54dvh] sm:max-h-[calc(100dvh-4.25rem)] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface/95 backdrop-blur-md shadow-2xl">
       <SpotCardHeader
         cardTitle={cardTitle}
         isComparingTwoSpots={isComparingTwoSpots}
@@ -642,238 +668,402 @@ export function CompactSpotCard({
         selectedNode={selectedNode}
         tempUnit={tempUnit}
         onChangeTempUnit={onChangeTempUnit}
+        onSatelliteZoomSpot={onSatelliteZoomSpot}
+        onOpenSolarForSpot={onOpenSolarForSpot}
         mobileCollapsed={mobileCollapsed}
         onToggleMobileCollapse={onToggleMobileCollapse}
-        prefs={prefs}
-        onUpdatePref={updatePref}
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
         visibleSummaryCount={visibleSummaries.length}
         linkedRelationCount={allLinkedRelations.length}
         onClose={onClose}
       />
 
       <div
-        className={`flex-1 space-y-3 overflow-y-auto overscroll-contain px-3.5 py-3 text-xs sm:px-4 ${
+        className={`min-h-0 flex-1 overflow-y-auto overscroll-contain text-xs ${
           mobileCollapsed ? "max-sm:hidden" : ""
         }`}
       >
-        {loading && (
-          <div
-            role="progressbar"
-            aria-label="Loading spot telemetry"
-            className="space-y-2 py-1"
-          >
-            <div className="h-1 w-full overflow-hidden rounded-xs bg-surface-elevated">
-              <div className="h-full w-1/2 animate-pulse rounded-xs bg-sky-400" />
-            </div>
-            {!hasAnySpotData && (
-              <>
-                <div className="h-14 w-full animate-pulse rounded-md bg-surface-elevated" />
-                <div className="h-12 w-full animate-pulse rounded-md bg-surface-elevated" />
-              </>
+        {(loading || (!loading && hasTopFetchFailure) || (compareMode && !isComparingTwoSpots)) && (
+          <div className="space-y-1.5 px-3 pt-2">
+            {loading && (
+              <div
+                role="progressbar"
+                aria-label="Loading spot telemetry"
+                className="space-y-2 py-0.5"
+              >
+                <div className="h-1 w-full overflow-hidden rounded-xs bg-surface-elevated">
+                  <div className="h-full w-1/2 animate-pulse rounded-xs bg-sky-400" />
+                </div>
+                {!hasAnySpotData && (
+                  <>
+                    <div className="h-14 w-full animate-pulse rounded-md bg-surface-elevated" />
+                    <div className="h-12 w-full animate-pulse rounded-md bg-surface-elevated" />
+                  </>
+                )}
+              </div>
+            )}
+
+            {!loading && hasTopFetchFailure && hasAnySpotData && (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-inset px-2.5 py-1 text-[11px] text-text-muted">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
+                  <span className="truncate">
+                    {failedFeedLabels.length > 0
+                      ? `${failedFeedLabels.join(", ")} unavailable right now`
+                      : "Partial telemetry unavailable right now"}
+                  </span>
+                </span>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    aria-label="Retry spot telemetry"
+                    className="shrink-0 font-medium text-accent-fg hover:underline cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+
+            {!loading && hasTopFetchFailure && !hasAnySpotData && (
+              <div
+                role="alert"
+                className="flex items-start justify-between gap-2 rounded-md border border-rose-500/40 bg-rose-950/40 p-2.5 text-rose-200"
+              >
+                <div className="flex min-w-0 items-start gap-2">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" aria-hidden="true" />
+                  <div className="min-w-0 space-y-1">
+                    <div className="text-[11px] font-semibold text-rose-100">
+                      Unable to load live telemetry
+                      {failedFeedLabels.length > 0 ? ` (${failedFeedLabels.join(" · ")})` : ""}
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-rose-200/85">
+                      {error
+                        ? error
+                        : "Upstream telemetry servers could not be reached for this coordinate right now."}
+                    </p>
+                  </div>
+                </div>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    aria-label="Retry spot telemetry"
+                    className="shrink-0 cursor-pointer rounded-md border border-rose-400/50 bg-rose-900/70 px-2.5 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-800"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+
+            {compareMode && !isComparingTwoSpots && (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-cyan-400/50 bg-cyan-950/60 px-2.5 py-1.5 text-[11px] text-cyan-200">
+                <span>Click a second spot on Earth to compare how they change together.</span>
+                <button
+                  type="button"
+                  onClick={onToggleCompareMode}
+                  className="shrink-0 font-semibold text-cyan-200 hover:underline cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
         )}
 
-        {!loading && hasTopFetchFailure && (
+        {!isCompareHeader && (
           <div
-            role="alert"
-            className="flex items-start justify-between gap-2.5 rounded-md border border-rose-400 bg-rose-950 p-3 text-rose-200"
+            id="spot-panel-overview"
+            role="tabpanel"
+            aria-labelledby="spot-tab-overview"
+            hidden={activeTab !== "overview"}
           >
-            <div className="flex min-w-0 items-start gap-2">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" aria-hidden="true" />
-              <div className="min-w-0 space-y-1">
+            <div className="space-y-2.5 px-3 py-2.5">
+              {(current || !loading) && coord && (
+                <SpotCurrentConditionsSection
+                  current={current}
+                  tempUnit={tempUnit}
+                  tempSummaryForNow={tempSummaryForNow}
+                  diagnostics={diagnostics}
+                  failureKind={failureKind}
+                  error={error}
+                />
+              )}
+
+              {activeSummary && (
+                <div className="space-y-1.5 border-t border-border-subtle pt-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-medium text-text-subtle">
+                        {activeDigest
+                          ? `${activeDigest.topicLabel} · ${activeDigest.parameterShort}`
+                          : `${DATASET_BY_ID[activeSummary.dataset]?.shortLabel ?? activeSummary.dataset} · ${activeSummary.parameter}`}
+                      </div>
+                      {activeDigest && (
+                        <div className="mt-0.5 text-[13px] font-medium leading-snug text-text-primary">
+                          {activeDigest.headline}
+                        </div>
+                      )}
+                    </div>
+                    {visibleSummaries.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("trends")}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-accent-fg hover:bg-surface-band cursor-pointer"
+                      >
+                        <span>All {visibleSummaries.length}</span>
+                        <ArrowRight className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+
+                  <SpotTrendChart
+                    summary={activeSummary}
+                    secondarySummary={secondary}
+                    comparison={comparison}
+                    labelA={labelA}
+                    labelB={labelB}
+                    tempUnit={tempUnit}
+                  />
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="inline-flex items-center rounded-xs border border-rose-400 bg-rose-900 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-100">
-                    Failed to fetch
-                  </span>
-                  {failedFeedLabels.length > 0 && (
-                    <span className="text-[11px] font-medium text-rose-200">
-                      {failedFeedLabels.join(" · ")}
-                    </span>
+                  <button
+                    type="button"
+                    onClick={onToggleCompareMode}
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                      compareMode
+                        ? "border-cyan-400 bg-cyan-950/70 text-cyan-200"
+                        : "border-border bg-surface-elevated text-text-primary hover:border-border-strong"
+                    }`}
+                  >
+                    <GitCompare className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>{compareMode ? "Comparing…" : "Compare"}</span>
+                  </button>
+
+                  {activeSummary && !selectedNode && (
+                    <button
+                      type="button"
+                      disabled={committing}
+                      onClick={() => void handleSaveToGraph()}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                    >
+                      <PlusCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>{committing ? "Saving…" : "Save to Graph"}</span>
+                    </button>
+                  )}
+
+                  {selectedNode && onOpenInGraphWorkbench && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenInGraphWorkbench(selectedNode.uuid)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                    >
+                      <GitBranch className="h-3.5 w-3.5 text-accent-fg" aria-hidden="true" />
+                      <span>Open in Graph</span>
+                    </button>
+                  )}
+
+                  {selectedNode && onOpenBriefing && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenBriefing(selectedNode.uuid)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                    >
+                      <BookOpenText className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                      <span>
+                        Briefing
+                        {selectedNode.properties.dossier?.citations.length
+                          ? ` (${selectedNode.properties.dossier.citations.length})`
+                          : ""}
+                      </span>
+                    </button>
                   )}
                 </div>
-                <p className="text-[11px] leading-relaxed text-rose-200">
-                  {error
-                    ? `Live telemetry request failed (${error}).`
-                    : "One or more upstream telemetry requests could not be reached."}
-                  {hasAnySpotData ? " Showing available data for this spot below." : ""}
-                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("science")}
+                  className="text-[11px] font-medium text-text-muted hover:text-text-primary hover:underline cursor-pointer"
+                >
+                  Forecast &amp; Stats →
+                </button>
               </div>
             </div>
-            {onRetry && (
-              <button
-                type="button"
-                onClick={onRetry}
-                aria-label="Retry spot telemetry"
-                className="shrink-0 cursor-pointer rounded-sm border border-rose-400 bg-rose-900 px-2.5 py-1 text-[11px] font-semibold text-rose-100 hover:bg-rose-800"
-              >
-                Retry
-              </button>
+          </div>
+        )}
+
+        {!isCompareHeader && (
+          <div
+            id="spot-panel-trends"
+            role="tabpanel"
+            aria-labelledby="spot-tab-trends"
+            hidden={activeTab !== "trends"}
+          >
+            <div className="space-y-2.5 px-3 py-2.5">
+              <SpotLongTermTrendsSection
+                trendLayout={prefs.trendLayout}
+                onChangeTrendLayout={(layout) => updatePref("trendLayout", layout)}
+                activeTopics={activeTopics}
+                onResetTopics={onResetTopics}
+                onlyCommunityFilterAtEmptySpot={onlyCommunityFilterAtEmptySpot}
+                visibleSummaries={visibleSummaries}
+                activeSummary={activeSummary}
+                activeDigest={activeDigest}
+                onFocusSummary={(key, dataset) => {
+                  setFocusedSummaryKey(key);
+                  onFocusSummaryDataset(dataset);
+                }}
+                tempUnit={tempUnit}
+                hasStoredNodeMetrics={hasStoredNodeMetrics}
+                selectedNode={selectedNode}
+                relevantDatasetDiags={relevantDatasetDiags}
+                loading={loading}
+                microscopeScan={microscopeScan}
+                microscopeByNode={microscopeByNode}
+                onOpenInGraphWorkbench={onOpenInGraphWorkbench}
+              />
+
+              {activeSummary && (
+                <div className="border-t border-border-subtle pt-2">
+                  <SpotTrendChart
+                    summary={activeSummary}
+                    secondarySummary={secondary}
+                    comparison={comparison}
+                    labelA={labelA}
+                    labelB={labelB}
+                    tempUnit={tempUnit}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div
+          id="spot-panel-relations"
+          role="tabpanel"
+          aria-labelledby="spot-tab-relations"
+          hidden={activeTab !== "relations"}
+        >
+          <div className="space-y-2.5 px-3 py-2.5">
+            {isComparingTwoSpots && comparisonDigest && primary && secondary && comparison ? (
+              <>
+                <SpotComparisonModeSection
+                  comparisonDigest={comparisonDigest}
+                  primary={primary}
+                  secondary={secondary}
+                  comparison={comparison}
+                  current={current}
+                  secondaryCurrent={secondaryCurrent}
+                  labelA={labelA}
+                  labelB={labelB}
+                  tempUnit={tempUnit}
+                  guidedCases={guidedCases}
+                  activeCaseStudyId={activeCaseStudyId}
+                  onSelectCaseStudy={onSelectCaseStudy}
+                  onSwapPins={onSwapPins}
+                  onClearComparison={onClearComparison}
+                />
+
+                <div className="border-t border-border-subtle pt-3">
+                  <SpotTrendChart
+                    summary={activeSummary}
+                    secondarySummary={secondary}
+                    comparison={comparison}
+                    labelA={labelA}
+                    labelB={labelB}
+                    tempUnit={tempUnit}
+                  />
+                </div>
+              </>
+            ) : (
+              <SpotRelationsSection
+                allNodesCount={allNodes.length}
+                allLinkedRelations={allLinkedRelations}
+                filteredLinkedRelations={filteredLinkedRelations}
+                relationCategoryCounts={relationCategoryCounts}
+                localRelationFilter={localRelationFilter}
+                onChangeLocalRelationFilter={setLocalRelationFilter}
+                anchorNode={anchorNode}
+                nearbyMatching={nearbyMatching}
+                compareMode={compareMode}
+                discoverBusy={discoverBusy}
+                onSelectNode={onSelectNode}
+                onSelectEdge={onSelectEdge}
+                onCompareOpposite={onCompareOpposite}
+                onToggleCompareMode={onToggleCompareMode}
+                onDiscoverGlobalTrends={onDiscoverGlobalTrends}
+              />
             )}
           </div>
-        )}
+        </div>
 
-        {compareMode && !isComparingTwoSpots && (
-          <div className="flex items-center justify-between gap-2 rounded-md border border-cyan-400 bg-cyan-950 px-3 py-2 text-cyan-300">
-            <span>Click a second spot on Earth to compare how they change together.</span>
-            <button
-              type="button"
-              onClick={onToggleCompareMode}
-              className="shrink-0 font-semibold text-cyan-300 hover:underline cursor-pointer"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-
-        {isComparingTwoSpots && comparisonDigest && primary && secondary && comparison && (
-          <SpotComparisonModeSection
-            comparisonDigest={comparisonDigest}
-            primary={primary}
-            secondary={secondary}
-            comparison={comparison}
-            current={current}
-            secondaryCurrent={secondaryCurrent}
-            labelA={labelA}
-            labelB={labelB}
-            tempUnit={tempUnit}
-            guidedCases={guidedCases}
-            activeCaseStudyId={activeCaseStudyId}
-            onSelectCaseStudy={onSelectCaseStudy}
-            onSwapPins={onSwapPins}
-            onClearComparison={onClearComparison}
-          />
-        )}
-
-        {(current || !loading) && !isComparingTwoSpots && prefs.showCurrent && coord && (
-          <SpotCurrentConditionsSection
-            current={current}
-            tempUnit={tempUnit}
-            tempSummaryForNow={tempSummaryForNow}
-            prefs={prefs}
-            diagnostics={diagnostics}
-            failureKind={failureKind}
-            error={error}
-          />
-        )}
-
-        {(visibleSummaries.length > 0 ||
-          hasStoredNodeMetrics ||
-          nearbyMatching.length > 0 ||
-          !loading) &&
-          !isComparingTwoSpots &&
-          prefs.showTrends && (
-            <SpotLongTermTrendsSection
-              trendLayout={prefs.trendLayout}
-              onChangeTrendLayout={(layout) => updatePref("trendLayout", layout)}
-              activeTopics={activeTopics}
-              onToggleTopic={onToggleTopic}
-              onResetTopics={onResetTopics}
-              onlyCommunityFilterAtEmptySpot={onlyCommunityFilterAtEmptySpot}
-              visibleSummaries={visibleSummaries}
+        <div
+          id="spot-panel-science"
+          role="tabpanel"
+          aria-labelledby="spot-tab-science"
+          hidden={activeTab !== "science"}
+        >
+          <div className="space-y-2.5 px-3 py-2.5">
+            <SpotScienceAndActionsSection
+              coord={coord}
+              selectedNode={selectedNode}
               activeSummary={activeSummary}
               activeDigest={activeDigest}
-              onFocusSummary={(key, dataset) => {
-                setFocusedSummaryKey(key);
-                onFocusSummaryDataset(dataset);
-              }}
-              tempUnit={tempUnit}
-              hasStoredNodeMetrics={hasStoredNodeMetrics}
-              selectedNode={selectedNode}
-              relevantDatasetDiags={relevantDatasetDiags}
-              loading={loading}
-              microscopeScan={microscopeScan}
-              microscopeByNode={microscopeByNode}
-              onOpenInGraphWorkbench={onOpenInGraphWorkbench}
-            />
-          )}
-
-        {(allLinkedRelations.length > 0 || !loading) &&
-          !isComparingTwoSpots &&
-          prefs.showRelations && (
-            <SpotRelationsSection
-              allNodesCount={allNodes.length}
-              allLinkedRelations={allLinkedRelations}
-              filteredLinkedRelations={filteredLinkedRelations}
-              relationCategoryCounts={relationCategoryCounts}
-              localRelationFilter={localRelationFilter}
-              onChangeLocalRelationFilter={setLocalRelationFilter}
-              anchorNode={anchorNode}
-              nearbyMatching={nearbyMatching}
-              compareMode={compareMode}
-              discoverBusy={discoverBusy}
-              onSelectNode={onSelectNode}
-              onSelectEdge={onSelectEdge}
-              onCompareOpposite={onCompareOpposite}
-              onToggleCompareMode={onToggleCompareMode}
-              onDiscoverGlobalTrends={onDiscoverGlobalTrends}
-            />
-          )}
-
-        {prefs.showChart && (
-          <div className="border-t border-border pt-2.5">
-            <SpotTrendChart
-              summary={activeSummary}
-              secondarySummary={secondary}
               comparison={comparison}
-              labelA={labelA}
-              labelB={labelB}
+              current={current}
+              isComparingTwoSpots={isComparingTwoSpots}
               tempUnit={tempUnit}
+              committing={committing}
+              supportingCount={supportingEdges.length}
+              beliefChain={beliefChain}
+              actionMsg={actionMsg}
+              showReviseForm={showReviseForm}
+              onToggleReviseForm={() => setShowReviseForm((v) => !v)}
+              revName={revName}
+              revDesc={revDesc}
+              revRationale={revRationale}
+              onChangeRevName={setRevName}
+              onChangeRevDesc={setRevDesc}
+              onChangeRevRationale={setRevRationale}
+              onReviseBelief={handleReviseBelief}
+              onSaveToGraph={() => void handleSaveToGraph()}
+              onVerifyGate={() => void handleVerifyGate()}
+              onSimulateWebhook={() => void handleSimulateWebhook()}
+              onSelectNode={onSelectNode}
+              spotPrediction={spotPrediction}
+              spotPredLoading={spotPredLoading}
+              spotPredError={spotPredError}
+              onRunRegionalForecast={() => void handleRunRegionalForecast()}
             />
+
+            {(activeSummary || comparison || selectedNode?.properties.p_value !== undefined) && (
+              <details
+                className="etg-details"
+                aria-label="Statistics key for students and judges"
+              >
+                <summary>Statistics key (p-value, Theil-Sen, SMK)</summary>
+                <div className="space-y-1.5 border-t border-border-subtle px-2.5 py-2 font-sans text-[11px] leading-snug text-text-muted">
+                  <div>
+                    <strong className="ws-numeric text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
+                  </div>
+                  <div>
+                    <strong className="text-text-primary">Theil-Sen Slope:</strong> Median yearly rate of change (ignores one-off outlier storms).
+                  </div>
+                  <div>
+                    <strong className="text-text-primary">Seasonal MK (Seasonal p):</strong> Compares matching calendar months year-to-year so winter/summer swings never bias the trend.
+                  </div>
+                </div>
+              </details>
+            )}
           </div>
-        )}
-
-        {prefs.showScience && (
-          <SpotScienceAndActionsSection
-            coord={coord}
-            selectedNode={selectedNode}
-            activeSummary={activeSummary}
-            activeDigest={activeDigest}
-            comparison={comparison}
-            current={current}
-            isComparingTwoSpots={isComparingTwoSpots}
-            tempUnit={tempUnit}
-            committing={committing}
-            supportingCount={supportingEdges.length}
-            beliefChain={beliefChain}
-            actionMsg={actionMsg}
-            showReviseForm={showReviseForm}
-            onToggleReviseForm={() => setShowReviseForm((v) => !v)}
-            revName={revName}
-            revDesc={revDesc}
-            revRationale={revRationale}
-            onChangeRevName={setRevName}
-            onChangeRevDesc={setRevDesc}
-            onChangeRevRationale={setRevRationale}
-            onReviseBelief={handleReviseBelief}
-            onSaveToGraph={() => void handleSaveToGraph()}
-            onVerifyGate={() => void handleVerifyGate()}
-            onSimulateWebhook={() => void handleSimulateWebhook()}
-            onSelectNode={onSelectNode}
-            spotPrediction={spotPrediction}
-            spotPredLoading={spotPredLoading}
-            spotPredError={spotPredError}
-            onRunRegionalForecast={() => void handleRunRegionalForecast()}
-          />
-        )}
-
-        {(prefs.showChart || prefs.showTrends || prefs.showScience || isComparingTwoSpots) &&
-          (activeSummary || comparison || selectedNode?.properties.p_value !== undefined) && (
-            <div
-              aria-label="Statistics key for students and judges"
-              className="space-y-1 rounded-sm border border-border bg-surface-inset p-2.5 font-sans text-[11px] leading-relaxed text-text-muted"
-            >
-              <div>
-                <strong className="ws-numeric text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
-              </div>
-              <div>
-                <strong className="text-text-primary">Theil-Sen Slope:</strong> Median yearly rate of change (ignores one-off outlier storms).
-              </div>
-              <div>
-                <strong className="text-text-primary">Seasonal MK (p_s):</strong> Compares matching calendar months year-to-year so winter/summer swings never bias the trend.
-              </div>
-            </div>
-          )}
+        </div>
       </div>
     </div>
   );

@@ -441,63 +441,46 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     item.sprite.scale.set(s, s, 1);
 
     const haloMat = item.halo.material as THREE.SpriteMaterial;
-    haloMat.opacity =
-      isSelected || isHovered
-        ? 0.92
-        : isSearchHit
-          ? 0.65
-          : isNeighbor
-            ? 0.35
-            : spotlight && isRegionLocal
-              ? 0.22
-              : spotlight && isRegionBridge
-                ? 0.14
-                : 0;
+    haloMat.opacity = 0;
 
-    projVec.copy(item.worldPos).project(camera);
-    if (projVec.z < 1 && opacity > 0.3) {
-      const sx = (projVec.x * 0.5 + 0.5) * w;
-      const sy = (-projVec.y * 0.5 + 0.5) * h - 18;
-      if (sx > leftLabelEdge && sx < rightLabelEdge && sy > topLabelEdge && sy < h - 42) {
-        const depthRatio = (camera.position.distanceTo(item.worldPos) - minCamDist) / distSpan;
-        const cleanTitle = humanizeNodeText(item.node.properties.name);
-        const displayTitle = cleanTitle.length > 32 ? `${cleanTitle.slice(0, 30)}…` : cleanTitle;
-        const nodeRole = rolesMap[uuid];
-        const microCue = microMap[uuid];
-        const isSupersededNode =
-          item.node.properties.status === "Superseded" || Boolean(item.node.properties.superseded_by);
-        const microBadge = resolveMicroscopeNodeBadge(microCue, lightThemeNow);
+    const shouldShowLabel = isSelected || isHovered || (hasSearchFilter && isSearchHit);
+    if (shouldShowLabel) {
+      projVec.copy(item.worldPos).project(camera);
+      if (projVec.z < 1 && opacity > 0.3) {
+        const sx = (projVec.x * 0.5 + 0.5) * w;
+        const sy = (-projVec.y * 0.5 + 0.5) * h - 18;
+        if (sx > leftLabelEdge && sx < rightLabelEdge && sy > topLabelEdge && sy < h - 42) {
+          const depthRatio = (camera.position.distanceTo(item.worldPos) - minCamDist) / distSpan;
+          const cleanTitle = humanizeNodeText(item.node.properties.name);
+          const displayTitle = cleanTitle.length > 32 ? `${cleanTitle.slice(0, 30)}…` : cleanTitle;
+          const nodeRole = rolesMap[uuid];
+          const microCue = microMap[uuid];
+          const isSupersededNode =
+            item.node.properties.status === "Superseded" || Boolean(item.node.properties.superseded_by);
+          const microBadge = resolveMicroscopeNodeBadge(microCue, lightThemeNow);
 
-        let extraWidthPx = 0;
-        if (nodeRole === "upstream" || nodeRole === "downstream") extraWidthPx += 44;
-        if (isSupersededNode) extraWidthPx += 62;
-        if (microBadge) extraWidthPx += 50;
-        if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 14;
+          let extraWidthPx = 0;
+          if (nodeRole === "upstream" || nodeRole === "downstream") extraWidthPx += 44;
+          if (isSupersededNode) extraWidthPx += 62;
+          if (microBadge) extraWidthPx += 50;
+          if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 14;
 
-        let priority = (1 - depthRatio) * 120;
-        if (item.node.label === "Insight") priority += 120;
-        else if (item.node.label === "Concept") priority += 80;
-        else if (item.node.label === "Rule") priority += 40;
-        if (dipoleSet.has(uuid)) priority += 55;
-        if (microBadge) priority += 65;
-        if (isSupersededNode) priority -= 35;
-        if (isRegionLocal) priority += 180;
-        else if (isRegionBridge) priority += 95;
-        if (isNeighbor) priority += 260;
-        if (isSearchHit) priority += 450;
-        if (isHovered) priority += 800;
-        if (isSelected) priority += 1000;
+          let priority = (1 - depthRatio) * 120;
+          if (isSearchHit) priority += 450;
+          if (isHovered) priority += 800;
+          if (isSelected) priority += 1000;
 
-        labelCandidates.push({
-          uuid,
-          title: displayTitle,
-          label: item.node.label,
-          color: resolveEtgNodeColor(item.node),
-          x: sx,
-          y: sy,
-          priority,
-          extraWidthPx,
-        });
+          labelCandidates.push({
+            uuid,
+            title: displayTitle,
+            label: item.node.label,
+            color: resolveEtgNodeColor(item.node),
+            x: sx,
+            y: sy,
+            priority,
+            extraWidthPx,
+          });
+        }
       }
     }
   }
@@ -548,74 +531,14 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     }
   }
 
-  const orderedRegions = [...regionClusters].sort((a, b) => {
-    const aSel = a.id === selectedRegionScope ? 1 : 0;
-    const bSel = b.id === selectedRegionScope ? 1 : 0;
-    if (aSel !== bSel) return bSel - aSel;
-    return b.count - a.count;
-  });
-  const regionBoxes: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-  const visibleRegionIds = new Set<string>();
-  for (const cluster of orderedRegions) {
-    const el = regionLabelEls.get(cluster.id);
-    if (!el) continue;
-    projVec
-      .set(
-        cluster.centroid.x,
-        cluster.centroid.y + Math.max(18, cluster.radius * 0.52),
-        cluster.centroid.z
-      )
-      .project(camera);
-    if (projVec.z >= 1) continue;
-    const sx = (projVec.x * 0.5 + 0.5) * w;
-    const sy = (-projVec.y * 0.5 + 0.5) * h;
-    if (sx < leftLabelEdge + 12 || sx > rightLabelEdge - 40 || sy < topLabelEdge - 10 || sy > h - 40) {
-      continue;
-    }
-
-    const estW = Math.min(200, Math.max(108, cluster.label.length * 6.8 + 44));
-    const box = {
-      left: sx - estW * 0.5 - 8,
-      right: sx + estW * 0.5 + 8,
-      top: sy - 26 - 6,
-      bottom: sy + 6,
-    };
-    const overlapsRegion = regionBoxes.some(
-      (b) => !(box.right < b.left || box.left > b.right || box.bottom < b.top || box.top > b.bottom)
-    );
-    if (overlapsRegion && cluster.id !== selectedRegionScope) continue;
-
-    regionBoxes.push(box);
-    visibleRegionIds.add(cluster.id);
-    el.style.transform = `translate3d(${Math.round(sx)}px, ${Math.round(sy)}px, 0) translate(-50%, -100%)`;
-    el.style.opacity = "1";
-    el.style.pointerEvents = "auto";
-  }
   for (const cluster of regionClusters) {
-    if (visibleRegionIds.has(cluster.id)) continue;
     const el = regionLabelEls.get(cluster.id);
     if (!el) continue;
     el.style.opacity = "0";
     el.style.pointerEvents = "none";
   }
 
-  const freeLabelCandidates = labelCandidates.filter((cand) => {
-    if (cand.uuid === selUuid || cand.uuid === hovUuid) {
-      return true;
-    }
-    const halfW = Math.min(
-      132,
-      Math.max(52, cand.title.length * 3.3 + (cand.extraWidthPx ?? 0) * 0.5)
-    );
-    const cLeft = cand.x - halfW;
-    const cRight = cand.x + halfW;
-    const cTop = cand.y - 24;
-    const cBottom = cand.y;
-    return !regionBoxes.some(
-      (b) => !(cRight < b.left || cLeft > b.right || cBottom < b.top || cTop > b.bottom)
-    );
-  });
-  const placed = selectNonOverlappingLabels(freeLabelCandidates, 14, 18, 12);
+  const placed = selectNonOverlappingLabels(labelCandidates, 14, 18, 12);
   const placedById = new Map(placed.map((p) => [p.uuid, p]));
 
   for (const [uuid, el] of labelEls.entries()) {

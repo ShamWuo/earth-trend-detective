@@ -230,13 +230,13 @@ export function Graph2DNodeItem({
         onPointerLeave={() => onHoverChange(null)}
         onClick={(e) => onNodeClick(e, node)}
       >
-        {(isSelected || isHovered || isConnectSource) && (
+        {isConnectSource && (
           <circle
             r={r + 5 * Math.min(2, dotScale2D)}
             fill="none"
-            stroke={isConnectSource ? "#fbbf24" : color}
+            stroke="#fbbf24"
             strokeWidth={2 * Math.min(2, dotScale2D)}
-            strokeDasharray={isConnectSource ? "4 3" : undefined}
+            strokeDasharray="4 3"
             strokeOpacity={0.75}
           />
         )}
@@ -303,8 +303,13 @@ export function Graph2DNodeItem({
   const badgeCount = (roleBadge ? 1 : 0) + (statusOrMicroBadge ? 1 : 0);
   const cleanName = humanizeNodeText(node.properties.name);
   const maxChars = badgeCount === 2 ? 14 : badgeCount === 1 ? 20 : 28;
-  const titleText =
-    cleanName.length > maxChars ? `${cleanName.slice(0, maxChars - 2)}…` : cleanName;
+  let titleText = cleanName;
+  if (cleanName.length > maxChars) {
+    const sliced = cleanName.slice(0, maxChars);
+    const lastSpace = sliced.lastIndexOf(" ");
+    const cutoff = lastSpace >= Math.floor(maxChars * 0.55) ? lastSpace : maxChars - 1;
+    titleText = `${cleanName.slice(0, cutoff).trimEnd()}…`;
+  }
 
   return (
     <g
@@ -317,8 +322,8 @@ export function Graph2DNodeItem({
       onPointerLeave={() => onHoverChange(null)}
       onClick={(e) => onNodeClick(e, node)}
     >
-      {/* Glow ring for active selection, hover, or Connect source */}
-      {(isSelected || isHovered || isConnectSource) && (
+      {/* Dashed ring for active Connect source */}
+      {isConnectSource && (
         <rect
           x={-CARD_WIDTH / 2 - 3.5}
           y={-CARD_HEIGHT / 2 - 3.5}
@@ -326,9 +331,9 @@ export function Graph2DNodeItem({
           height={CARD_HEIGHT + 7}
           rx={10}
           fill="none"
-          stroke={isConnectSource ? "#fbbf24" : color}
-          strokeDasharray={isConnectSource ? "5 3" : undefined}
-          strokeOpacity={isConnectSource ? 0.85 : 0.6}
+          stroke="#fbbf24"
+          strokeDasharray="5 3"
+          strokeOpacity={0.85}
           strokeWidth={1.75}
         />
       )}

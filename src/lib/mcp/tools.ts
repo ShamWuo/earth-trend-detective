@@ -22,6 +22,7 @@ import {
 } from "@/lib/graph/graphPredictor";
 import { scanTrendMicroscopeAsync } from "@/lib/graph/trendMicroscope";
 import { fetchEarthTimeSeries } from "@/lib/nasa/nasaPowerClient";
+import { sanitizeResearchDossier } from "@/lib/research/dossierUtils";
 import { fetchDenverSolarClimateGraph } from "@/lib/solar/denverClimateGraph";
 import { analyzeTimeSeries, compareRegionalSeries } from "@/lib/stats/trendEngine";
 import type {
@@ -29,6 +30,7 @@ import type {
   ETGEdgeProperties,
   ETGNodeProperties,
   ETGRelationshipType,
+  ETGResearchDossier,
   TraversalDirection,
 } from "@/types/etg";
 
@@ -153,6 +155,11 @@ export const ETG_MCP_TOOLS: readonly EtgMcpToolDefinition[] = [
           description: "Optional prior Insight UUID to mark Superseded and link with a supersedes edge.",
         },
         rationale: { type: "string", description: "Scientific rationale for the trend or belief revision." },
+        dossier: {
+          type: "object",
+          description:
+            "Optional structured Scientific Trend Dossier (abstract, physical_mechanism, empirical_findings[], impacts[], citations[], markdown_body).",
+        },
       },
       required: ["name", "description"],
     },
@@ -187,7 +194,7 @@ export const ETG_MCP_TOOLS: readonly EtgMcpToolDefinition[] = [
         target_uuid: { type: "string", description: "Target Insight UUID." },
         relationship: {
           type: "string",
-          enum: ["supports", "corroborates", "drives_opposite", "correlates_with"],
+          enum: ["supports", "corroborates", "contradicts", "drives_opposite", "correlates_with"],
         },
         rationale: { type: "string" },
       },
@@ -228,6 +235,7 @@ export const ETG_MCP_TOOLS: readonly EtgMcpToolDefinition[] = [
             "teleconnects",
             "correlates_with",
             "corroborates",
+            "contradicts",
             "supports",
             "relates_to",
             "hypothesized_link",
@@ -700,15 +708,19 @@ export async function executeEtgMcpTool(
           priorNodeUuid: args.supersedes_node_uuid.trim(),
           newName: args.name,
           newDescription: args.description,
+          ...(args.dossier !== undefined ? { dossier: args.dossier as ETGResearchDossier } : {}),
           rationale: revRationale,
         });
         if (!revVerdict.allowed) {
           throw new Error(`Blocked (${revVerdict.rule}): ${revVerdict.reason}`);
         }
+        const cleanDossier =
+          args.dossier !== undefined ? sanitizeResearchDossier(args.dossier) : undefined;
         return store.reviseBelief({
           priorNodeUuid: args.supersedes_node_uuid.trim(),
           newName: args.name,
           newDescription: args.description,
+          ...(cleanDossier ? { dossier: cleanDossier } : {}),
           rationale: revRationale,
           dataset: (args.dataset as ETGDatasetId) || undefined,
         });
@@ -719,17 +731,21 @@ export async function executeEtgMcpTool(
         description: args.description,
         lat: args.lat as number | undefined,
         lng: args.lng as number | undefined,
+        ...(args.dossier !== undefined ? { dossier: args.dossier as ETGResearchDossier } : {}),
         rationale: typeof args.rationale === "string" ? args.rationale : undefined,
       });
       if (!insightVerdict.allowed) {
         throw new Error(`Blocked (${insightVerdict.rule}): ${insightVerdict.reason}`);
       }
+      const cleanDossier =
+        args.dossier !== undefined ? sanitizeResearchDossier(args.dossier) : undefined;
       const node = store.createNode({
         label: "Insight",
         is_provisional: true,
         properties: {
           name: args.name,
           description: args.description,
+          ...(cleanDossier ? { dossier: cleanDossier } : {}),
           lat: typeof args.lat === "number" ? args.lat : undefined,
           lng: typeof args.lng === "number" ? args.lng : undefined,
           dataset: (args.dataset as ETGDatasetId) || "nasa_power",
@@ -892,9 +908,40 @@ export async function executeEtgMcpTool(
           const deleted = store.deleteNode(args.node_uuid);
           return { deleted, nodeUuid: args.node_uuid, stats: store.getSnapshot().stats };
         }
+        const safePatch: Record<string, unknown> = { ...patch };
+        if (patch.dossier !== undefined) {
+          const cleanDossier = sanitizeResearchDossier(patch.dossier);
+          if (!cleanDossier) {
+            throw new Error("Blocked (GEO_AND_STRUCT_VALIDITY): Invalid research dossier payload.");
+          }
+          safePatch.dossier = cleanDossier;
+        }
+        const updateVerdict = validateGraphAction(store, {
+          type: "update_node",
+          uuid: args.node_uuid,
+          ...(typeof patch.name === "string" && patch.name !== existingNode.properties.name
+            ? { name: patch.name }
+            : {}),
+          ...(typeof patch.description === "string" &&
+          patch.description !== existingNode.properties.description
+            ? { description: patch.description }
+            : {}),
+          ...(typeof patch.region === "string" && patch.region !== existingNode.properties.region
+            ? { region: patch.region }
+            : {}),
+          ...(safePatch.dossier ? { dossier: safePatch.dossier as ETGResearchDossier } : {}),
+          rationale:
+            typeof patch.rationale === "string" && patch.rationale.trim().length >= 6
+              ? patch.rationale
+              : "MCP scientific dossier / metadata update",
+        });
+        if (!updateVerdict.allowed) {
+          throw new Error(`Blocked (${updateVerdict.rule}): ${updateVerdict.reason}`);
+        }
+        delete safePatch.rationale;
         const node = store.updateNode(
           args.node_uuid,
-          patch as Partial<ETGNodeProperties> & { label?: string }
+          safePatch as Partial<ETGNodeProperties> & { label?: string }
         );
         return { node, updated: Boolean(node) };
       }

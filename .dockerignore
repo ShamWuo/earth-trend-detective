@@ -1,0 +1,15 @@
+node_modules/
+.next/
+.git/
+.blind-export/
+.data/
+.etg-cache/
+coverage/
+*.tsbuildinfo
+.env*
+__pycache__/
+*.pyc
+.pytest_cache/
+ml/weights/*.onnx
+.DS_Store
+deliverables/

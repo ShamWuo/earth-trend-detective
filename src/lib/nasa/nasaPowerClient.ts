@@ -4,6 +4,11 @@ import {
   normalizeEarthCoordinates,
 } from "@/lib/earth/coordinates";
 import {
+  classifyEarthSurface,
+  validateDatasetForSurface,
+  type EarthSurfaceRegime,
+} from "@/lib/earth/surfaceMask";
+import {
   fetchCamsSurfacePm25Series,
   fetchGlofasDischargeSeries,
   fetchNearestUsgsGaugeAnnualSeries,
@@ -63,6 +68,36 @@ const POWER_PARAM_MAP: Record<ETGDatasetId, PowerDatasetConfig> = {
   hydrology: { parameter: "PRECTOTCORR", unit: "mm/day", slopeUnit: "mm/d/yr" },
   community: { parameter: "T2M", unit: "°C", slopeUnit: "°C/yr" },
 };
+
+function describePowerParameter(
+  parameter: string,
+  dataset: ETGDatasetId,
+  regime?: EarthSurfaceRegime
+): string {
+  const meta = DATASET_BY_ID[dataset] ?? DATASET_BY_ID.nasa_power;
+  switch (parameter) {
+    case "T2M":
+      return "T2M (2m Air Temperature)";
+    case "TS":
+      return regime === "coastal_marine" || regime === "open_ocean"
+        ? "TS (Sea Surface Skin Temp)"
+        : "TS (Surface Skin Temp)";
+    case "RH2M":
+      return dataset === "deforestation"
+        ? "RH2M (2m Relative Humidity — Vegetation Moisture Proxy)"
+        : "RH2M (2m Relative Humidity)";
+    case "PRECTOTCORR":
+      return "PRECTOTCORR (Precipitation Flux)";
+    case "T2M_MAX":
+      return "T2M_MAX (Daily Peak Air Temp — Fire Weather Proxy)";
+    case "ALLSKY_SFC_SW_DWN":
+      return "ALLSKY_SFC_SW_DWN (Surface Solar Irradiance)";
+    case "GWETROOT":
+      return "GWETROOT (Root-Zone Soil Wetness)";
+    default:
+      return `${parameter} (${meta.shortLabel})`;
+  }
+}
 
 function attachMeasurementMetadata(
   dataset: ETGDatasetId,
@@ -394,6 +429,14 @@ export async function fetchEarthTimeSeries(
 ): Promise<TrendAnalysisSummary> {
   const activeBudget = budget ?? createTelemetryBudget(1350);
   const coord = normalizeEarthCoordinates(lat, lng);
+  const surfaceCheck = validateDatasetForSurface(dataset, coord.lat, coord.lng);
+  if (!surfaceCheck.applicable) {
+    throw new TelemetryUnavailableError(
+      surfaceCheck.reason ||
+        `${DATASET_BY_ID[dataset]?.shortLabel ?? dataset} is not applicable for ${surfaceCheck.regime} coordinates.`,
+      dataset
+    );
+  }
   const clampedLat = coord.apiLat;
   const clampedLng = coord.apiLng;
   const key = cacheKey(clampedLat, clampedLng, dataset);
@@ -403,10 +446,9 @@ export async function fetchEarthTimeSeries(
   }
 
   const config = POWER_PARAM_MAP[dataset] ?? POWER_PARAM_MAP.nasa_power;
-  const datasetMeta = DATASET_BY_ID[dataset] ?? DATASET_BY_ID.nasa_power;
 
   // 1) Hydrology cascade: USGS NWIS stream gauge -> Copernicus GloFAS v4 (5km) -> NASA GWETROOT -> MERRA-2 PRECTOTCORR.
-  if (dataset === "hydrology") {
+  if (dataset === "hydrology" && surfaceCheck.regime !== "open_ocean") {
     try {
       const usgs = await fetchNearestUsgsGaugeAnnualSeries(
         clampedLat,
@@ -706,7 +748,11 @@ export async function fetchEarthTimeSeries(
         lat: clampedLat,
         lng: clampedLng,
         dataset,
-        parameter: `${config.parameter} (${datasetMeta.shortLabel})`,
+        parameter: describePowerParameter(
+          config.parameter,
+          dataset,
+          surfaceCheck.regime
+        ),
         unit: config.unit,
         slopeUnit: config.slopeUnit,
         provenance: "NASA POWER MERRA-2 (Live)",
@@ -773,10 +819,13 @@ export async function fetchMultiParamNasaPower(
     ["hydrology", precip, monthly.precip],
     ["deforestation", rh2m, monthly.rh2m],
   ];
+  const surfaceInfo = classifyEarthSurface(coord.lat, coord.lng);
   for (const [ds, pts, monthlyPts] of cacheEntries) {
+    if (!validateDatasetForSurface(ds, coord.lat, coord.lng).applicable) {
+      continue;
+    }
     if (pts.length >= 5) {
       const config = POWER_PARAM_MAP[ds];
-      const meta = DATASET_BY_ID[ds];
       SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
         expiresAt: Date.now() + 1000 * 60 * 15,
         summary: enrichSummaryWithMonthlySeasonality(
@@ -784,7 +833,7 @@ export async function fetchMultiParamNasaPower(
             lat: clampedLat,
             lng: clampedLng,
             dataset: ds,
-            parameter: `${config.parameter} (${meta.shortLabel})`,
+            parameter: describePowerParameter(config.parameter, ds, surfaceInfo.regime),
             unit: config.unit,
             slopeUnit: config.slopeUnit,
             provenance: "NASA POWER MERRA-2 (Live)",
@@ -825,17 +874,38 @@ export async function fetchMultiDatasetSummariesDetailed(
   const clampedLng = coord.apiLng;
 
   const diagnostics: DatasetTelemetryDiagnostic[] = [];
-  const uniqueRequested = Array.from(
+  const surfaceInfo = classifyEarthSurface(coord.lat, coord.lng);
+  const requestedGridded = Array.from(
     new Set(datasets.filter((d) => GRIDDED_DATASETS.has(d)))
   );
+  const uniqueRequested: ETGDatasetId[] = [];
+  for (const ds of requestedGridded) {
+    const check = validateDatasetForSurface(ds, coord.lat, coord.lng);
+    if (!check.applicable) {
+      diagnostics.push({
+        dataset: ds,
+        status: "unavailable",
+        reason:
+          check.reason ||
+          `${DATASET_BY_ID[ds]?.shortLabel ?? ds} is not applicable for ${check.regime} coordinates.`,
+      });
+      continue;
+    }
+    uniqueRequested.push(ds);
+  }
 
-  if (datasets.includes("community") && uniqueRequested.length === 0) {
-    diagnostics.push({
-      dataset: "community",
-      status: "unavailable",
-      reason:
-        "Local sensor trends come from nearby geo-pinned stations rather than a global gridded feed.",
-    });
+  if (
+    (datasets.includes("community") || requestedGridded.length > 0) &&
+    uniqueRequested.length === 0
+  ) {
+    if (datasets.includes("community")) {
+      diagnostics.push({
+        dataset: "community",
+        status: "unavailable",
+        reason:
+          "Local sensor trends come from nearby geo-pinned stations rather than a global gridded feed.",
+      });
+    }
     return { summaries: [], diagnostics };
   }
 
@@ -1003,7 +1073,6 @@ export async function fetchMultiDatasetSummariesDetailed(
       const params = reOutcome.params;
       for (const ds of reMissing) {
         const config = POWER_PARAM_MAP[ds];
-        const meta = DATASET_BY_ID[ds];
 
         if (ds === "wildfire" && params.T2M_MAX && params.RH2M) {
           const vpdPoints = computeMonthlyVpdSeries(params.T2M_MAX, params.RH2M);
@@ -1062,7 +1131,11 @@ export async function fetchMultiDatasetSummariesDetailed(
               lat: clampedLat,
               lng: clampedLng,
               dataset: ds,
-              parameter: `${config.parameter} (${meta.shortLabel})`,
+              parameter: describePowerParameter(
+                config.parameter,
+                ds,
+                surfaceInfo.regime
+              ),
               unit: config.unit,
               slopeUnit: config.slopeUnit,
               provenance: "NASA POWER MERRA-2 (Live)",
@@ -1240,6 +1313,14 @@ export async function fetchRegionalMultiScaleSeries(
   channelNames: string[];
 }> {
   const coord = normalizeEarthCoordinates(lat, lng);
+  const surfaceCheck = validateDatasetForSurface(dataset, coord.lat, coord.lng);
+  if (!surfaceCheck.applicable) {
+    throw new TelemetryUnavailableError(
+      surfaceCheck.reason ||
+        `${DATASET_BY_ID[dataset]?.shortLabel ?? dataset} is not applicable for ${surfaceCheck.regime} coordinates.`,
+      dataset
+    );
+  }
   const clampedLat = coord.apiLat;
   const clampedLng = coord.apiLng;
   const startYear = options?.startYear ?? 1995;
@@ -1247,7 +1328,6 @@ export async function fetchRegionalMultiScaleSeries(
   const includeDailyRecent = options?.includeDailyRecent ?? false;
 
   const config = POWER_PARAM_MAP[dataset] ?? POWER_PARAM_MAP.nasa_power;
-  const datasetMeta = DATASET_BY_ID[dataset] ?? DATASET_BY_ID.nasa_power;
   const monthlyUrl =
     `https://power.larc.nasa.gov/api/temporal/monthly/point` +
     `?parameters=T2M,T2M_MAX,TS,RH2M,PRECTOTCORR,WS10M,WD10M,ALLSKY_SFC_SW_DWN` +
@@ -1258,7 +1338,7 @@ export async function fetchRegionalMultiScaleSeries(
   const [summaryRes, monthlyRawRes, extraFeedRes, dailyRawRes] = await Promise.allSettled([
     fetchEarthTimeSeries(clampedLat, clampedLng, dataset, startYear, endYear, activeBudget),
     fetchNasaPowerRaw(monthlyUrl, activeBudget),
-    dataset === "hydrology"
+    dataset === "hydrology" && surfaceCheck.regime !== "open_ocean"
       ? fetchGlofasDischargeSeries(
           clampedLat,
           clampedLng,
@@ -1363,7 +1443,11 @@ export async function fetchRegionalMultiScaleSeries(
       lat: clampedLat,
       lng: clampedLng,
       dataset,
-      parameter: `${config.parameter} (${datasetMeta.shortLabel})`,
+      parameter: describePowerParameter(
+        config.parameter,
+        dataset,
+        surfaceCheck.regime
+      ),
       unit: dataset === "wildfire" ? "kPa" : config.unit,
       slopeUnit: dataset === "wildfire" ? "kPa/yr" : config.slopeUnit,
       provenance: "NASA POWER MERRA-2 (Live)",

@@ -2,6 +2,7 @@ import {
   normalizeEarthCoordinates,
   type DataProvenanceMode,
 } from "@/lib/earth/coordinates";
+import { hasTerrestrialSurface, isMarineOrCoastalSurface } from "@/lib/earth/surfaceMask";
 import {
   classifyUpstreamFault,
   createTelemetryBudget,
@@ -52,16 +53,29 @@ const EONET_CATEGORIES = [
 
 const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observatory)";
 
-function mapEonetCategoryToDataset(categoryId?: string): ETGDatasetId {
+function mapEonetCategoryToDataset(
+  categoryId?: string,
+  lat?: number,
+  lng?: number
+): ETGDatasetId {
   const lower = (categoryId || "").toLowerCase();
-  if (lower.includes("wildfire")) return "wildfire";
+  const hasCoord = typeof lat === "number" && typeof lng === "number";
+  if (lower.includes("wildfire")) {
+    return !hasCoord || hasTerrestrialSurface(lat, lng) ? "wildfire" : "nasa_power";
+  }
   if (lower.includes("dust") || lower.includes("haze") || lower.includes("volcano")) {
     return "air_quality";
   }
-  if (lower.includes("flood") || lower.includes("storm") || lower.includes("drought")) {
-    return "hydrology";
+  if (lower.includes("sea") || lower.includes("ice")) {
+    if (hasCoord && !isMarineOrCoastalSurface(lat, lng)) {
+      return "hydrology";
+    }
+    return "ocean_temp";
   }
-  if (lower.includes("ice") || lower.includes("temp")) return "ocean_temp";
+  if (lower.includes("temp")) return "nasa_power";
+  if (lower.includes("flood") || lower.includes("storm") || lower.includes("drought")) {
+    return !hasCoord || hasTerrestrialSurface(lat, lng) ? "hydrology" : "nasa_power";
+  }
   return "nasa_power";
 }
 
@@ -190,7 +204,7 @@ export async function fetchLiveEonetSignals(
     const lng = norm.lng;
 
     const cat = ev.categories?.[0];
-    const dataset = mapEonetCategoryToDataset(cat?.id);
+    const dataset = mapEonetCategoryToDataset(cat?.id, lat, lng);
     const observedAt = latestGeo?.date ?? new Date().toISOString();
     const sourceAgencies = (ev.sources ?? []).map((s) => s.id).filter(Boolean).join(", ");
 

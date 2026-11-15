@@ -3,6 +3,7 @@ import { getEtgStore } from "@/lib/graph/etgStore";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET(req: NextRequest): Promise<Response> {
   const encoder = new TextEncoder();
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const stream = new ReadableStream({
     start(controller) {
-      controller.enqueue(encoder.encode(`: etg-live-stream connected\n\n`));
+      controller.enqueue(encoder.encode(`retry: 5000\n: etg-live-stream connected\n\n`));
 
       unsubscribe = store.subscribe((ev) => {
         try {

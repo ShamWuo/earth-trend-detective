@@ -8,6 +8,7 @@ import { GET as getGibs } from "@/app/api/earth/gibs/route";
 import { GET as getSolarGraph } from "@/app/api/earth/solar-graph/route";
 import { POST as postDiscover } from "@/app/api/earth/discover/route";
 
+import { clearKnmiClimateCache } from "@/lib/agencies/challengeSourcesClient";
 import { clearCurrentConditionsCache } from "@/lib/earth/currentConditionsClient";
 import { clearOpenFeedsCache } from "@/lib/earth/openFeedsClient";
 import { clearEonetCache } from "@/lib/nasa/eonetClient";
@@ -76,8 +77,12 @@ function installChaosFetchMock(mode: ChaosFaultMode) {
         url.includes("waterservices.usgs.gov") ||
         url.includes("gml.noaa.gov") ||
         url.includes("ZonAnn.Ts+dSST.csv") ||
+        url.includes("GLB.Ts+dSST.csv") ||
+        url.includes("co2_mm_mlo.csv") ||
         url.includes("extent_v4.0.csv") ||
-        url.includes("psl.noaa.gov");
+        url.includes("psl.noaa.gov") ||
+        url.includes("climexp.knmi.nl") ||
+        url.includes("ersst.v5.pdo.dat");
       if (isTextTable) {
         return new Response("<!DOCTYPE html><html><body>Truncated Upstream HTML</body>", {
           status: 200,
@@ -100,6 +105,7 @@ function clearAllTelemetryCaches() {
   clearOpenFeedsCache();
   clearEonetCache();
   clearGistempAndCo2Caches();
+  clearKnmiClimateCache();
   clearDenverSolarCache();
 }
 

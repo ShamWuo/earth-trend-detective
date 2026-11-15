@@ -4,6 +4,9 @@ import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
   DEFAULT_REGIONAL_FOCUS_RADIUS,
+  DEFAULT_SATELLITE_CITY_RADIUS,
+  DEFAULT_SATELLITE_METRO_RADIUS,
+  DEFAULT_SATELLITE_STREET_RADIUS,
   GIBS_LAYERS,
   MIN_GLOBE_CAMERA_RADIUS,
   REGIONAL_ZOOM_ACTIVATE_RADIUS,
@@ -15,6 +18,10 @@ import {
   type RegionalSatelliteMode,
 } from "@/lib/earth/nasaGibsRegional";
 import {
+  latLngToNormalizedMercator,
+  shouldUseCloudFreeAerialPrimary,
+} from "@/lib/earth/satelliteZoomTiles";
+import {
   EARTH_RADIUS,
   GLOBE_PREFS_STORAGE_KEY,
   buildElevatedGreatCircleCurve,
@@ -25,6 +32,7 @@ import {
   createStarSpriteTexture,
   disposeGroupResources,
   formatGibsColorbarForUnit,
+  intersectTrueEarthSphere,
   latLngToVector3,
   resolveComparisonArcVisuals,
   selectVisibleGlobeArcs,
@@ -123,6 +131,34 @@ interface EarthGlobe3DProps {
   onToggleCompareMode?: () => void;
 }
 
+function computeTwoPointFramingTarget(
+  latA: number,
+  lngA: number,
+  latB: number,
+  lngB: number
+): { theta: number; phi: number; radius: number } | null {
+  if (Math.abs(latA - latB) < 0.8 && Math.abs(lngA - lngB) < 0.8) {
+    return null;
+  }
+  const u1 = latLngToVector3(latA, lngA, 1).normalize();
+  const u2 = latLngToVector3(latB, lngB, 1).normalize();
+  const dot = Math.max(-1, Math.min(1, u1.dot(u2)));
+  const omega = Math.acos(dot);
+  let mid = u1.clone().add(u2);
+  if (mid.lengthSq() < 1e-4) {
+    const ortho =
+      Math.abs(u1.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    mid = new THREE.Vector3().crossVectors(u1, ortho);
+  }
+  mid.normalize();
+  const spherical = new THREE.Spherical().setFromVector3(mid);
+  return {
+    theta: spherical.theta,
+    phi: Math.max(0.28, Math.min(Math.PI - 0.28, spherical.phi)),
+    radius: Math.min(308, Math.max(248, 236 + omega * 24)),
+  };
+}
+
 function advanceTravelers(travelers: PulseTraveler[], elapsed: number): void {
   for (const tr of travelers) {
     const u = (elapsed * tr.speed + tr.phase) % 1;
@@ -168,16 +204,15 @@ export function EarthGlobe3D({
   const [containerWidth, setContainerWidth] = useState(600);
   const [autoRotate, setAutoRotate] = useState(true);
   const [sunPreset, setSunPreset] = useState<SunPreset>(initialSunPreset ?? "live");
-  const [liveUtcTime, setLiveUtcTime] = useState<string>(
-    () => new Date().toISOString().slice(11, 16) + " UTC"
-  );
+  const [liveUtcTime, setLiveUtcTime] = useState<string>("");
   const [showClouds, setShowClouds] = useState(false);
-  const [arcMode, setArcMode] = useState<GlobeArcMode>("all");
-  const [showArcLabels, setShowArcLabels] = useState(true);
+  const [arcMode, setArcMode] = useState<GlobeArcMode>("dipoles");
+  const [showArcLabels, setShowArcLabels] = useState(false);
   const [showPins, setShowPins] = useState(true);
   const [satelliteMode, setSatelliteMode] = useState<RegionalSatelliteMode>(
     initialSatelliteMode ?? "auto"
   );
+  const [showPlaceLabels, setShowPlaceLabels] = useState(true);
   const [filterSmooth, setFilterSmooth] = useState(true);
   const [isRegionalZoom, setIsRegionalZoom] = useState(false);
   const [globalHud, setGlobalHud] = useState<GlobalHudState>({
@@ -195,6 +230,11 @@ export function EarthGlobe3D({
     error: false,
     centerLat: 39.74,
     centerLng: -104.99,
+    aerialActive: false,
+    aerialZoom: 0,
+    aerialResolutionLabel: "~3–5 km/px",
+    altitudeKm: 10800,
+    depthTier: "corridor",
   }));
   const [prefsHydrated, setPrefsHydrated] = useState(false);
   const [mobileHudExpanded, setMobileHudExpanded] = useState(false);
@@ -227,9 +267,13 @@ export function EarthGlobe3D({
         if (typeof parsed.showPins === "boolean") setShowPins(parsed.showPins);
         if (typeof parsed.autoRotate === "boolean") setAutoRotate(parsed.autoRotate);
         if (typeof parsed.filterSmooth === "boolean") setFilterSmooth(parsed.filterSmooth);
+        if (typeof parsed.showPlaceLabels === "boolean") {
+          setShowPlaceLabels(parsed.showPlaceLabels);
+        }
         if (
           initialSatelliteMode === undefined &&
           (parsed.satelliteMode === "auto" ||
+            parsed.satelliteMode === "aerial" ||
             parsed.satelliteMode === "multi_slice" ||
             parsed.satelliteMode === "true_color" ||
             parsed.satelliteMode === "thermal" ||
@@ -274,6 +318,7 @@ export function EarthGlobe3D({
         satelliteMode,
         sunPreset,
         filterSmooth,
+        showPlaceLabels,
       };
       window.localStorage.setItem(GLOBE_PREFS_STORAGE_KEY, JSON.stringify(payload));
     } catch {
@@ -289,6 +334,7 @@ export function EarthGlobe3D({
     satelliteMode,
     sunPreset,
     filterSmooth,
+    showPlaceLabels,
   ]);
 
   const resolvedGibsLayerId = resolveActiveGibsLayer(satelliteMode, activeTopics);
@@ -305,10 +351,14 @@ export function EarthGlobe3D({
   showPinsRef.current = showPins;
   const inspectorOpenRef = useRef(inspectorOpen);
   inspectorOpenRef.current = inspectorOpen;
+  const compareModeRef = useRef(compareMode);
+  compareModeRef.current = compareMode;
   const activeGibsLayerRef = useRef<ActiveGibsLayerId | null>(resolvedGibsLayerId);
   activeGibsLayerRef.current = resolvedGibsLayerId;
   const satelliteModeRef = useRef<RegionalSatelliteMode>(satelliteMode);
   satelliteModeRef.current = satelliteMode;
+  const showPlaceLabelsRef = useRef<boolean>(showPlaceLabels);
+  showPlaceLabelsRef.current = showPlaceLabels;
   const filterSmoothRef = useRef(filterSmooth);
   filterSmoothRef.current = filterSmooth;
   const activeTopicsRef = useRef<readonly ETGDatasetId[] | undefined>(activeTopics);
@@ -360,7 +410,7 @@ export function EarthGlobe3D({
     setAutoRotate(false);
   }, [regionalFocusRequest]);
 
-  // Sync camera target to frame a focused dipole arc midpoint or a single selected node
+  // Sync camera target to frame a focused dipole arc midpoint, a 2-spot comparison pair, or a single selected node
   useEffect(() => {
     if (selectedEdgeUuid) {
       const edge = edges.find((e) => e.properties.uuid === selectedEdgeUuid);
@@ -371,30 +421,34 @@ export function EarthGlobe3D({
           src?.properties.lat !== undefined &&
           src.properties.lng !== undefined &&
           tgt?.properties.lat !== undefined &&
-          tgt.properties.lng !== undefined &&
-          (Math.abs(src.properties.lat - tgt.properties.lat) >= 0.8 ||
-            Math.abs(src.properties.lng - tgt.properties.lng) >= 0.8)
+          tgt.properties.lng !== undefined
         ) {
-          const u1 = latLngToVector3(src.properties.lat, src.properties.lng, 1).normalize();
-          const u2 = latLngToVector3(tgt.properties.lat, tgt.properties.lng, 1).normalize();
-          const dot = Math.max(-1, Math.min(1, u1.dot(u2)));
-          const omega = Math.acos(dot);
-          let mid = u1.clone().add(u2);
-          if (mid.lengthSq() < 1e-4) {
-            const ortho =
-              Math.abs(u1.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-            mid = new THREE.Vector3().crossVectors(u1, ortho);
+          const framed = computeTwoPointFramingTarget(
+            src.properties.lat,
+            src.properties.lng,
+            tgt.properties.lat,
+            tgt.properties.lng
+          );
+          if (framed) {
+            cameraTargetRef.current = framed;
+            setAutoRotate(false);
+            return;
           }
-          mid.normalize();
-          const spherical = new THREE.Spherical().setFromVector3(mid);
-          cameraTargetRef.current = {
-            theta: spherical.theta,
-            phi: Math.max(0.28, Math.min(Math.PI - 0.28, spherical.phi)),
-            radius: Math.min(305, Math.max(258, 244 + omega * 22)),
-          };
-          setAutoRotate(false);
-          return;
         }
+      }
+    }
+
+    if (probedCoord && comparePinB) {
+      const framed = computeTwoPointFramingTarget(
+        probedCoord.lat,
+        probedCoord.lng,
+        comparePinB.lat,
+        comparePinB.lng
+      );
+      if (framed) {
+        cameraTargetRef.current = framed;
+        setAutoRotate(false);
+        return;
       }
     }
 
@@ -408,14 +462,24 @@ export function EarthGlobe3D({
         cameraTargetRef.current?.radius ??
         sceneRefs.current?.spherical.radius ??
         232;
+      const currentSph = sceneRefs.current?.spherical;
+      let targetRadius = Math.max(MIN_GLOBE_CAMERA_RADIUS, Math.min(232, currentRadius));
+      if (currentSph && currentRadius < 135) {
+        const camDir = new THREE.Vector3().setFromSpherical(currentSph).normalize();
+        const nodeDir = vec.clone().normalize();
+        const omega = Math.acos(Math.max(-1, Math.min(1, camDir.dot(nodeDir))));
+        if (omega > 0.28) {
+          targetRadius = DEFAULT_REGIONAL_FOCUS_RADIUS;
+        }
+      }
       cameraTargetRef.current = {
         theta: spherical.theta,
-        phi: Math.max(0.2, Math.min(Math.PI - 0.2, spherical.phi)),
-        radius: Math.max(MIN_GLOBE_CAMERA_RADIUS, Math.min(232, currentRadius)),
+        phi: Math.max(0.08, Math.min(Math.PI - 0.08, spherical.phi)),
+        radius: targetRadius,
       };
       setAutoRotate(false);
     }
-  }, [selectedEdgeUuid, selectedNodeUuid, nodes, edges]);
+  }, [selectedEdgeUuid, selectedNodeUuid, probedCoord, comparePinB, nodes, edges]);
 
   // Sync pin visibility without recreating geometry
   useEffect(() => {
@@ -519,7 +583,7 @@ export function EarthGlobe3D({
     const { stars, starGeo, starMat } = createStarfieldLayer(starTex);
     scene.add(stars);
 
-    const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS, 160, 120);
+    const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS, 288, 216);
     const earthMat = createEarthSurfaceMaterial({
       blueMarbleTex,
       normalTex,
@@ -535,6 +599,56 @@ export function EarthGlobe3D({
     });
     const earthMesh = new THREE.Mesh(earthGeo, earthMat);
     scene.add(earthMesh);
+
+    // High-density 80x80 local spherical cap for chord-free curvature & 64-bit Mercator UV precision across 12x12 grids
+    const DETAIL_CAP_SEGMENTS = 80;
+    const DETAIL_CAP_STRIDE = DETAIL_CAP_SEGMENTS + 1;
+    const DETAIL_CAP_VERT_COUNT = DETAIL_CAP_STRIDE * DETAIL_CAP_STRIDE;
+    const detailCapPosArr = new Float32Array(DETAIL_CAP_VERT_COUNT * 3);
+    const detailCapNormArr = new Float32Array(DETAIL_CAP_VERT_COUNT * 3);
+    const detailCapUvArr = new Float32Array(DETAIL_CAP_VERT_COUNT * 2);
+    const detailCapMercArr = new Float32Array(DETAIL_CAP_VERT_COUNT * 4);
+    const detailCapIndices = new Uint16Array(DETAIL_CAP_SEGMENTS * DETAIL_CAP_SEGMENTS * 6);
+    let idxPtr = 0;
+    for (let iy = 0; iy < DETAIL_CAP_SEGMENTS; iy++) {
+      for (let ix = 0; ix < DETAIL_CAP_SEGMENTS; ix++) {
+        const i00 = iy * DETAIL_CAP_STRIDE + ix;
+        const i10 = i00 + 1;
+        const i01 = (iy + 1) * DETAIL_CAP_STRIDE + ix;
+        const i11 = i01 + 1;
+        detailCapIndices[idxPtr++] = i00;
+        detailCapIndices[idxPtr++] = i10;
+        detailCapIndices[idxPtr++] = i11;
+        detailCapIndices[idxPtr++] = i00;
+        detailCapIndices[idxPtr++] = i11;
+        detailCapIndices[idxPtr++] = i01;
+      }
+    }
+    const detailCapPosAttr = new THREE.BufferAttribute(detailCapPosArr, 3);
+    const detailCapNormAttr = new THREE.BufferAttribute(detailCapNormArr, 3);
+    const detailCapUvAttr = new THREE.BufferAttribute(detailCapUvArr, 2);
+    const detailCapMercAttr = new THREE.BufferAttribute(detailCapMercArr, 4);
+    const detailCapGeo = new THREE.BufferGeometry();
+    detailCapGeo.setAttribute("position", detailCapPosAttr);
+    detailCapGeo.setAttribute("normal", detailCapNormAttr);
+    detailCapGeo.setAttribute("uv", detailCapUvAttr);
+    detailCapGeo.setAttribute("aDetailMerc", detailCapMercAttr);
+    detailCapGeo.setIndex(new THREE.BufferAttribute(detailCapIndices, 1));
+
+    const detailCapMat = earthMat.clone();
+    detailCapMat.uniforms = earthMat.uniforms;
+    detailCapMat.transparent = true;
+    detailCapMat.depthWrite = false;
+    detailCapMat.depthTest = true;
+    detailCapMat.polygonOffset = true;
+    detailCapMat.polygonOffsetFactor = -2;
+    detailCapMat.polygonOffsetUnits = -2;
+
+    const detailCapMesh = new THREE.Mesh(detailCapGeo, detailCapMat);
+    detailCapMesh.visible = false;
+    detailCapMesh.frustumCulled = false;
+    detailCapMesh.renderOrder = -1;
+    scene.add(detailCapMesh);
 
     const cloudGeo = new THREE.SphereGeometry(EARTH_RADIUS * 1.0105, 128, 96);
     const cloudMat = createCloudDeckMaterial({
@@ -576,6 +690,9 @@ export function EarthGlobe3D({
       maxAnisotropy,
       spherical,
       activeGibsLayerRef,
+      satelliteModeRef,
+      activeTopicsRef,
+      showPlaceLabelsRef,
       cutoffMsRef,
       setGlobalHud,
       setRegionalHud,
@@ -589,6 +706,7 @@ export function EarthGlobe3D({
       earthMat,
       cloudMesh,
       cloudMat,
+      innerHazeMat,
       atmoMat,
       markersGroup,
       arcsGroup,
@@ -613,9 +731,111 @@ export function EarthGlobe3D({
       activeTopicsRef.current,
       cutoffMsRef.current
     );
+    lastSyncedGlobalSigRef.current = resolveGlobalSyncSignature(
+      satelliteModeRef.current,
+      activeTopicsRef.current,
+      cutoffMsRef.current
+    );
+
+    const capCenterUnit = new THREE.Vector3();
+    const capEast = new THREE.Vector3();
+    const capNorth = new THREE.Vector3();
+    const capDir = new THREE.Vector3();
+    let detailCapInitialized = false;
+    let lastCapLat = 0;
+    let lastCapLng = 0;
+    let lastCapHalfDeg = 1;
+    let lastCapAlt = 20;
+
+    const rebuildDetailCap = (
+      centerLat: number,
+      centerLng: number,
+      capHalfDeg: number
+    ) => {
+      const mercRef = latLngToNormalizedMercator(centerLat, centerLng);
+      capCenterUnit.copy(latLngToVector3(centerLat, centerLng, 1)).normalize();
+      const sinCenterXZ = Math.hypot(capCenterUnit.x, capCenterUnit.z);
+      if (sinCenterXZ > 1e-5) {
+        capEast
+          .set(capCenterUnit.z / sinCenterXZ, 0, -capCenterUnit.x / sinCenterXZ)
+          .normalize();
+      } else {
+        capEast.set(1, 0, 0);
+      }
+      capNorth.crossVectors(capCenterUnit, capEast).normalize();
+
+      const tanHalf = Math.tan((capHalfDeg * Math.PI) / 180);
+      const dRad = ((2 * capHalfDeg * Math.PI) / 180) / DETAIL_CAP_SEGMENTS;
+      const sagitta = EARTH_RADIUS * 0.5 * (dRad * 0.5) ** 2;
+      const capRadius = EARTH_RADIUS + Math.max(0.000008, sagitta * 2.2);
+      const cx2d = -capCenterUnit.x;
+      const cz2d = capCenterUnit.z;
+
+      let vPtr = 0;
+      for (let iy = 0; iy <= DETAIL_CAP_SEGMENTS; iy++) {
+        const vNorm = (iy / DETAIL_CAP_SEGMENTS) * 2 - 1;
+        for (let ix = 0; ix <= DETAIL_CAP_SEGMENTS; ix++) {
+          const uNorm = (ix / DETAIL_CAP_SEGMENTS) * 2 - 1;
+          capDir
+            .copy(capCenterUnit)
+            .addScaledVector(capEast, uNorm * tanHalf)
+            .addScaledVector(capNorth, vNorm * tanHalf)
+            .normalize();
+
+          const p3 = vPtr * 3;
+          detailCapNormArr[p3] = capDir.x;
+          detailCapNormArr[p3 + 1] = capDir.y;
+          detailCapNormArr[p3 + 2] = capDir.z;
+          detailCapPosArr[p3] = capDir.x * capRadius;
+          detailCapPosArr[p3 + 1] = capDir.y * capRadius;
+          detailCapPosArr[p3 + 2] = capDir.z * capRadius;
+
+          const vLatDeg =
+            (Math.asin(Math.max(-1, Math.min(1, capDir.y))) * 180) / Math.PI;
+          const clampedLatRad =
+            (Math.max(-85.05, Math.min(85.05, vLatDeg)) * Math.PI) / 180;
+          const vMercY =
+            (1 - Math.log(Math.tan(Math.PI / 4 + clampedLatRad / 2)) / Math.PI) *
+            0.5;
+
+          const dx2d = -capDir.x;
+          const dz2d = capDir.z;
+          const vXZ = Math.hypot(dx2d, dz2d);
+          const dLngDeg =
+            sinCenterXZ > 1e-6 && vXZ > 1e-6
+              ? (Math.atan2(cx2d * dz2d - cz2d * dx2d, cx2d * dx2d + cz2d * dz2d) *
+                  180) /
+                Math.PI
+              : 0;
+
+          const p2 = vPtr * 2;
+          detailCapUvArr[p2] = (centerLng + dLngDeg + 180) / 360;
+          detailCapUvArr[p2 + 1] = (vLatDeg + 90) / 180;
+
+          const radial = Math.hypot(uNorm, vNorm);
+          const tRim = Math.max(0, Math.min(1, (0.98 - radial) / 0.2));
+          const rimAlpha = tRim * tRim * (3 - 2 * tRim);
+
+          const p4 = vPtr * 4;
+          detailCapMercArr[p4] = dLngDeg / 360;
+          detailCapMercArr[p4 + 1] = vMercY - mercRef.mercY;
+          detailCapMercArr[p4 + 2] = 1.0;
+          detailCapMercArr[p4 + 3] = rimAlpha;
+          vPtr += 1;
+        }
+      }
+
+      detailCapPosAttr.needsUpdate = true;
+      detailCapNormAttr.needsUpdate = true;
+      detailCapUvAttr.needsUpdate = true;
+      detailCapMercAttr.needsUpdate = true;
+      gibsController.syncMercatorOrigin(mercRef);
+    };
 
     const raycaster = new THREE.Raycaster();
     raycaster.params.Line = { threshold: 2.2 };
+    const wheelHitVec = new THREE.Vector3();
+    const dblHitVec = new THREE.Vector3();
     let isDragging = false;
     let downX = 0;
     let downY = 0;
@@ -645,13 +865,17 @@ export function EarthGlobe3D({
         const dy = e.clientY - prevY;
         prevX = e.clientX;
         prevY = e.clientY;
-        const dragScale = Math.max(
-          0.26,
-          Math.min(1, (spherical.radius - 92) / 178)
+        const alt = Math.max(0.008, spherical.radius - EARTH_RADIUS);
+        const surfaceWorldPerPx =
+          (2 * alt * Math.tan((20 * Math.PI) / 180)) / Math.max(420, currentH);
+        const dragMultiplier = 1.1 + 1.4 * Math.min(1, alt / 100);
+        const speed = Math.min(0.0055, (surfaceWorldPerPx / EARTH_RADIUS) * dragMultiplier);
+        const sinPhi = Math.max(0.22, Math.sin(spherical.phi));
+        spherical.theta -= (dx * speed) / sinPhi;
+        spherical.phi = Math.max(
+          0.08,
+          Math.min(Math.PI - 0.08, spherical.phi - dy * speed)
         );
-        const speed = 0.0055 * dragScale;
-        spherical.theta -= dx * speed;
-        spherical.phi = Math.max(0.18, Math.min(Math.PI - 0.18, spherical.phi - dy * speed));
         setHoveredInfo(null);
         return;
       }
@@ -687,6 +911,7 @@ export function EarthGlobe3D({
         ndc: getNormalizedCoords(e.clientX, e.clientY),
         camera,
         showPins: showPinsRef.current,
+        compareMode: compareModeRef.current,
         markersGroup,
         arcsGroup,
         earthMesh,
@@ -701,17 +926,69 @@ export function EarthGlobe3D({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       cameraTargetRef.current = null;
-      const wheelStep = spherical.radius < 180 ? 0.1 : 0.16;
-      spherical.radius = Math.max(
-        MIN_GLOBE_CAMERA_RADIUS,
-        Math.min(430, spherical.radius + e.deltaY * wheelStep)
+      const alt = Math.max(0.008, spherical.radius - EARTH_RADIUS);
+      const rawDelta =
+        e.deltaMode === 1
+          ? e.deltaY * 36
+          : e.deltaMode === 2
+            ? e.deltaY * 320
+            : e.deltaY;
+      const clampedDelta = Math.max(-360, Math.min(360, rawDelta));
+      const zoomFactor = Math.exp(clampedDelta * 0.0065);
+      const nextAlt = Math.max(
+        MIN_GLOBE_CAMERA_RADIUS - EARTH_RADIUS,
+        Math.min(330, alt * zoomFactor)
       );
+      const nextRadius = EARTH_RADIUS + nextAlt;
+
+      if (clampedDelta < 0 && nextRadius < spherical.radius) {
+        raycaster.setFromCamera(getNormalizedCoords(e.clientX, e.clientY), camera);
+        if (intersectTrueEarthSphere(raycaster.ray, wheelHitVec)) {
+          const hitSph = new THREE.Spherical().setFromVector3(
+            wheelHitVec.clone().normalize()
+          );
+          let dTheta = hitSph.theta - spherical.theta;
+          while (dTheta > Math.PI) dTheta -= Math.PI * 2;
+          while (dTheta < -Math.PI) dTheta += Math.PI * 2;
+          const steerScale = alt > 80 ? 0.55 : 0.95;
+          const steerFrac =
+            Math.min(0.65, Math.max(0.06, 1 - nextAlt / alt)) * steerScale;
+          spherical.theta += dTheta * steerFrac;
+          spherical.phi = Math.max(
+            0.08,
+            Math.min(Math.PI - 0.08, spherical.phi + (hitSph.phi - spherical.phi) * steerFrac)
+          );
+        }
+      }
+
+      spherical.radius = nextRadius;
+      setAutoRotate(false);
+    };
+
+    const onDblClick = (e: MouseEvent) => {
+      raycaster.setFromCamera(getNormalizedCoords(e.clientX, e.clientY), camera);
+      if (!intersectTrueEarthSphere(raycaster.ray, dblHitVec)) return;
+      const hitSph = new THREE.Spherical().setFromVector3(
+        dblHitVec.clone().normalize()
+      );
+      const curAlt = Math.max(0.008, spherical.radius - EARTH_RADIUS);
+      const targetRadius = Math.max(
+        MIN_GLOBE_CAMERA_RADIUS,
+        EARTH_RADIUS + curAlt * 0.24
+      );
+      cameraTargetRef.current = {
+        theta: hitSph.theta,
+        phi: Math.max(0.08, Math.min(Math.PI - 0.08, hitSph.phi)),
+        radius: targetRadius,
+      };
+      setAutoRotate(false);
     };
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
+    renderer.domElement.addEventListener("dblclick", onDblClick);
 
     const resizeObs = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -734,6 +1011,7 @@ export function EarthGlobe3D({
 
     let animId = 0;
     const startTimeMs = performance.now();
+    let prevFrameMs = startTimeMs;
     let lastTileEvalMs = 0;
     let lastLabelSync = -1;
     const projectionState: OverlayLabelProjectionState = {
@@ -749,7 +1027,10 @@ export function EarthGlobe3D({
 
     const animate = () => {
       animId = requestAnimationFrame(animate);
-      const elapsed = (performance.now() - startTimeMs) * 0.001;
+      const nowMs = performance.now();
+      const dt = Math.min(0.05, Math.max(0.001, (nowMs - prevFrameMs) * 0.001));
+      prevFrameMs = nowMs;
+      const elapsed = (nowMs - startTimeMs) * 0.001;
       const reducedMotion =
         typeof window !== "undefined" &&
         Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
@@ -764,16 +1045,26 @@ export function EarthGlobe3D({
         let dTheta = t.theta - spherical.theta;
         while (dTheta > Math.PI) dTheta -= Math.PI * 2;
         while (dTheta < -Math.PI) dTheta += Math.PI * 2;
-        const lerpFactor = reducedMotion ? 1 : 0.08;
-        spherical.theta += dTheta * lerpFactor;
-        spherical.phi += (t.phi - spherical.phi) * lerpFactor;
-        spherical.radius += (t.radius - spherical.radius) * lerpFactor;
+        const flyStep = reducedMotion ? 1 : 1 - Math.exp(-13.5 * dt);
+        spherical.theta += dTheta * flyStep;
+        spherical.phi += (t.phi - spherical.phi) * flyStep;
+        const curFlyAlt = Math.max(0.008, spherical.radius - EARTH_RADIUS);
+        const tgtFlyAlt = Math.max(0.008, t.radius - EARTH_RADIUS);
+        const nextLogAlt =
+          Math.log(curFlyAlt) + (Math.log(tgtFlyAlt) - Math.log(curFlyAlt)) * flyStep;
+        spherical.radius = reducedMotion ? t.radius : EARTH_RADIUS + Math.exp(nextLogAlt);
+        const targetAlt = Math.max(0.008, t.radius - EARTH_RADIUS);
+        const angEps = Math.min(0.005, Math.max(0.000012, 0.005 * (targetAlt / 100)));
+        const radEps = Math.min(0.25, Math.max(0.0004, targetAlt * 0.025));
         if (
           reducedMotion ||
-          (Math.abs(dTheta) < 0.005 &&
-            Math.abs(t.phi - spherical.phi) < 0.005 &&
-            Math.abs(t.radius - spherical.radius) < 0.25)
+          (Math.abs(dTheta) < angEps &&
+            Math.abs(t.phi - spherical.phi) < angEps &&
+            Math.abs(t.radius - spherical.radius) < radEps)
         ) {
+          spherical.theta = t.theta;
+          spherical.phi = t.phi;
+          spherical.radius = t.radius;
           cameraTargetRef.current = null;
         }
       } else if (
@@ -785,6 +1076,18 @@ export function EarthGlobe3D({
         spherical.theta += 0.0012;
       }
 
+      const curAlt = Math.max(0.008, spherical.radius - EARTH_RADIUS);
+      const nextNear = curAlt < 18 ? Math.max(0.0015, curAlt * 0.08) : 1;
+      const nextFar = curAlt < 1.5 ? 60 : curAlt < 18 ? 600 : 2000;
+      if (
+        Math.abs(camera.near - nextNear) > nextNear * 0.15 ||
+        Math.abs(camera.far - nextFar) > nextFar * 0.15
+      ) {
+        camera.near = nextNear;
+        camera.far = nextFar;
+        camera.updateProjectionMatrix();
+      }
+
       if (!isRegionalRef.current && spherical.radius <= REGIONAL_ZOOM_ACTIVATE_RADIUS) {
         isRegionalRef.current = true;
         setIsRegionalZoom(true);
@@ -794,19 +1097,94 @@ export function EarthGlobe3D({
         setIsRegionalZoom(false);
         setProjectedNodeLabels([]);
         projectionState.lastNodeLabelSignature = "";
-      } else if (isRegionalRef.current && elapsed - lastTileEvalMs >= 0.14) {
+      } else if (isRegionalRef.current && elapsed - lastTileEvalMs >= 0.032) {
         lastTileEvalMs = elapsed;
         gibsController.syncRegionalTile(false);
       }
 
+      if (curAlt < 16.0) {
+        tmpSphVec.setFromSpherical(spherical);
+        const subLatLng = vector3ToLatLng(tmpSphVec, 6);
+        if (Math.abs(subLatLng.lat) <= 85.05) {
+          detailCapMesh.visible = true;
+          const capHalfDeg = Math.max(0.055, Math.min(8.5, curAlt * 1.95));
+          const cosLat = Math.max(
+            0.08,
+            Math.cos((subLatLng.lat * Math.PI) / 180)
+          );
+          let dLng = Math.abs(subLatLng.lng - lastCapLng);
+          if (dLng > 180) dLng = 360 - dLng;
+          const driftDeg = Math.hypot(subLatLng.lat - lastCapLat, dLng * cosLat);
+          const altRatio = lastCapAlt > 0 ? curAlt / lastCapAlt : 99;
+          if (
+            !detailCapInitialized ||
+            driftDeg > 0.32 * lastCapHalfDeg ||
+            altRatio > 1.75 ||
+            altRatio < 0.57
+          ) {
+            detailCapInitialized = true;
+            lastCapLat = subLatLng.lat;
+            lastCapLng = subLatLng.lng;
+            lastCapHalfDeg = capHalfDeg;
+            lastCapAlt = curAlt;
+            rebuildDetailCap(subLatLng.lat, subLatLng.lng, capHalfDeg);
+          }
+        } else {
+          detailCapMesh.visible = false;
+        }
+      } else {
+        detailCapMesh.visible = false;
+      }
+
+      const satCoarseTarget =
+        isRegionalRef.current && gibsController.isAerialCoarseLoaded() ? 1.0 : 0.0;
+      earthMat.uniforms.uSatCoarseBlend.value +=
+        (satCoarseTarget - (earthMat.uniforms.uSatCoarseBlend.value as number)) * 0.32;
+
+      const satMidTarget =
+        isRegionalRef.current && gibsController.isAerialMidLoaded() ? 1.0 : 0.0;
+      earthMat.uniforms.uSatMidBlend.value +=
+        (satMidTarget - (earthMat.uniforms.uSatMidBlend.value as number)) * 0.34;
+
+      const satPrevFineTarget =
+        isRegionalRef.current && gibsController.isAerialPrevFineLoaded() ? 1.0 : 0.0;
+      earthMat.uniforms.uSatPrevFineBlend.value +=
+        (satPrevFineTarget - (earthMat.uniforms.uSatPrevFineBlend.value as number)) * 0.36;
+
+      const satFineTarget =
+        isRegionalRef.current && gibsController.isAerialFineLoaded() ? 1.0 : 0.0;
+      earthMat.uniforms.uSatFineBlend.value +=
+        (satFineTarget - (earthMat.uniforms.uSatFineBlend.value as number)) * 0.38;
+
+      const useAerialPrimary = shouldUseCloudFreeAerialPrimary(
+        satelliteModeRef.current,
+        activeTopicsRef.current
+      );
+
       const targetRegBlend =
         isRegionalRef.current &&
+        !useAerialPrimary &&
         gibsController.isRegionalTexLoaded() &&
         activeGibsLayerRef.current !== null
           ? 1.0
           : 0.0;
       earthMat.uniforms.uRegionalBlend.value +=
         (targetRegBlend - (earthMat.uniforms.uRegionalBlend.value as number)) * 0.1;
+
+      const activeMeta = activeGibsLayerRef.current
+        ? GIBS_LAYERS[activeGibsLayerRef.current]
+        : null;
+      const aerialLoaded =
+        gibsController.isAerialCoarseLoaded() ||
+        gibsController.isAerialMidLoaded() ||
+        gibsController.isAerialPrevFineLoaded() ||
+        gibsController.isAerialFineLoaded();
+      const targetRegOpacity =
+        activeMeta?.isDataLayer && aerialLoaded && spherical.radius < 130
+          ? 0.62
+          : 1.0;
+      earthMat.uniforms.uRegionalMaxOpacity.value +=
+        (targetRegOpacity - (earthMat.uniforms.uRegionalMaxOpacity.value as number)) * 0.12;
 
       const targetGlobalBlend =
         gibsController.isGlobalTexLoaded() &&
@@ -818,13 +1196,18 @@ export function EarthGlobe3D({
 
       const cloudZoomFrac = Math.max(
         0,
-        Math.min(1, (spherical.radius - 135) / (196 - 135))
+        Math.min(1, (spherical.radius - 112) / (186 - 112))
       );
-      cloudMat.uniforms.uRegionalFade.value = 0.18 + cloudZoomFrac * 0.82;
+      cloudMat.uniforms.uRegionalFade.value = cloudZoomFrac * cloudZoomFrac;
+      const hazeZoomFrac = Math.max(
+        0,
+        Math.min(1, (spherical.radius - 102) / (112 - 102))
+      );
+      innerHazeMat.uniforms.uInnerHazeFade.value = 0.12 + hazeZoomFrac * 0.88;
 
       const targetOffsetX =
-        inspectorOpenRef.current && currentW >= 1024
-          ? Math.round(Math.min(396, currentW * 0.30) * 0.34)
+        inspectorOpenRef.current && currentW >= 720
+          ? Math.round(Math.min(388, currentW * 0.36) * 0.38)
           : 0;
       currentViewOffsetX += (targetOffsetX - currentViewOffsetX) * 0.1;
       if (Math.abs(currentViewOffsetX) > 0.5) {
@@ -840,31 +1223,127 @@ export function EarthGlobe3D({
         camera.clearViewOffset();
       }
 
+      const markerZoomScale = Math.min(
+        1.0,
+        curAlt / (isRegionalRef.current ? 75 : 165)
+      );
+      const probeZoomScale = Math.min(1.0, curAlt / 185);
+      const closeAerialGlowAtten = curAlt < 18 ? 0.55 + 0.45 * (curAlt / 18) : 1.0;
+      const arcDeepFade = Math.max(0, Math.min(1, (curAlt - 2.2) / (14 - 2.2)));
+
       for (const child of markersGroup.children) {
+        const u = child.userData.unitNormal as THREE.Vector3 | undefined;
+        if (child.userData.isFilament && u) {
+          const line = child as THREE.Line;
+          const posAttr = line.geometry.getAttribute("position") as THREE.BufferAttribute;
+          const sOff = Math.max(
+            0.00006,
+            (child.userData.surfOffset as number) * markerZoomScale
+          );
+          const oOff = Math.max(
+            0.00012,
+            (child.userData.orbOffset as number) * markerZoomScale
+          );
+          posAttr.setXYZ(
+            0,
+            u.x * (EARTH_RADIUS + sOff),
+            u.y * (EARTH_RADIUS + sOff),
+            u.z * (EARTH_RADIUS + sOff)
+          );
+          posAttr.setXYZ(
+            1,
+            u.x * (EARTH_RADIUS + oOff),
+            u.y * (EARTH_RADIUS + oOff),
+            u.z * (EARTH_RADIUS + oOff)
+          );
+          posAttr.needsUpdate = true;
+          continue;
+        }
+        if (u && typeof child.userData.baseAltOffset === "number") {
+          child.position
+            .copy(u)
+            .multiplyScalar(
+              EARTH_RADIUS + Math.max(0.00006, child.userData.baseAltOffset * markerZoomScale)
+            );
+        }
         if (child.userData.pulseRing) {
           const phase = ((elapsed * 0.52 + (child.userData.phaseOffset ?? 0)) % 1 + 1) % 1;
           const baseScale = child.userData.baseScale ?? 1;
-          child.scale.setScalar(baseScale * (1.0 + phase * 1.35));
+          child.scale.setScalar(baseScale * markerZoomScale * (1.0 + phase * 1.35));
           const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
-          mat.opacity = (1 - phase) * (child.userData.maxOpacity ?? 0.62);
+          mat.opacity =
+            (1 - phase) * (child.userData.maxOpacity ?? 0.62) * closeAerialGlowAtten;
         } else if (child.userData.haloSprite) {
           const baseScale = child.userData.baseScale ?? 6;
           const breath = 1 + Math.sin(elapsed * 2.6 + (child.userData.phaseOffset ?? 0)) * 0.09;
-          child.scale.setScalar(baseScale * breath);
+          child.scale.setScalar(baseScale * markerZoomScale * breath);
+          const spriteMat = (child as THREE.Sprite).material as THREE.SpriteMaterial;
+          spriteMat.opacity = (child.userData.baseOpacity ?? 0.75) * closeAerialGlowAtten;
+        } else if (child.userData.isHitTarget) {
+          child.scale.setScalar(markerZoomScale);
+        } else if (u) {
+          child.scale.setScalar(markerZoomScale);
         }
       }
 
       for (const child of probeGroup.children) {
+        const u = child.userData.unitNormal as THREE.Vector3 | undefined;
+        if (u && typeof child.userData.baseAltOffset === "number") {
+          child.position
+            .copy(u)
+            .multiplyScalar(
+              EARTH_RADIUS + Math.max(0.00006, child.userData.baseAltOffset * probeZoomScale)
+            );
+        }
         if (child.userData.probeRing) {
           const phase = (elapsed * 0.7) % 1;
-          child.scale.setScalar(1 + phase * 1.25);
+          child.scale.setScalar((1 + phase * 1.15) * probeZoomScale);
           const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
-          mat.opacity = (1 - phase) * 0.82;
+          mat.opacity =
+            (1 - phase) * (child.userData.maxOpacity ?? 0.72) * closeAerialGlowAtten;
+        } else if (typeof child.userData.baseSize === "number") {
+          child.scale.setScalar((child.userData.baseSize as number) * probeZoomScale);
+          const spriteMat = (child as THREE.Sprite).material as THREE.SpriteMaterial;
+          spriteMat.opacity = (child.userData.baseOpacity ?? 0.62) * closeAerialGlowAtten;
+        } else if (child.userData.isProbeCore) {
+          child.scale.setScalar(probeZoomScale);
+        } else if (child.userData.isComparisonTube) {
+          child.visible = curAlt > 2.2;
+          const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
+          mat.opacity = (child.userData.baseOpacity ?? 0.9) * arcDeepFade;
+        }
+      }
+
+      arcsGroup.visible = arcDeepFade > 0.01;
+      if (arcsGroup.visible) {
+        for (const child of arcsGroup.children) {
+          if (child.userData.isArcHit) {
+            child.visible = curAlt >= 5;
+          } else if (typeof child.userData.baseOpacity === "number") {
+            const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
+            mat.opacity = (child.userData.baseOpacity as number) * arcDeepFade;
+          }
         }
       }
 
       advanceTravelers(sceneRefs.current?.arcTravelers ?? [], elapsed);
       advanceTravelers(sceneRefs.current?.probeTravelers ?? [], elapsed);
+      const travelerScale = Math.min(1.0, curAlt / 90);
+      for (const traveler of sceneRefs.current?.arcTravelers ?? []) {
+        if (typeof traveler.sprite.userData.baseScale === "number") {
+          traveler.sprite.scale.setScalar(
+            (traveler.sprite.userData.baseScale as number) * travelerScale
+          );
+        }
+      }
+      for (const traveler of sceneRefs.current?.probeTravelers ?? []) {
+        traveler.sprite.visible = curAlt > 2.2;
+        if (typeof traveler.sprite.userData.baseScale === "number") {
+          traveler.sprite.scale.setScalar(
+            (traveler.sprite.userData.baseScale as number) * travelerScale
+          );
+        }
+      }
 
       camera.position.setFromSpherical(spherical);
       camera.lookAt(0, 0, 0);
@@ -910,6 +1389,7 @@ export function EarthGlobe3D({
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
+      renderer.domElement.removeEventListener("dblclick", onDblClick);
       if (sceneRefs.current) {
         sceneRefs.current.arcTravelers = [];
         sceneRefs.current.arcMidpoints = [];
@@ -920,8 +1400,14 @@ export function EarthGlobe3D({
         disposeGroupResources(probeGroup, sharedTextures);
         disposeGroupResources(regionalGroup, sharedTextures);
       }
+      if (cutoffSyncTimerRef.current !== null) {
+        window.clearTimeout(cutoffSyncTimerRef.current);
+        cutoffSyncTimerRef.current = null;
+      }
       gibsController.dispose();
       placeholderRegionalTex.dispose();
+      detailCapGeo.dispose();
+      detailCapMat.dispose();
       earthGeo.dispose();
       earthMat.dispose();
       cloudGeo.dispose();
@@ -971,8 +1457,9 @@ export function EarthGlobe3D({
     satelliteMode: RegionalSatelliteMode;
     activeTopics: ReadonlyArray<ETGDatasetId> | undefined;
     prefsHydrated: boolean;
-    globalSig: string;
   } | null>(null);
+  const lastSyncedGlobalSigRef = useRef<string | null>(null);
+  const cutoffSyncTimerRef = useRef<number | null>(null);
 
   // Sync GIBS global filter & regional spectral layer + timeline date to the globe shader
   useEffect(() => {
@@ -999,31 +1486,32 @@ export function EarthGlobe3D({
       prevInputs.satelliteMode === satelliteMode &&
       prevInputs.activeTopics === activeTopics &&
       prevInputs.prefsHydrated === prefsHydrated;
-    const globalSigUnchanged =
-      prevInputs !== null && prevInputs.globalSig === nextGlobalSig;
 
     prevGlobalSyncInputsRef.current = {
       satelliteMode,
       activeTopics,
       prefsHydrated,
-      globalSig: nextGlobalSig,
     };
 
-    if (isCutoffOnlyChange) {
-      const timer = window.setTimeout(() => {
-        if (!globalSigUnchanged) {
-          refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
-        }
-        if (isRegionalZoom) {
-          refs.forceRegionalTileSync();
-        }
-      }, 200);
-      return () => window.clearTimeout(timer);
+    if (lastSyncedGlobalSigRef.current !== nextGlobalSig) {
+      lastSyncedGlobalSigRef.current = nextGlobalSig;
+      refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
     }
 
-    refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
+    if (cutoffSyncTimerRef.current !== null) {
+      window.clearTimeout(cutoffSyncTimerRef.current);
+      cutoffSyncTimerRef.current = null;
+    }
+
     if (isRegionalZoom) {
-      refs.forceRegionalTileSync();
+      if (isCutoffOnlyChange) {
+        cutoffSyncTimerRef.current = window.setTimeout(() => {
+          cutoffSyncTimerRef.current = null;
+          refs.forceRegionalTileSync();
+        }, 180);
+      } else {
+        refs.forceRegionalTileSync();
+      }
     }
   }, [satelliteMode, activeTopics, cutoffMs, isRegionalZoom, prefsHydrated]);
 
@@ -1034,7 +1522,12 @@ export function EarthGlobe3D({
     }
   }, [filterSmooth]);
 
-  // Render 50 km MERRA-2 grid-scale & 150 km mesoscale surface geodesic rings in regional zoom
+  useEffect(() => {
+    if (!isRegionalZoom) return;
+    sceneRefs.current?.forceRegionalTileSync();
+  }, [showPlaceLabels, isRegionalZoom]);
+
+  // Render geodesic scale rings (2/10 km ground-city, 10/50 km metro, 50/150 km regional)
   useEffect(() => {
     const refs = sceneRefs.current;
     if (!refs) return;
@@ -1043,6 +1536,7 @@ export function EarthGlobe3D({
       isRegionalZoom,
       regionalFocalCoord,
       hasSelectedOrProbedPin: Boolean(selectedGeoNode || probedCoord),
+      depthTier: regionalHud.depthTier,
     });
   }, [
     isRegionalZoom,
@@ -1050,6 +1544,7 @@ export function EarthGlobe3D({
     regionalFocalCoord.lng,
     Boolean(selectedGeoNode),
     Boolean(probedCoord),
+    regionalHud.depthTier,
   ]);
 
   const regBucketLat = Math.round(regionalFocalCoord.lat * 2) / 2;
@@ -1113,22 +1608,57 @@ export function EarthGlobe3D({
       phi: refs.spherical.phi,
       radius: refs.spherical.radius,
     };
-    const step = delta < 0 ? (base.radius < 185 ? -24 : -32) : delta;
+    const curAlt = Math.max(0.008, base.radius - EARTH_RADIUS);
+    const nextAlt =
+      delta < 0
+        ? Math.max(MIN_GLOBE_CAMERA_RADIUS - EARTH_RADIUS, curAlt * 0.34)
+        : Math.min(330, Math.max(curAlt + 0.18, curAlt * 2.8));
     cameraTargetRef.current = {
       ...base,
-      radius: Math.max(MIN_GLOBE_CAMERA_RADIUS, Math.min(430, base.radius + step)),
+      radius: EARTH_RADIUS + nextAlt,
     };
   };
 
-  const zoomToRegion = () => {
+  const resolveTargetSphericalCoord = () => {
+    if (selectedGeoNode || probedCoord) {
+      const vec = latLngToVector3(regionalFocalCoord.lat, regionalFocalCoord.lng, 1);
+      return new THREE.Spherical().setFromVector3(vec);
+    }
+    const curSph = sceneRefs.current?.spherical;
+    if (curSph) {
+      return curSph.clone();
+    }
     const vec = latLngToVector3(regionalFocalCoord.lat, regionalFocalCoord.lng, 1);
-    const sph = new THREE.Spherical().setFromVector3(vec);
+    return new THREE.Spherical().setFromVector3(vec);
+  };
+
+  const zoomToDepth = (targetRadius: number) => {
+    const sph = resolveTargetSphericalCoord();
     cameraTargetRef.current = {
       theta: sph.theta,
-      phi: Math.max(0.2, Math.min(Math.PI - 0.2, sph.phi)),
-      radius: DEFAULT_REGIONAL_FOCUS_RADIUS,
+      phi: Math.max(0.08, Math.min(Math.PI - 0.08, sph.phi)),
+      radius: Math.max(MIN_GLOBE_CAMERA_RADIUS, Math.min(430, targetRadius)),
     };
     setAutoRotate(false);
+  };
+
+  const zoomToRegion = () => {
+    zoomToDepth(DEFAULT_REGIONAL_FOCUS_RADIUS);
+  };
+
+  const cycleSatelliteZoom = () => {
+    const r = sceneRefs.current?.spherical.radius ?? 270;
+    if (r > 135) {
+      zoomToDepth(DEFAULT_REGIONAL_FOCUS_RADIUS);
+    } else if (r > 106) {
+      zoomToDepth(DEFAULT_SATELLITE_METRO_RADIUS);
+    } else if (r > 100.8) {
+      zoomToDepth(DEFAULT_SATELLITE_CITY_RADIUS);
+    } else if (r > 100.08) {
+      zoomToDepth(DEFAULT_SATELLITE_STREET_RADIUS);
+    } else {
+      resetCamera();
+    }
   };
 
   const onFocusSunPresetCamera = (preset: SunPreset) => {
@@ -1208,6 +1738,7 @@ export function EarthGlobe3D({
         timelineSlot={timelineSlot}
         onSelectNode={onSelectNode}
         onSelectEdge={onSelectEdge}
+        onProbeCoordinate={onProbeCoordinate}
         onToggleCompareMode={onToggleCompareMode}
         autoRotate={autoRotate}
         setAutoRotate={setAutoRotate}
@@ -1224,6 +1755,8 @@ export function EarthGlobe3D({
         setShowPins={setShowPins}
         satelliteMode={satelliteMode}
         setSatelliteMode={setSatelliteMode}
+        showPlaceLabels={showPlaceLabels}
+        setShowPlaceLabels={setShowPlaceLabels}
         filterSmooth={filterSmooth}
         setFilterSmooth={setFilterSmooth}
         isRegionalZoom={isRegionalZoom}
@@ -1238,8 +1771,10 @@ export function EarthGlobe3D({
         containerWidth={containerWidth}
         resetCamera={resetCamera}
         zoomIn={() => adjustCameraRadius(-1)}
-        zoomOut={() => adjustCameraRadius(32)}
+        zoomOut={() => adjustCameraRadius(1)}
         zoomToRegion={zoomToRegion}
+        zoomToDepth={zoomToDepth}
+        cycleSatelliteZoom={cycleSatelliteZoom}
         onRetryRegionalTile={() => sceneRefs.current?.forceRegionalTileSync()}
         onFocusSunPresetCamera={onFocusSunPresetCamera}
       />

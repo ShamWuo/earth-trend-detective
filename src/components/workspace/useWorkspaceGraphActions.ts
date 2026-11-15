@@ -187,24 +187,27 @@ export function useWorkspaceGraphActions({
     const focusParam = selectedNodeUuid
       ? `&focusUuid=${encodeURIComponent(selectedNodeUuid)}`
       : "";
-    fetch(`/api/graph/microscope?topK=8${focusParam}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!cancelled && !controller.signal.aborted && data && Array.isArray(data.nodes)) {
-          setMicroscopeScan(data as TrendMicroscopeScanResult);
-        }
+    const timer = window.setTimeout(() => {
+      fetch(`/api/graph/microscope?topK=8${focusParam}`, {
+        cache: "no-store",
+        signal: controller.signal,
       })
-      .catch((err) => {
-        if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
-          return;
-        }
-        if (!cancelled) setMicroscopeScan(null);
-      });
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!cancelled && !controller.signal.aborted && data && Array.isArray(data.nodes)) {
+            setMicroscopeScan(data as TrendMicroscopeScanResult);
+          }
+        })
+        .catch((err) => {
+          if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+            return;
+          }
+          if (!cancelled) setMicroscopeScan(null);
+        });
+    }, 120);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
       controller.abort();
     };
   }, [snapshot.nodes.length, snapshot.edges.length, selectedNodeUuid]);
@@ -271,17 +274,22 @@ export function useWorkspaceGraphActions({
         const data = await res.json();
         if (res.ok && Array.isArray(data.suggestions)) {
           setCandidateLinks(data.suggestions as CandidateLinkSuggestion[]);
-          setStatusMessage(
-            data.suggestions.length > 0
-              ? `Discovered ${data.suggestions.length} latent connection(s) — click any dashed violet edge to wire.`
-              : "No new latent connections found above significance threshold."
-          );
+          if (data.suggestions.length > 0 && viewMode === "graph") {
+            // GraphWorkbenchToolbar displays the interactive violet candidate banner directly below the toolbar.
+            setStatusMessage(null);
+          } else {
+            setStatusMessage(
+              data.suggestions.length > 0
+                ? `Discovered ${data.suggestions.length} latent connection(s).`
+                : "No new latent connections found above significance threshold."
+            );
+          }
         }
       } finally {
         setDiscoveringLinks(false);
       }
     },
-    [selectedNodeUuid, setStatusMessage]
+    [selectedNodeUuid, setStatusMessage, viewMode]
   );
 
   const handleAcceptCandidateLink = useCallback(

@@ -15,6 +15,7 @@ import { getEtgStore } from "@/lib/graph/etgStore";
 import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type SupportedFeed = "cams_pm25" | "usgs_gauge" | "glofas_discharge";
 

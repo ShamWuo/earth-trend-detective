@@ -16,6 +16,7 @@ from etg_trend_microscope import (  # noqa: E402
     PortableTrendMicroscope,
     build_microscope_training_corpus,
     evaluate_microscope_benchmarks,
+    evaluate_real_historical_microscope,
     extract_node_microscope_features,
     extract_pair_microscope_features,
 )
@@ -154,6 +155,17 @@ class TestEtgTrendMicroscope(unittest.TestCase):
         self.assertEqual(l4_scan["schemaVersion"], WEIGHTS_SCHEMA_V1)
         self.assertEqual(l4_scan["nodeCount"], 8)
         self.assertIn("ETG Trend Microscope", l4_scan["aiPerceptionBrief"])
+
+    def test_real_historical_nasa_noaa_nsidc_knmi_benchmark(self) -> None:
+        weights_path = ML_DIR / "weights" / "etg-trend-microscope-v1.json"
+        if weights_path.exists():
+            shipped = PortableTrendMicroscope.from_weights_dict(
+                json.loads(weights_path.read_text(encoding="utf-8"))
+            )
+            res = evaluate_real_historical_microscope(shipped)
+            self.assertTrue(res["allSecularChecksPassed"], f"Real check details: {res['nodes']}")
+        res_local = evaluate_real_historical_microscope(self.model)
+        self.assertGreaterEqual(res_local["secularChecksPassed"], 3)
 
 
 if __name__ == "__main__":

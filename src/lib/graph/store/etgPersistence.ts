@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type {
+  ETGDatasetId,
   ETGEdge,
   ETGNode,
   ETGWorkspaceBundle,
@@ -8,6 +9,12 @@ import type {
   ProspectiveForecastRecord,
   TimeSeriesPoint,
 } from "@/types/etg";
+import {
+  hasTerrestrialSurface,
+  isMarineOrCoastalSurface,
+  validateDatasetForSurface,
+} from "@/lib/earth/surfaceMask";
+import { sanitizeResearchDossier } from "@/lib/research/dossierUtils";
 import {
   DEFAULT_DATA_DIR,
   FORBIDDEN_PATH_SEGMENTS,
@@ -123,6 +130,198 @@ export function offloadNodeSeriesOp(
     };
   }
   return rest;
+}
+
+/**
+ * Sanitizes persisted Signal nodes so mislabeled agency/satellite datasets
+ * (e.g. Geo.ca AHCCD air temps as ocean_temp, USGS discharge as air_quality,
+ * RH2M humidity as deforestation, open-ocean SWOT centroids, and inland SST)
+ * are repaired or pruned cleanly on store load and workspace import.
+ */
+export function sanitizePersistedNodeTaxonomy(ctx: EtgStoreContext): boolean {
+  let changed = false;
+  const deletedUuids = new Set<string>();
+
+  const reclassify = (node: ETGNode, nextDataset: ETGDatasetId) => {
+    if (node.properties.dataset === nextDataset) return;
+    ctx.nodes.set(node.uuid, {
+      ...node,
+      properties: {
+        ...node.properties,
+        dataset: nextDataset,
+      },
+    });
+    changed = true;
+  };
+
+  const removeNode = (uuid: string) => {
+    ctx.nodes.delete(uuid);
+    ctx.seriesByNode.delete(uuid);
+    ctx.multiScaleSeriesByNode.delete(uuid);
+    ctx.forecasts.delete(uuid);
+    deletedUuids.add(uuid);
+    changed = true;
+  };
+
+  const mapLegacyFrontRangeRegion = (
+    region: string,
+    name: string,
+    uuid: string
+  ): string => {
+    const combo = `${region} ${name} ${uuid}`;
+    if (/\b(?:NNW|fort[- ]?collins)\b/i.test(combo)) return "Fort Collins, CO";
+    if (/\b(?:N Corridor|cheyenne)\b/i.test(combo)) return "Cheyenne, WY";
+    if (/\b(?:NE Corridor|greeley)\b/i.test(combo)) return "Greeley, CO";
+    if (/\b(?:E Corridor|limon)\b/i.test(combo)) return "Limon, CO";
+    if (/\b(?:S Corridor|colorado[- ]?springs)\b/i.test(combo)) return "Colorado Springs, CO";
+    if (/\b(?:W Corridor|silverthorne)\b/i.test(combo)) return "Silverthorne, CO";
+    if (/\b(?:Front Range Hub|CENTER|denver[- ]?target|Solar Microgrid)\b/i.test(combo)) {
+      return "Denver, CO";
+    }
+    return "";
+  };
+
+  for (const initialNode of Array.from(ctx.nodes.values())) {
+    const props = initialNode.properties;
+    const sourceSystem = props.source_system ?? "";
+    const parameter = props.parameter ?? "";
+    const name = props.name ?? "";
+    const region = props.region ?? "";
+
+    // 0a. Purge legacy synthetic "redteam" QA fixture nodes
+    if (
+      /\bredteam\b/i.test(
+        `${initialNode.uuid} ${name} ${region} ${sourceSystem} ${props.description ?? ""}`
+      )
+    ) {
+      removeNode(initialNode.uuid);
+      continue;
+    }
+
+    // 0b. Replace legacy "N Corridor (156 km)" / "Front Range Hub, CO" region tags with city names
+    if (
+      region &&
+      (/\bcorridor\s*\(\d+\s*km\)/i.test(region) || /^front range hub,\s*co$/i.test(region.trim()))
+    ) {
+      const cleanRegion = mapLegacyFrontRangeRegion(region, name, initialNode.uuid);
+      ctx.nodes.set(initialNode.uuid, {
+        ...initialNode,
+        properties: {
+          ...props,
+          region: cleanRegion || undefined,
+        },
+      });
+      changed = true;
+    }
+
+    // 1. Geo.ca AHCCD land air temperature stations
+    if (
+      initialNode.uuid.startsWith("signal-geoca-ahccd-") ||
+      /\bAHCCD\b/i.test(sourceSystem)
+    ) {
+      if (props.dataset !== "nasa_power") {
+        reclassify(initialNode, "nasa_power");
+      }
+    }
+
+    // 2. USGS Mississippi River discharge in m3/s mislabeled as air_quality
+    if (
+      initialNode.uuid.startsWith("signal-usgs-mississippi-") ||
+      (props.dataset === "air_quality" && /River Discharge/i.test(parameter))
+    ) {
+      if (props.dataset !== "hydrology") {
+        reclassify(initialNode, "hydrology");
+      }
+    }
+
+    // 3. NASA POWER RH2M 2m relative humidity mislabeled as deforestation
+    if (
+      initialNode.uuid.startsWith("signal-power-rh-") ||
+      (props.dataset === "deforestation" && /^RH2M\b/i.test(parameter))
+    ) {
+      if (props.dataset !== "nasa_power") {
+        reclassify(initialNode, "nasa_power");
+      }
+    }
+
+    // 4. Open-ocean SWOT RiverSP centroids
+    if (
+      initialNode.uuid.startsWith("signal-swot-pass-") &&
+      typeof props.lat === "number" &&
+      typeof props.lng === "number" &&
+      !hasTerrestrialSurface(props.lat, props.lng)
+    ) {
+      removeNode(initialNode.uuid);
+      continue;
+    }
+
+    const currentNode = ctx.nodes.get(initialNode.uuid);
+    if (!currentNode || currentNode.label !== "Signal") continue;
+    const curProps = currentNode.properties;
+    const lat = curProps.lat;
+    const lng = curProps.lng;
+    const ds = curProps.dataset;
+    if (
+      typeof lat !== "number" ||
+      typeof lng !== "number" ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      !ds
+    ) {
+      continue;
+    }
+
+    if (
+      currentNode.uuid.startsWith("signal-gistemp-") ||
+      /GISTEMP/i.test(`${curProps.source_system ?? ""} ${curProps.name ?? ""}`)
+    ) {
+      continue;
+    }
+
+    const check = validateDatasetForSurface(ds, lat, lng);
+    if (!check.applicable) {
+      if (ds === "ocean_temp" && !isMarineOrCoastalSurface(lat, lng)) {
+        if (curProps.eonet_category === "seaLakeIce") {
+          reclassify(currentNode, "hydrology");
+        } else if (
+          /\b(?:sst|sea surface|sea ice)\b/i.test(
+            `${name} ${parameter}`
+          )
+        ) {
+          removeNode(currentNode.uuid);
+        } else {
+          reclassify(currentNode, "nasa_power");
+        }
+      } else if (
+        (ds === "hydrology" || ds === "wildfire" || ds === "deforestation") &&
+        !hasTerrestrialSurface(lat, lng)
+      ) {
+        if (
+          currentNode.uuid.startsWith("signal-power-p-") ||
+          currentNode.uuid.startsWith("signal-eonet-") ||
+          /PRECTOTCORR/i.test(parameter)
+        ) {
+          reclassify(currentNode, "nasa_power");
+        } else {
+          removeNode(currentNode.uuid);
+        }
+      }
+    }
+  }
+
+  if (deletedUuids.size > 0) {
+    for (const [edgeUuid, edge] of Array.from(ctx.edges.entries())) {
+      if (
+        deletedUuids.has(edge.source_uuid) ||
+        deletedUuids.has(edge.target_uuid)
+      ) {
+        ctx.edges.delete(edgeUuid);
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
 }
 
 export function loadInitialStateOp(ctx: EtgStoreContext): void {
@@ -243,8 +442,11 @@ export function loadInitialStateOp(ctx: EtgStoreContext): void {
         })
       );
       ctx.edges = new Map(parsed.edges.map((e) => [e.properties.uuid, e]));
-      ctx.activity = Array.isArray(parsed.activity) ? parsed.activity.slice(0, 40) : [];
-      if (migratedLegacySeries || shouldMigrateLegacy) {
+      const rawActivity = Array.isArray(parsed.activity) ? parsed.activity.slice(0, 40) : [];
+      ctx.activity = rawActivity.filter((item) => !/\bredteam\b/i.test(JSON.stringify(item)));
+      const cleanedActivity = ctx.activity.length !== rawActivity.length;
+      const sanitizedTaxonomy = sanitizePersistedNodeTaxonomy(ctx);
+      if (migratedLegacySeries || shouldMigrateLegacy || sanitizedTaxonomy || cleanedActivity) {
         ctx.persistState();
       }
       return;
@@ -429,6 +631,13 @@ export function importWorkspaceBundleOp(
     ) {
       throw new Error(`Invalid longitude on node "${rawNode.uuid}" in workspace bundle.`);
     }
+    if (rawNode.properties.dossier !== undefined && rawNode.properties.dossier !== null) {
+      const cleanDossier = sanitizeResearchDossier(rawNode.properties.dossier);
+      if (!cleanDossier) {
+        throw new Error(`Node "${rawNode.uuid}" has invalid dossier payload in workspace bundle.`);
+      }
+      rawNode.properties.dossier = cleanDossier;
+    }
   }
   for (const rawEdge of rawBundle.edges) {
     if (rawEdge && typeof rawEdge === "object" && rawEdge.source_uuid === rawEdge.target_uuid) {
@@ -535,6 +744,8 @@ export function importWorkspaceBundleOp(
     importedEdges += 1;
   }
 
+  const sanitizedTaxonomy = sanitizePersistedNodeTaxonomy(ctx);
+
   // Re-evaluate multi-source corroboration for Insight nodes when corroboration rules exist
   if (ctx.nodes.has("rule-corroboration")) {
     for (const n of ctx.nodes.values()) {
@@ -542,6 +753,10 @@ export function importWorkspaceBundleOp(
         ctx.evaluateCorroboration(n.uuid, false);
       }
     }
+  }
+
+  if (sanitizedTaxonomy && ctx.persistDir) {
+    ctx.persistState();
   }
 
   const act = ctx.pushActivity({

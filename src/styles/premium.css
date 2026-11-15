@@ -20,10 +20,10 @@ html {
 }
 
 .ws-eyebrow {
-  font-size: 0.6875rem;
+  font-size: 0.65rem;
   font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: 0.085em;
+  line-height: 1.25;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-subtle);
 }

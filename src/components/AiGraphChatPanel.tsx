@@ -13,6 +13,7 @@ import {
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import type { ETGDatasetId, ETGNode } from "@/types/etg";
 import { humanizeNodeText } from "@/lib/plainLanguage";
+import { renderFormattedBriefing } from "./workbench/briefingFormatUtils";
 
 interface AppliedEditItem {
   type: string;
@@ -193,7 +194,7 @@ export function AiGraphChatPanel({
 
   const starterChips = useMemo(() => {
     const fourth = selectedNode
-      ? `Summarize & propose an Insight for ${humanizeNodeText(selectedNode.properties.name).slice(0, 32)}`
+      ? `Summarize & propose an Insight for ${humanizeNodeText(selectedNode.properties.name)}`
       : "Create a Concept node for ENSO Pacific Teleconnection";
     return [
       "Add live Boulder wildfire VPD & Niwot hydrology signals and connect them",
@@ -208,28 +209,35 @@ export function AiGraphChatPanel({
   return (
     <aside
       aria-label="AI Graph Studio"
-      className="max-md:absolute max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-[min(360px,calc(100dvw-1rem))] max-md:shadow-2xl md:relative md:z-20 md:w-[350px] lg:w-[380px] flex h-full shrink-0 flex-col border-r border-border bg-surface"
+      className="border-border bg-surface/95 text-text-primary flex flex-col overflow-hidden backdrop-blur-md max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:top-11 max-sm:z-50 sm:max-lg:absolute sm:max-lg:top-2.5 sm:max-lg:bottom-2.5 sm:max-lg:left-2.5 sm:max-lg:z-40 sm:max-lg:w-[min(296px,calc(100dvw-1.5rem))] sm:max-lg:rounded-lg sm:max-lg:border sm:max-lg:shadow-2xl lg:relative lg:z-20 lg:h-full lg:w-[288px] xl:w-[308px] lg:shrink-0 lg:border-r"
     >
-      {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-header px-3 py-2.5">
+      {/* Single Clean Header */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <Sparkles className="h-4 w-4 shrink-0 text-accent-fg" aria-hidden="true" />
-          <h2 className="truncate font-outfit text-xs font-semibold uppercase tracking-wider text-text-primary">
+          <h2 className="truncate font-outfit text-xs font-semibold tracking-wide text-text-primary">
             AI Graph Studio
           </h2>
-          <span className="ws-numeric shrink-0 rounded-xs border border-border bg-surface-inset px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+          <span className="ws-numeric shrink-0 font-mono text-[10px] text-text-subtle">
             {snapshot.nodes.length}N · {snapshot.edges.length}E
           </span>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span
+            title="Scientific Integrity Guard active — destructive or uncorroborated edits are blocked automatically"
+            aria-label="Scientific Integrity Guard active"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-emerald-400"
+          >
+            <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+          </span>
           {messages.length > 0 && (
             <button
               type="button"
               onClick={() => setMessages([])}
               title="Reset chat history"
               aria-label="Reset chat history"
-              className="inline-flex items-center gap-1 rounded-sm border border-border bg-surface-elevated px-2 py-1 text-[11px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-elevated px-2 py-1 text-[11px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
             >
               <RotateCcw className="h-3 w-3" aria-hidden="true" />
               <span>Reset</span>
@@ -240,38 +248,11 @@ export function AiGraphChatPanel({
             onClick={onClose}
             title="Close AI Graph Studio"
             aria-label="Close AI Graph Studio"
-            className="rounded-sm p-1 text-text-subtle hover:bg-surface-elevated hover:text-text-primary cursor-pointer"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-subtle hover:bg-surface-elevated hover:text-text-primary cursor-pointer"
           >
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
-      </div>
-
-      {/* Active Scope & Guard Indicator */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 border-b border-border-subtle bg-surface-inset px-3 py-1.5 text-[11px]">
-        <div className="min-w-0 truncate text-text-muted">
-          {selectedNode ? (
-            <span>
-              Focus:{" "}
-              <strong className="font-medium text-text-primary">
-                {humanizeNodeText(selectedNode.properties.name).slice(0, 30)}
-              </strong>
-            </span>
-          ) : probedCoord ? (
-            <span className="ws-numeric font-mono">
-              Pin: {probedCoord.lat.toFixed(2)}°, {probedCoord.lng.toFixed(2)}°
-            </span>
-          ) : (
-            <span>Scope: Global Earth Graph</span>
-          )}
-        </div>
-        <span
-          title="Protects agency baselines, checks statistics, and blocks vandalism"
-          className="inline-flex shrink-0 items-center gap-1 rounded-xs border border-emerald-500/30 bg-emerald-950/60 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300"
-        >
-          <ShieldCheck className="h-3 w-3" aria-hidden="true" />
-          <span>Integrity Guard</span>
-        </span>
       </div>
 
       {/* Scrollable Message Log */}
@@ -280,22 +261,20 @@ export function AiGraphChatPanel({
         role="log"
         aria-live="polite"
         aria-label="AI Graph Studio conversation"
-        className="flex-1 space-y-3 overflow-y-auto px-3 py-3"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-3 py-2.5"
       >
         {messages.length === 0 ? (
-          <div className="space-y-3">
-            <div className="rounded-md border border-border bg-surface-inset p-3 text-xs leading-relaxed text-text-muted">
-              <p className="font-medium text-text-primary">
-                Chat naturally or edit the Knowledge Graph directly.
+          <div className="space-y-2.5">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-text-primary">
+                Ask or edit the Earth Trend Graph
               </p>
-              <p className="mt-1 text-[11px] text-text-subtle">
-                Ask quick questions, ingest live NASA/NOAA coordinates, create Concept/Insight
-                nodes, wire teleconnections, or revise hypotheses. Destructive or unscientific edits
-                are blocked automatically.
+              <p className="text-xs leading-relaxed text-text-muted">
+                Query live NASA/NOAA coordinates, trace teleconnections, or propose corroborated nodes.
               </p>
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <div className="font-mono text-[10px] font-semibold uppercase tracking-wider text-text-faint">
                 Try a prompt
               </div>
@@ -305,7 +284,7 @@ export function AiGraphChatPanel({
                   type="button"
                   disabled={busy}
                   onClick={() => void submitPrompt(chip)}
-                  className="w-full rounded-sm border border-border bg-surface-elevated px-2.5 py-2 text-left text-[11px] leading-snug text-text-primary transition-colors hover:border-accent-fg disabled:opacity-50 cursor-pointer"
+                  className="w-full rounded-md border border-border bg-surface-band/50 px-2.5 py-1.5 text-left text-[11px] leading-snug text-text-muted transition-colors hover:border-border-strong hover:bg-surface-elevated hover:text-text-primary disabled:opacity-50 cursor-pointer"
                 >
                   {chip}
                 </button>
@@ -346,7 +325,11 @@ export function AiGraphChatPanel({
                   </div>
                 )}
 
-                <div className="whitespace-pre-wrap">{msg.content}</div>
+                <div className="whitespace-pre-wrap">
+                  {msg.role === "assistant"
+                    ? renderFormattedBriefing(msg.content, nodeById, onSelectNode)
+                    : msg.content}
+                </div>
 
                 {msg.appliedActions && msg.appliedActions.length > 0 && (
                   <div className="space-y-1 rounded border border-emerald-500/30 bg-emerald-950/40 p-2 text-[11px] text-emerald-300">
@@ -386,9 +369,9 @@ export function AiGraphChatPanel({
                           key={uuid}
                           type="button"
                           onClick={() => onSelectNode(target)}
-                          className="rounded-sm border border-border bg-surface px-2 py-0.5 font-mono text-[10px] text-accent-fg hover:border-accent-fg cursor-pointer"
+                          className="max-w-full truncate rounded-sm border border-border bg-surface px-2 py-0.5 font-mono text-[10px] text-accent-fg hover:border-accent-fg cursor-pointer"
                         >
-                          {humanizeNodeText(target.properties.name).slice(0, 26)}
+                          {humanizeNodeText(target.properties.name)}
                         </button>
                       );
                     })}
@@ -412,8 +395,24 @@ export function AiGraphChatPanel({
           e.preventDefault();
           void submitPrompt(draft);
         }}
-        className="shrink-0 border-t border-border bg-header p-2.5"
+        className="shrink-0 border-t border-border bg-surface p-2"
       >
+        {(selectedNode || probedCoord) && (
+          <div className="mb-1.5 truncate text-[11px] text-text-subtle">
+            {selectedNode ? (
+              <span>
+                Focus:{" "}
+                <strong className="font-medium text-text-muted">
+                  {humanizeNodeText(selectedNode.properties.name)}
+                </strong>
+              </span>
+            ) : probedCoord ? (
+              <span className="ws-numeric font-mono">
+                Pin: {probedCoord.lat.toFixed(2)}°, {probedCoord.lng.toFixed(2)}°
+              </span>
+            ) : null}
+          </div>
+        )}
         <label htmlFor={textareaId} className="sr-only">
           Message AI Graph Studio
         </label>
@@ -432,22 +431,18 @@ export function AiGraphChatPanel({
                 e.currentTarget.form?.requestSubmit();
               }
             }}
-            placeholder="Ask anything, or tell AI to add signals, create insights, or connect nodes…"
+            placeholder="Ask or edit graph… (Enter to send)"
             className="form-input etg-chat-textarea flex-1"
           />
           <button
             type="submit"
             disabled={busy || !draft.trim()}
-            title="Send message (Enter)"
+            title="Send message (Enter · Shift+Enter newline)"
             aria-label="Send message"
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-sm bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-45 cursor-pointer"
+            className="etg-hud-btn inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white transition-colors hover:bg-accent-hover disabled:opacity-45 cursor-pointer"
           >
             <Send className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
-        </div>
-        <div className="mt-1 flex items-center justify-between text-[10px] text-text-faint">
-          <span>Enter to send · Shift+Enter for newline</span>
-          <span>Live NASA + ETG Guard</span>
         </div>
       </form>
     </aside>

@@ -4,6 +4,15 @@ import React, { useState } from "react";
 import { History, Link2, Pencil, Sparkles, Unlink, Waypoints } from "lucide-react";
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import { formatEdgeRelationLabel, resolveEtgEdgeColor } from "@/lib/graph/graphVisuals";
+import {
+  formatMicroscopeLinkSummary,
+  formatMicroscopeNodeSummary,
+  humanizeNodeText,
+} from "@/lib/plainLanguage";
+
+function formatEdgeAriaTarget(name: string): string {
+  return humanizeNodeText(name).replace(/</g, "under ");
+}
 import type {
   CandidateLinkSuggestion,
   ETGEdge,
@@ -76,7 +85,7 @@ function NeighborLinkList({
           {links.map(({ edge, node }) => (
             <div
               key={edge.properties.uuid}
-              className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-inset px-2.5 py-2"
+              className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-inset px-2 py-1.5"
             >
               <button
                 type="button"
@@ -107,7 +116,7 @@ function NeighborLinkList({
                   type="button"
                   onClick={() => onSelectEdge(edge)}
                   title={isIncoming ? "Edit connection" : undefined}
-                  aria-label={`Edit edge ${isIncoming ? "from" : "to"} ${node.properties.name}`}
+                  aria-label={`Edit edge ${isIncoming ? "from" : "to"} ${formatEdgeAriaTarget(node.properties.name)}`}
                   className="rounded p-1 text-text-muted hover:text-text-primary cursor-pointer"
                 >
                   <Pencil className="h-3 w-3" />
@@ -116,7 +125,7 @@ function NeighborLinkList({
                   type="button"
                   onClick={() => void onDeleteEdge(edge.properties.uuid)}
                   title={isIncoming ? "Unlink" : undefined}
-                  aria-label={`Unlink ${node.properties.name}`}
+                  aria-label={`Unlink ${formatEdgeAriaTarget(node.properties.name)}`}
                   className="rounded p-1 text-text-muted hover:text-rose-400 cursor-pointer"
                 >
                   <Unlink className="h-3 w-3" />
@@ -203,7 +212,7 @@ export function WorkbenchTraverseTab({
           lag_unit: "years",
           weight: Number(coupling.trueCouplingProb.toFixed(3)),
           correlation_r: Number(coupling.cleanPeakR.toFixed(3)),
-          mechanism: coupling.aiCue,
+          mechanism: formatMicroscopeLinkSummary(coupling),
           rationale: `Wired from ETG Trend Microscope (${microscopeScan?.engineUsed ?? "calibrated"}, lag=${coupling.optimalLagSteps}, clean r=${coupling.cleanPeakR.toFixed(2)}, P=${Math.round(coupling.trueCouplingProb * 100)}%).`,
           authored_by: "ai",
         }),
@@ -225,7 +234,7 @@ export function WorkbenchTraverseTab({
   };
 
   return (
-    <div className="space-y-3.5 p-3.5">
+    <div className="space-y-2.5 p-2.5">
       {microscopeCue &&
         (() => {
           const secPct = Math.round(microscopeCue.dealiasing.secularShare * 100);
@@ -255,7 +264,7 @@ export function WorkbenchTraverseTab({
                 : "→ stable";
 
           return (
-            <div className="space-y-2 rounded-md border border-border bg-surface-inset p-2.5">
+            <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2">
               <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <div className="flex items-center gap-1.5">
                   <span className="ws-eyebrow flex items-center gap-1 text-sky-400">
@@ -306,11 +315,9 @@ export function WorkbenchTraverseTab({
                     False Risk {Math.round(microscopeCue.dealiasing.falseTrendProb * 100)}%
                   </span>
                 </div>
-                {microscopeCue.aiCue && (
-                  <p className="text-[10.5px] leading-snug text-text-muted">
-                    {microscopeCue.aiCue}
-                  </p>
-                )}
+                <p className="text-[11px] leading-snug text-text-muted">
+                  {formatMicroscopeNodeSummary(microscopeCue)}
+                </p>
               </div>
 
               {/* Head 2: Verified Lead-Lag Couplings vs Suppressed Illusions */}
@@ -399,11 +406,13 @@ export function WorkbenchTraverseTab({
                       <div className="font-medium text-amber-300">
                         {ill.sourceName} ↔ {ill.targetName}
                       </div>
-                      <div className="ws-numeric font-mono text-[9px] text-text-muted">
-                        raw r={ill.rawPeakR.toFixed(2)} → clean r={ill.cleanPeakR.toFixed(2)} ·
-                        P_illusion={Math.round(ill.confounderProb * 100)}%
+                      <div className="ws-numeric font-mono text-[9.5px] text-text-muted">
+                        De-trended r={ill.cleanPeakR.toFixed(2)} (raw r={ill.rawPeakR.toFixed(2)}) ·{" "}
+                        {Math.round(ill.confounderProb * 100)}% confounder risk
                       </div>
-                      {ill.aiCue && <div className="text-[9.5px] text-text-subtle">{ill.aiCue}</div>}
+                      <div className="text-[10px] leading-snug text-text-subtle">
+                        {formatMicroscopeLinkSummary(ill)}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -467,13 +476,16 @@ export function WorkbenchTraverseTab({
                     type="button"
                     disabled={!target || isCurrent}
                     onClick={() => target && onSelectNode(target)}
+                    title={humanizeNodeText(crumb.name)}
                     className={`rounded-xs px-1.5 py-0.5 text-[10px] ${
                       isCurrent
                         ? "border border-accent-fg bg-amber-950 font-semibold text-amber-300"
                         : "bg-surface-inset text-text-muted hover:text-text-primary cursor-pointer"
                     }`}
                   >
-                    {crumb.name.slice(0, 16)}
+                    <span className="block max-w-[9.5rem] truncate">
+                      {humanizeNodeText(crumb.name)}
+                    </span>
                   </button>
                   {idx < arr.length - 1 && (
                     <span className="text-[10px] text-text-subtle">→</span>
@@ -503,7 +515,7 @@ export function WorkbenchTraverseTab({
 
       {/* Quick Inline Wire */}
       {allNodes.length > 1 && (
-        <div className="space-y-1.5 border-t border-border pt-3">
+        <div className="space-y-1 border-t border-border pt-2">
           <label htmlFor={`${baseId}-quick-wire`} className="ws-eyebrow block">
             Quick Wire To Another Node
           </label>
@@ -543,7 +555,7 @@ export function WorkbenchTraverseTab({
 
       {/* Latent Candidate Links */}
       {nodeCandidates.length > 0 && (
-        <div className="space-y-1.5 border-t border-border pt-3">
+        <div className="space-y-1.5 border-t border-border pt-2">
           <div className="ws-eyebrow flex items-center gap-1 text-purple-300">
             <Sparkles className="h-3 w-3" />
             Latent Connection Suggestions ({nodeCandidates.length})
@@ -552,7 +564,7 @@ export function WorkbenchTraverseTab({
             {nodeCandidates.slice(0, 5).map((cand) => (
               <div
                 key={cand.id}
-                className="rounded-md border border-purple-400 bg-purple-950 p-2.5 space-y-1.5"
+                className="rounded-md border border-purple-400 bg-purple-950 p-2 space-y-1"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-text-primary truncate">

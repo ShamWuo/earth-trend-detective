@@ -26,6 +26,7 @@
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
 
+  --color-emerald-100: var(--fg-emerald-100);
   --color-emerald-200: var(--fg-emerald-200);
   --color-emerald-300: var(--fg-emerald-300);
   --color-emerald-400: var(--fg-emerald-400);
@@ -41,19 +42,27 @@
   --color-sky-200: var(--fg-sky-200);
   --color-sky-300: var(--fg-sky-300);
   --color-sky-400: var(--fg-sky-400);
+  --color-indigo-200: var(--fg-indigo-200);
   --color-indigo-300: var(--fg-indigo-300);
   --color-indigo-400: var(--fg-indigo-400);
+  --color-purple-200: var(--fg-purple-200);
   --color-purple-300: var(--fg-purple-300);
   --color-purple-400: var(--fg-purple-400);
+  --color-violet-100: var(--fg-violet-100);
   --color-violet-200: var(--fg-violet-200);
   --color-violet-300: var(--fg-violet-300);
   --color-violet-400: var(--fg-violet-400);
+  --color-cyan-100: var(--fg-cyan-100);
+  --color-cyan-200: var(--fg-cyan-200);
   --color-cyan-300: var(--fg-cyan-300);
   --color-cyan-400: var(--fg-cyan-400);
+  --color-blue-200: var(--fg-blue-200);
   --color-blue-300: var(--fg-blue-300);
   --color-blue-400: var(--fg-blue-400);
+  --color-orange-200: var(--fg-orange-200);
   --color-orange-300: var(--fg-orange-300);
   --color-orange-400: var(--fg-orange-400);
+  --color-teal-200: var(--fg-teal-200);
   --color-teal-300: var(--fg-teal-300);
   --color-teal-400: var(--fg-teal-400);
 

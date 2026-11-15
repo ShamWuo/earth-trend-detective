@@ -30,6 +30,7 @@ export const RELATIONSHIP_OPTIONS: ReadonlyArray<{ value: ETGRelationshipType; l
   { value: "correlates_with", label: "CORRELATES WITH (Coupled series)" },
   { value: "supports", label: "SUPPORTS (Observational evidence)" },
   { value: "corroborates", label: "CORROBORATES (Independent confirmation)" },
+  { value: "contradicts", label: "CONTRADICTS (Disconfirming evidence)" },
   { value: "hypothesized_link", label: "HYPOTHESIS (Exploratory test edge)" },
   { value: "relates_to", label: "RELATES TO (General conceptual link)" },
   { value: "monitors", label: "MONITORS (Sensor observes target)" },

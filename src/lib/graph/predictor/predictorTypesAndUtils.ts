@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveRuntimeDataDir } from "@/lib/runtimePaths";
 import type { TemporalBucket } from "@/lib/graph/etgStore";
 import { fitRidgeRegression } from "@/lib/solar/denverClimateGraph";
 import type {
@@ -344,18 +345,25 @@ export function loadLocalInductiveWeightsV2(options?: {
   rootDir?: string;
 }): PortableInductiveWeightsV2 | null {
   if (!options?.rootDir) {
-    const dataPath = path.join(process.cwd(), ".data", "etg-inductive-weights-v2.json");
-    try {
-      if (fs.existsSync(dataPath)) {
-        const stat = fs.statSync(dataPath);
-        if (cachedWeightsV2?.filePath === dataPath && cachedWeightsV2.mtimeMs === stat.mtimeMs) {
-          return cachedWeightsV2.weights;
+    const runtimeOverrideCandidates = Array.from(
+      new Set([
+        path.join(resolveRuntimeDataDir(), "etg-inductive-weights-v2.json"),
+        path.join(process.cwd(), ".data", "etg-inductive-weights-v2.json"),
+      ])
+    );
+    for (const dataPath of runtimeOverrideCandidates) {
+      try {
+        if (fs.existsSync(dataPath)) {
+          const stat = fs.statSync(dataPath);
+          if (cachedWeightsV2?.filePath === dataPath && cachedWeightsV2.mtimeMs === stat.mtimeMs) {
+            return cachedWeightsV2.weights;
+          }
+          const hit = parseInductiveWeightsV2(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
+          if (hit) return hit;
         }
-        const hit = parseInductiveWeightsV2(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
-        if (hit) return hit;
+      } catch {
+        // Fall through to tracked weights bundle
       }
-    } catch {
-      // Fall through to tracked weights bundle
     }
 
     const trackedPath = path.join(process.cwd(), "ml", "weights", "etg-inductive-weights-v2.json");
