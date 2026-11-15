@@ -5,7 +5,7 @@ This repository is **Earth Trend Detective**, an **entirely separate application
 
 - **100% Scientific & Earth Trends Focus**: Every feature, data model, UI view, and API in this codebase exists solely to detect, visualize, corroborate, and explain **Earth and scientific trends** (climate, wildfires, ocean anomalies, air quality, canopy/NDVI, hydrology, atmospheric shifts).
 - **Do NOT Build Blueprint's SaaS Features**: Do **not** re-create Blueprint's productivity/software-engineering concepts (`Variable` nodes, `Logic` gates, `Task`, `Goal`, `Doc`, `Note`, `Project`, `Calendar`, `Billing`, or `BKN` naming). Use **Earth Trend Graph (`ETG`)** terminology.
-- **Reference Blueprint Only for Inspiration**: When you need design or technical inspiration for the 3D/2D graph canvas, shader/force layout, Obsidian Dark UI tokens, or MCP tool patterns, you may read `/Users/swum/Desktop/Projects/blueprint` (e.g., `apps/web/src/components/dashboard/KnowledgeGraph3D.tsx`, `KnowledgeGraph2D.tsx`, `packages/mcp-server/`), **then adapt cleanly for scientific Earth trends here**.
+- **Reference Blueprint Only for Inspiration**: When you need design or technical inspiration for the 3D/2D graph canvas, shader/force layout, Obsidian Dark UI tokens, or MCP tool patterns, you may read `../blueprint` (e.g., `apps/web/src/components/dashboard/KnowledgeGraph3D.tsx`, `KnowledgeGraph2D.tsx`, `packages/mcp-server/`), **then adapt cleanly for scientific Earth trends here**.
 
 ---
 
@@ -31,7 +31,7 @@ This repository is **Earth Trend Detective**, an **entirely separate application
 ## Template Files
 - [EARTH_TREND_DETECTIVE.md](EARTH_TREND_DETECTIVE.md) — Challenge goals, dual-view spec, and ingestion design.
 - [design.md](design.md) & [src/app/globals.css](src/app/globals.css) — Obsidian Dark / Warm Ivory UI theme tokens.
-- [src/data/seededEarthGraph.ts](src/data/seededEarthGraph.ts) — Starter scientific Earth Trend graph data.
+- [src/lib/graph/etgStore.ts](src/lib/graph/etgStore.ts) & [src/lib/discovery/globalTrendPipeline.ts](src/lib/discovery/globalTrendPipeline.ts) — Persistent Earth Trend Graph store and live multi-agency discovery pipeline.
 
 <!-- BEGIN:nextjs-agent-rules -->
 

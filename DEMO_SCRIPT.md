@@ -16,11 +16,11 @@
 - **0:07–0:15 | Seasonal Cycle Removed & Student Variable Guide**
   - **Screen:** Toggle **Raw Values → Seasonal Cycle Removed** (`Seasonal MK p_s`) on the ENSO comparison card and flash `? Variable Guide`.
   - **Say:** *"Any coordinate separates real trends from winter-summer noise using Mann-Kendall, Hirsch-Slack Seasonal MK, and plain-English student explanations."*
-- **0:15–0:23 | Coalesced Earth Trend Graph (`ETG`)**
-  - **Screen:** Switch smoothly to **View 2 (`ETG` 3D Graph)** highlighting `drives_opposite` arcs and `supersedes` belief revision + **Prospective Verification Ledger**.
-  - **Say:** *"Observations coalesce into an AI-native Earth Trend Graph that maps opposite regional dipoles, preserves how conclusions evolve, and scores live forecasts."*
+- **0:15–0:23 | Coalesced Earth Trend Graph (`ETG`) & Trend Microscope**
+  - **Screen:** Switch smoothly to **View 2 (`ETG` 3D Graph)** highlighting `drives_opposite` arcs, **ETG Trend Microscope** early-onset/coupling cues, `supersedes` belief revision, and **Prospective Verification Ledger**.
+  - **Say:** *"Observations coalesce into an AI-native Earth Trend Graph whose Trend Microscope flags early shifts, opposite dipoles, and live forecast error."*
 - **0:23–0:29 | Local Microgrid Action & Close**
-  - **Screen:** Flash **Solar Graph** (`7-Node Denver Front Range`, `88.6%` storm recall, `+$418/yr` K-12 school savings).
+  - **Screen:** Flash **Solar Graph** (`7-Node Denver Front Range`, `Storm Risk P(ALLSKY < 3.5)`, `88.6%` storm recall, `+$418/yr` K-12 school savings).
   - **Say:** *"From global teleconnections to a school's overnight battery decision—saving \$418 a year with open NASA science made actionable."*
 
 ---
@@ -40,34 +40,34 @@
 - **Visual:** Split screenshot showing `Raw Values` vs. `Seasonal Cycle Removed` toggle (`p_s`) and `ENSO Pacific Rainfall Seesaw` comparison.
 
 ### Slide 3 — View 1: Interactive 3D Earth, 5K GIBS Filters & Statistical Engine
-- **5K Satellite & Multi-Agency Open Feeds:** Live **NASA EOSDIS GIBS** 5K WMTS filters (GHRSST MUR SST, GPM IMERG, MODIS Terra, MERRA-2, OMPS Aerosols, VIIRS Night Lights) + astronomical solar terminator, plus click-anywhere coordinate probing across **NASA POWER**, **EONET v3**, **GISTEMP v4**, **NOAA GML/NSIDC/CDO**, **USGS NWIS**, **Copernicus GloFAS v4 & CAMS**, **KNMI**, and **CSA**.
+- **5K Satellite & Multi-Agency Open Feeds:** Live **NASA EOSDIS GIBS** 5K/2.5K WMTS/WMS filters (`Ocean Anomaly` MUR SST, `Thermal`, `Water / Rain` IMERG, `Surface Winds`, `Air Temp`, `Aerosols` MERRA-2/MODIS AOD, `NDVI`, `True Color`, `VIIRS Night`) + astronomical solar terminator, plus click-anywhere coordinate probing across **NASA POWER**, **EONET v3**, **GISTEMP v4**, **NOAA GML/NSIDC/CDO**, **USGS NWIS**, **Copernicus GloFAS v4 & CAMS**, **KNMI**, and **CSA**.
 - **Student & Public Readability:** Built-in `? Variable Guide` popover (`plain-English definitions + why it matters`) and 3-line statistics key alongside full statistical rigor.
 - **Statistical Significance Engine:** Exact tie-corrected **Mann-Kendall**, **Hamed-Rao** autocorrelation correction, **Hirsch-Slack Seasonal Mann-Kendall (`p_s`)**, **Benjamini-Hochberg FDR**, **Theil-Sen** slope + 95% CI, and **Pettitt** change-point tests.
 - **Visual:** Screenshot of View 1 globe + coordinate probe significance panel with `Seasonal Cycle Removed` active.
 
-### Slide 4 — View 2: Coalesced Earth Trend Graph (`ETG`)
+### Slide 4 — View 2: Coalesced Earth Trend Graph (`ETG`) & Trend Microscope
 - **Scientific Ontology:** `Concept` (regions, satellites, IoT hardware), `Signal` (timestamped observations), `Insight` (verified trends & teleconnections), `Rule` (multi-source corroboration gates).
 - **Cross-Region Teleconnections:** Explicitly maps `drives_opposite` dipoles across continents + 3 1-click Guided Case Studies (`ENSO Rainfall Seesaw`, `Arctic vs. Subpolar Gyre`, `West VPD vs. Midwest Discharge`).
-- **Epistemic Belief Revision:** New observations link via `supersedes` edges so scientists see *how* and *why* a conclusion evolved over time.
-- **Visual:** Screenshot of View 2 3D/2D `ETG` graph showing `drives_opposite` and `supersedes` edges.
+- **ETG Trend Microscope & Belief Revision:** `etg-trend-microscope-v1` spots pre-Mann-Kendall trend onsets (`0.9706` AUROC), directional lead-lag (`0.9827` AUROC, `100%` illusion rejection), and cycle/glitch de-aliasing (`0.9442` false-trend F1), while `supersedes` edges preserve how scientific conclusions evolve.
+- **Visual:** Screenshot of View 2 3D/2D `ETG` graph showing `drives_opposite`, `supersedes`, and Trend Microscope radar cues.
 
 ### Slide 5 — From Global Science to Local Action: Denver Solar Microgrid
 - **1 City, 1 User, 1 Decision:** Denver K-12 school (`250 kWdc` PV + `350 kWh` battery) deciding at `23:00 MST` whether to pre-charge overnight (`$0.075/kWh` off-peak vs. `$0.280/kWh` daytime deficit).
 - **Spatiotemporal + Evening Advection:** 7 Front Range nodes (`93–156 km`) fusing **NASA POWER Daily** + **Open-Meteo `18:00–23:00 MST` hourly** observations (`upwind_kt_x_clrsky`, Fort Collins & Cheyenne 23h cloud rank Top-6).
-- **Ex-Ante Verification:** Unseen `2025–2026` (`n=606`): `Graph+23h` lowers RMSE to `0.9278` (`+32.9%` skill vs. Persistence `1.3819`, `p = 4.96e-14`), and zero-tuning Newsvendor quantile dispatch (`Q_0.268 < 3.50`) achieves `88.6%` storm recall (`F1 = 0.813`) and `+$418/yr` savings (`p = 0.0135` vs. `Local+23h`, prototype tariff estimate).
-- **Visual:** Screenshot of `SolarMicrogridPanel` economic impact card + 7-node Front Range map + 4-way table.
+- **Ex-Ante Verification & Probabilistic Dispatch:** Unseen `2025–2026` (`n=606`): Colab HGBR `Graph+23h` lowers RMSE to `0.9278` (`+32.9%` skill vs. Persistence `1.3819`, `p = 4.96e-14`), and `Q_0.268 < 3.50` achieves `88.6%` storm recall (`F1 = 0.813`) and `+$418/yr` savings (`p = 0.0135` vs. `Local+23h`); live app `GET /api/earth/solar-graph` adds **calibrated `P(ALLSKY < 3.5)` Bayes dispatch** (`0.899` rolling Ridge RMSE, Storm Brier `0.080`, `+$218/yr`). *(Prototype tariff estimate.)*
+- **Visual:** Screenshot of `SolarMicrogridPanel` Bayes risk & economic impact card + 7-node Front Range map + 4-way table.
 
 ### Slide 6 — Communal, Hardware-Agnostic & AI-Native Architecture
-- **AI Agent Native:** 12-tool **MCP Streamable HTTP / SSE** (`/api/mcp`, `/api/mcp/sse`) & **OpenAPI 3.1.0** (`/api/mcp/openapi`) let any LLM query multi-hop context or log insights.
+- **AI Agent Native:** 16-tool **MCP Streamable HTTP / SSE** (`/api/mcp`, `/api/mcp/sse`, `/api/mcp/messages`) & **OpenAPI 3.1.0** (`/api/mcp/openapi`) let any LLM traverse multi-hop context, scan Trend Microscope cues, or log insights.
 - **Edge & Sensor Webhooks:** ESP32, Raspberry Pi, weather stations, and cameras push readings via `/api/graph/nodes/[nodeId]/webhook` for satellite corroboration.
-- **Standalone Python ST-GNN (`ml/`):** Zero-dependency `ETGLagGraphNet` achieves `+51.38%` RMSE lift (`1.8166` vs. `3.7362` Self-AR) on coupled nonlinear drivers.
+- **Multi-Tier Graph ML (`ml/`):** Zero-dependency `ETGLagGraphNet` (`etg-ml-v1`, `+51.38%` lift: `1.8166` vs. `3.7362`), **Global Multi-Scale Inductive ETG Transformer (`etg-ml-v2`, `P10–P50–P90`)**, and **ETG Trend Microscope (`etg-trend-microscope-v1`)** with tracked portable weights & GCP `L4` FastAPI serving.
 - **Visual:** 3-row ingestion architecture table (AI Agents / Community IoT / NASA & Partner APIs).
 
 ### Slide 7 — Impact, Citations, AI Disclosure & Reproducibility
 - **Impact:** Bridges global Earth-system awareness and verifiable, zero-leakage local climate decisions in one open-source, accessible tool.
-- **Open Data Citations:** NASA EOSDIS GIBS (WMTS/WMS), NASA POWER, NASA EONET v3, NASA GISTEMP v4, NOAA GML/NSIDC, USGS NWIS, Copernicus GloFAS v4 & CAMS (via Open-Meteo), CSA, KNMI.
-- **AI Disclosure:** AI coding assistants (Google Gemini / Antigravity, Claude) assisted with UI scaffolding, documentation, and test generation; scientific framing, statistical methods, upwind graph + evening advection modeling, and validation were author-designed and verified on real agency data.
-- **Public Links:** GitHub Repo (`MIT License`) · Live App URL (`/?demo=spaceapps`, `/?demo=veritas`) · Reproducible Colab Notebook.
+- **Open Data Citations:** NASA EOSDIS GIBS (WMTS/WMS), NASA POWER, NASA EONET v3, NASA GISTEMP v4, NOAA GML/NSIDC/CDO, USGS NWIS, Copernicus GloFAS v4 & CAMS (via Open-Meteo), CSA, KNMI.
+- **AI Disclosure:** AI coding assistants (Google Gemini / Antigravity, Claude) assisted with UI scaffolding, documentation, and test generation; scientific framing, statistical methods, Trend Microscope / Inductive GNN & upwind evening advection modeling, and validation were independently designed and verified on real agency data.
+- **Public Links:** GitHub Repo (`MIT License`) · Live App URL (`/?demo=spaceapps`, `/?demo=veritas`) · Reproducible Colab Notebooks.
 
 ---
 
@@ -84,15 +84,15 @@
 - **Say:**  
   *"Front Range storms cross the 93-to-156 kilometer corridor between Silverthorne on the Continental Divide, Fort Collins and Cheyenne to the north, and Limon to the east in just 2 to 4 hours—too fast for yesterday's 24-hour satellite averages alone. So our **7-Node Local Climate Graph** fuses daily NASA POWER radiation with **18:00 to 23:00 local evening hourly observations** from Open-Meteo across all 7 stations, weighting upwind clearness and evening moisture pushing toward Denver."*
 
-### **0:55–1:25 | 4-Way Controlled Ablation & Critical-Fractile Quantile Impact**
-- **Screen:** Scroll the accessible **Comparison Table** in the app, then switch to our executed **Google Colab notebook (`Cell 4` + `Cell 5` plot)**.
+### **0:55–1:25 | 4-Way Controlled Ablation, Critical-Fractile & Live `P(ALLSKY < 3.5)` Impact**
+- **Screen:** Scroll the live **Decision Banner (`P(ALLSKY < 3.5)` & Bayes Optimal badge)** and **4-Way Table** in the app, then switch to our executed **Google Colab notebook (`Cell 4` + `Cell 5` plot)**.
 - **Say:**  
-  *"We evaluated strictly chronologically on **606 unseen 2025–2026 days** after training on 2019–2023 and validating on 2024. Adding evening advection cuts RMSE from **1.023** (Local-Daily) to **0.940**, and adding the 7-node graph reaches **0.928 kWh/m²/d**—**32.9% skill** over Persistence (**1.382**, `p = 4.96e-14`). Permutation importance ranks `upwind_kt_x_clrsky`, evening upwind clarity, **Fort Collins 23h cloud**, and **Cheyenne 23h cloud** in the top 8 predictors. Using the exact zero-tuning tariff fractile `q* = 0.075 / 0.280 = 0.268` (`Q27 < 3.50`), savings scale monotonically from **+\$75** (Local-Daily) to **+\$99** (Local+23h) to **+\$418 per year** (`88.6%` storm recall, paired tariff cost `p = 0.0135` vs. Local+23h)."*
+  *"We evaluated strictly chronologically on **606 unseen 2025–2026 days** after training on 2019–2023 and validating on 2024. Adding evening advection cuts RMSE from **1.023** (Local-Daily) to **0.940**, and adding the 7-node graph reaches **0.928 kWh/m²/d**—**32.9% skill** over Persistence (**1.382**, `p = 4.96e-14`). Permutation importance ranks `upwind_kt_x_clrsky`, evening upwind clarity, **Fort Collins 23h cloud**, and **Cheyenne 23h cloud** in the top 8 predictors. Using the exact zero-tuning tariff fractile `q* = 0.075 / 0.280 = 0.268` (`Q27 < 3.50`), savings scale monotonically from **+\$75** (Local-Daily) to **+\$99** (Local+23h) to **+\$418 per year** (`88.6%` storm recall, paired tariff cost `p = 0.0135` vs. Local+23h), while the live app adds calibrated probabilistic `P(ALLSKY < 3.5)` Bayes dispatch."*
 
-### **1:25–1:45 | Honest Failure Analysis + Global ETG & Python ST-GNN**
-- **Screen:** Show **Worst Unseen Failure (`2025-05-06`)** in Colab `Cell 5`, then briefly toggle `Seasonal Cycle Removed` on a View 1 trend card + show `ETGLagGraphNet`.
+### **1:25–1:45 | Honest Failure Analysis + Global ETG, Trend Microscope & Inductive GNN**
+- **Screen:** Show **Worst Unseen Failure (`2025-05-06`)** in Colab `Cell 5`, then briefly toggle `Seasonal Cycle Removed` on a View 1 card and flash **ETG Trend Microscope** + `etg-ml-v2` / `ETGLagGraphNet`.
 - **Say:**  
-  *"We also audit errors transparently: on **May 6, 2025**, actual solar plunged to **1.41** while Graph+23h predicted **5.31**—rapid post-midnight upslope storm intensification (`58%` evening cloud) shows why real-time NWP radar assimilation is needed next. Across global climate systems, our app also computes **Hirsch-Slack Seasonal Mann-Kendall** trends and a Python ST-GNN achieving **+51.4% RMSE lift**."*
+  *"We also audit errors transparently: on **May 6, 2025**, actual solar plunged to **1.41** while Graph+23h predicted **5.31**—rapid post-midnight upslope storm intensification (`58%` evening cloud) shows why real-time NWP radar assimilation is needed next. Globally, our app runs **Hirsch-Slack Seasonal Mann-Kendall**, an **ETG Trend Microscope** (`0.97` onset AUROC), `etg-ml-v2` quantile inference, and `ETGLagGraphNet` (`+51.4%` RMSE lift)."*
 
 ### **1:45–2:00 | Close**
 - **Say:**  
