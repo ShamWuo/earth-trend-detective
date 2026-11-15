@@ -68,6 +68,7 @@
   --fg-purple-950: #3b0764;
   --fg-cyan-950: #083344;
   --fg-blue-950: #172554;
+  --fg-teal-950: #042f2e;
 
   --scrollbar-thumb: light-dark(rgba(63, 63, 70, 0.32), rgba(148, 163, 184, 0.28));
 }
@@ -122,6 +123,7 @@
     --fg-purple-950: #faf5ff;
     --fg-cyan-950: #ecfeff;
     --fg-blue-950: #eff6ff;
+    --fg-teal-950: #f0fdfa;
   }
 }
 
@@ -174,4 +176,5 @@
   --fg-purple-950: #faf5ff;
   --fg-cyan-950: #ecfeff;
   --fg-blue-950: #eff6ff;
+  --fg-teal-950: #f0fdfa;
 }

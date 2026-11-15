@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeTimeSeries,
+  benjaminiHochbergAdjust,
   classifyEarthMechanism,
   compareRegionalSeries,
   computeOlsRegression,
   computePettittChangePoint,
+  computeSeasonalMannKendall,
   mannKendallTest,
   theilSenEstimator,
 } from "@/lib/stats/trendEngine";
@@ -279,5 +281,130 @@ describe("Mann-Kendall & Theil-Sen Statistical Engine", () => {
       }
     );
     expect(ensoDipole).toBe("ENSO / Zonal Wave Dipole");
+  });
+
+  it("computes Benjamini-Hochberg FDR q-values, cross-granularity alignment, secular-drift flags, and Hamed-Rao verdict gating", () => {
+    // 1. Benjamini-Hochberg FDR adjustment
+    const qVals = benjaminiHochbergAdjust([0.001, 0.04, 0.5]);
+    expect(qVals[0]).toBeCloseTo(0.003, 6);
+    expect(qVals[1]).toBeCloseTo(0.06, 6);
+    expect(qVals[2]).toBeCloseTo(0.5, 6);
+
+    // 2. Cross-granularity calendar alignment ("2010-06-15" vs "2010") without positional fallback
+    const dailyA = Array.from({ length: 15 }, (_, i) => ({
+      date: `${2010 + i}-06-15`,
+      t: 2010 + i,
+      value: 10 + i * 0.5 + Math.sin(i * 0.9) * 0.4,
+    }));
+    const annualB = Array.from({ length: 15 }, (_, i) => ({
+      date: `${2010 + i}`,
+      t: 2010 + i,
+      value: 20 + i * 0.8 + Math.sin(i * 0.9) * 0.4,
+    }));
+    const crossGranCmp = compareRegionalSeries(dailyA, annualB);
+    expect(crossGranCmp.classification).toBe("co_trending");
+    expect(crossGranCmp.alignedPoints).toHaveLength(15);
+
+    // 3. Disjoint calendar epochs never fall back to positional alignment
+    const oldEpoch = Array.from({ length: 15 }, (_, i) => ({
+      date: `${1990 + i}`,
+      t: 1990 + i,
+      value: 10 + i,
+    }));
+    const newEpoch = Array.from({ length: 15 }, (_, i) => ({
+      date: `${2010 + i}`,
+      t: 2010 + i,
+      value: 10 + i,
+    }));
+    const disjointCmp = compareRegionalSeries(oldEpoch, newEpoch);
+    expect(disjointCmp.classification).toBe("decoupled");
+    expect(disjointCmp.alignedPoints).toHaveLength(0);
+
+    // 4. Flags pure secular co-drift when orthogonal cycles leave near-zero detrended correlation
+    const driftOnlyA = Array.from({ length: 24 }, (_, i) => ({
+      date: `${2001 + i}`,
+      t: 2001 + i,
+      value: 10 + 0.5 * i + Math.sin(i * 0.95) * 0.8,
+    }));
+    const driftOnlyB = Array.from({ length: 24 }, (_, i) => ({
+      date: `${2001 + i}`,
+      t: 2001 + i,
+      value: 20 + 0.5 * i + Math.cos(i * 1.45) * 0.8,
+    }));
+    const secularCmp = compareRegionalSeries(driftOnlyA, driftOnlyB);
+    expect(secularCmp.pearsonR).toBeGreaterThan(0.75);
+    expect(secularCmp.isSecularDriftOnly).toBe(true);
+
+    // 5. Hamed-Rao verdict gate suppresses raw MK false positive when serial autocorrelation reduces ESS
+    const redNoiseVals = [
+      10.0, 10.2, 10.5, 10.9, 11.4, 11.9, 12.4, 12.9, 13.3, 13.6,
+      13.7, 13.6, 13.4, 13.1, 12.8, 12.6, 12.5, 12.6, 12.8, 13.1,
+    ];
+    const arSeries = redNoiseVals.map((value, i) => ({
+      date: `${2005 + i}`,
+      t: 2005 + i,
+      value,
+    }));
+    const redSummary = analyzeTimeSeries(arSeries, {
+      lat: 40.0,
+      lng: -105.0,
+      dataset: "nasa_power",
+      parameter: "T2M",
+      unit: "°C",
+      slopeUnit: "°C/yr",
+      provenance: "NASA POWER MERRA-2 (Live)",
+    });
+    expect(redSummary.mannKendall.significant).toBe(true);
+    expect(redSummary.mannKendall.significantAdjusted).toBe(false);
+    expect(redSummary.verdict).toBe("Normal Environmental Variability");
+  });
+
+  it("removes partial-year seasonal phase bias via Hirsch-Slack Seasonal Mann-Kendall", () => {
+    // 78 monthly points = 6.5 years (Jan 2020 through Jun 2026) with zero secular drift
+    const pureSeasonal = Array.from({ length: 78 }, (_, idx) => {
+      const year = 2020 + Math.floor(idx / 12);
+      const month = (idx % 12) + 1;
+      return {
+        date: `${year}-${String(month).padStart(2, "0")}`,
+        t: year + (month - 1) / 12,
+        value: 15 + 12 * Math.sin(((month - 4) * Math.PI) / 6),
+      };
+    });
+
+    const seasonal = computeSeasonalMannKendall(pureSeasonal);
+    expect(seasonal).not.toBeNull();
+    expect(seasonal!.seasonsDetected).toBe(12);
+    expect(seasonal!.significant).toBe(false);
+    expect(Math.abs(seasonal!.seasonalTheilSenSlope)).toBeLessThan(0.01);
+  });
+
+  it("recovers subtle secular warming masked inside a large annual seasonal cycle", () => {
+    // 96 monthly points = 8 years with +-12 seasonal swing + 0.08/yr true warming
+    const warmingSeasonal = Array.from({ length: 96 }, (_, idx) => {
+      const year = 2018 + Math.floor(idx / 12);
+      const month = (idx % 12) + 1;
+      const t = year + (month - 1) / 12;
+      return {
+        date: `${year}-${String(month).padStart(2, "0")}`,
+        t,
+        value: 14 + 12 * Math.sin(((month - 4) * Math.PI) / 6) + 0.08 * (t - 2018),
+      };
+    });
+
+    const summary = analyzeTimeSeries(warmingSeasonal, {
+      lat: 39.74,
+      lng: -104.99,
+      dataset: "nasa_power",
+      parameter: "T2M",
+      unit: "°C",
+      slopeUnit: "°C/yr",
+      provenance: "NASA POWER MERRA-2 (Live)",
+    });
+
+    expect(summary.seasonalAnalysis).not.toBeNull();
+    expect(summary.seasonalAnalysis!.significant).toBe(true);
+    expect(summary.seasonalAnalysis!.pValue).toBeLessThan(0.001);
+    expect(summary.seasonalAnalysis!.seasonalTheilSenSlope).toBeCloseTo(0.08, 2);
+    expect(summary.points[0].anomalyValue).toBeDefined();
   });
 });

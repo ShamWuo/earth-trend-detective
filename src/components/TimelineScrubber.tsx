@@ -84,14 +84,17 @@ export function TimelineScrubber({
   }, [nodes, safeMin, safeMax]);
 
   return (
-    <div className="etg-scrubber-cq etg-hud-pill rounded-full px-3 py-1.5 shadow-xl">
+    <div className="etg-scrubber-cq etg-hud-pill rounded-md bg-surface px-2.5 py-1 shadow-xl">
       <div className="flex flex-nowrap items-center gap-2 whitespace-nowrap">
+        <span className="hidden sm:inline font-mono text-[10px] font-semibold uppercase tracking-wider text-text-subtle">
+          Timeline
+        </span>
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             onClick={togglePlay}
             aria-label={isPlaying ? "Pause timeline replay" : "Play timeline replay"}
-            className="inline-flex h-8 items-center gap-1.5 rounded-full border border-border bg-surface-elevated px-2 text-xs font-semibold text-text-primary hover:border-border-strong cursor-pointer"
+            className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-border bg-surface-elevated px-2 text-xs font-semibold text-text-primary hover:border-border-strong cursor-pointer"
           >
             {isPlaying ? (
               <Pause className="h-3.5 w-3.5" aria-hidden="true" />
@@ -104,7 +107,7 @@ export function TimelineScrubber({
           <button
             type="button"
             onClick={() => setSpeedMultiplier((s) => (s === 1 ? 2 : 1))}
-            className="ws-numeric h-8 rounded-full border border-border bg-surface-inset px-2 text-[11px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
+            className="ws-numeric h-7 rounded-sm border border-border bg-surface-inset px-2 text-[11px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
             title="Toggle replay speed"
           >
             {speedMultiplier}×
@@ -119,10 +122,10 @@ export function TimelineScrubber({
                 style={{ left: `${t.pct}%` }}
                 className={`absolute top-0 h-1.5 w-0.5 -translate-x-1/2 ${
                   t.status === "Superseded"
-                    ? "bg-amber-400/70"
+                    ? "bg-amber-400"
                     : t.label === "Insight"
                       ? "bg-accent-fg"
-                      : "bg-text-faint/60"
+                      : "bg-text-faint"
                 }`}
               />
             ))}
@@ -150,7 +153,7 @@ export function TimelineScrubber({
             {formattedDate}
           </span>
           <span className="etg-scrubber-count ws-numeric text-[11px] text-text-subtle">
-            ({visibleCount}/{nodes.length})
+            ({visibleCount}/{nodes.length} pins)
           </span>
           <button
             type="button"
@@ -160,7 +163,7 @@ export function TimelineScrubber({
             }}
             aria-label="Latest observations"
             title="Reset timeline to latest observations"
-            className="inline-flex h-8 items-center gap-1 rounded-full border border-border px-2.5 text-[11px] font-medium text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+            className="inline-flex h-7 items-center gap-1 rounded-sm border border-border bg-surface-elevated px-2 text-[11px] font-medium text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
           >
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             <span className="etg-scrubber-latest-label">Latest</span>

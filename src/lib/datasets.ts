@@ -14,16 +14,25 @@ export const EARTH_TREND_DATASETS: readonly ETGDatasetMeta[] = [
     sourceName: "NASA POWER MERRA-2 / GISTEMP v4 / NOAA CDO",
     description:
       "Surface air temperature & station anomalies via NASA POWER, Giovanni, GISTEMP v4, and NOAA CDO.",
+    studentPlainSummary:
+      "How hot or cold the air is 2 meters above the ground, tracked year after year.",
+    whyItMatters:
+      "Even +0.5 °C of warming shifts heatwaves, crop bloom dates, and snowmelt timing.",
   },
   {
     id: "wildfire",
-    label: "Wildfires & Extreme Heat",
+    label: "Wildfires & Fire-Weather Aridity",
     shortLabel: "Wildfires & Heat",
     color: "#f43f5e",
-    unit: "°C max",
-    slopeUnit: "°C/yr",
-    sourceName: "NASA EONET v3 / VIIRS Thermal",
-    description: "Active wildfire events and surface maximum temperature anomalies.",
+    unit: "kPa",
+    slopeUnit: "kPa/yr",
+    sourceName: "NASA EONET v3 · POWER MERRA-2 VPD (T2M_MAX + RH2M)",
+    description:
+      "Vapor Pressure Deficit (kPa) derived from peak temperature and relative humidity — physical driver of fuel aridity — paired with NASA EONET wildfire events.",
+    studentPlainSummary:
+      "Air thirstiness (Vapor Pressure Deficit): how strongly warm, dry air pulls water out of trees and grass.",
+    whyItMatters:
+      "When VPD rises above ~1.5 kPa, forests dry out quickly and small sparks can explode into megafires.",
   },
   {
     id: "ocean_temp",
@@ -35,39 +44,55 @@ export const EARTH_TREND_DATASETS: readonly ETGDatasetMeta[] = [
     sourceName: "NOAA/NSIDC v4 · KNMI ENSO/AMO/PDO · NASA Skin Temp",
     description:
       "Sea surface skin temperature, Arctic sea ice extent, and KNMI oceanic teleconnection modes.",
+    studentPlainSummary:
+      "Ocean surface warmth, polar sea ice area, and Pacific El Niño swings that steer Earth's jet stream.",
+    whyItMatters:
+      "Oceans absorb over 90% of excess heat — a warmer Tropical Pacific redirects storms and droughts thousands of miles away.",
   },
   {
     id: "air_quality",
-    label: "Air, CO₂ & Coastal Water",
+    label: "Air Quality, Aerosols & PM2.5",
     shortLabel: "Air & CO₂",
     color: "#f59e0b",
-    unit: "ppm",
-    slopeUnit: "ppm/yr",
-    sourceName: "NOAA GML / NASA Giovanni SeaWiFS / EONET Aerosols",
+    unit: "AOD",
+    slopeUnit: "/yr",
+    sourceName: "NASA AOD_55 · Copernicus CAMS PM2.5 · NOAA GML CO₂",
     description:
-      "Global marine surface CO₂ concentration, coastal river-plume chlorophyll, and aerosol events.",
+      "NASA Aerosol Optical Depth (550nm) enriched with live Copernicus CAMS hourly surface PM2.5 (μg/m³), plus direct NOAA GML marine CO₂.",
+    studentPlainSummary:
+      "How hazy the sky is with smoke, dust, or pollution (AOD & fine PM2.5 particles humans breathe).",
+    whyItMatters:
+      "Spikes track wildfire smoke plumes and urban smog, helping schools decide when outdoor recess is unsafe.",
   },
   {
     id: "deforestation",
-    label: "Forests, Canopy & Land Moisture",
+    label: "Forests, Canopy Flux & Vegetation",
     shortLabel: "Vegetation",
     color: "#10b981",
-    unit: "% RH",
-    slopeUnit: "%/yr",
-    sourceName: "NASA AppEEARS MODIS · POWER RH2M · CSA RADARSAT RCM",
+    unit: "MJ/m²/d",
+    slopeUnit: "MJ/m²/d/yr",
+    sourceName: "NASA EVPTRNS Evapotranspiration · AppEEARS MODIS · CSA RADARSAT",
     description:
-      "Vegetation NDVI/humidity shifts and CSA RADARSAT Constellation ecosystem monitoring.",
+      "Physical canopy evapotranspiration energy flux (MJ/m²/d) across global land surfaces paired with MODIS NDVI & RADARSAT imports.",
+    studentPlainSummary:
+      "Plant breathing energy: sunlight used by healthy leaves to move water from soil into the sky.",
+    whyItMatters:
+      "Falling flux flags drought stress or forest loss before bare ground even appears from space.",
   },
   {
     id: "hydrology",
-    label: "Water, Rainfall & Rivers",
+    label: "Rivers, Discharge & Land Moisture",
     shortLabel: "Water & Rain",
     color: "#22d3ee",
-    unit: "0–1 wet",
-    slopeUnit: "/yr",
-    sourceName: "NASA GES DISC / SWOT Mission / CSA Geo.ca / USGS",
+    unit: "m³/s",
+    slopeUnit: "m³/s/yr",
+    sourceName: "USGS NWIS Stream Gauges · Copernicus GloFAS v4 · NASA GWETROOT",
     description:
-      "Land-surface root-zone moisture, SWOT surface water passes, Canadian hydrometric & river discharge.",
+      "Live USGS river gauge discharge (m³/s) in North America, Copernicus GloFAS 5km river discharge globally, and NASA root-zone soil wetness.",
+    studentPlainSummary:
+      "River flow speed (cubic meters per second) plus how damp the soil is down at plant root depth.",
+    whyItMatters:
+      "Links mountain snowmelt and rainstorms directly to floods downstream or drying farm irrigation canals.",
   },
   {
     id: "community",
@@ -79,6 +104,10 @@ export const EARTH_TREND_DATASETS: readonly ETGDatasetMeta[] = [
     sourceName: "Giovanni / Data Rods / AppEEARS / KNMI / Edge Webhooks",
     description:
       "Open community sensors and imported Giovanni, AppEEARS, Data Rods, CDO, KNMI, or Geo.ca datasets.",
+    studentPlainSummary:
+      "Local school weather stations, citizen sensors, and custom CSV files dropped onto the same globe.",
+    whyItMatters:
+      "Lets students compare backyard observations against NASA satellites to spot microclimates.",
   },
 ] as const;
 

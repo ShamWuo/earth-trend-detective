@@ -3,10 +3,12 @@ import {
   fetchCsaSwotAndRcmMetadata,
   fetchGeocaCanadianSeries,
   fetchKnmiClimateIndices,
+  fetchKnmiMonthlyClimateIndices,
   fetchNoaaCdoGlobalStations,
   fetchUsgsCoastalPlumeDischarge,
 } from "@/lib/agencies/challengeSourcesClient";
 import { getEtgStore, haversineKm, type EtgGraphSnapshot } from "@/lib/graph/etgStore";
+import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
 import {
   fetchNasaGistempZonalCsvText,
   fetchNoaaGlobalCo2Series,
@@ -15,7 +17,11 @@ import {
 } from "@/lib/nasa/gistempAndCo2Client";
 import { fetchLiveEonetSignals } from "@/lib/nasa/eonetClient";
 import { fetchMultiParamNasaPower } from "@/lib/nasa/nasaPowerClient";
-import { analyzeTimeSeries, compareRegionalSeries } from "@/lib/stats/trendEngine";
+import {
+  analyzeTimeSeries,
+  benjaminiHochbergAdjust,
+  compareRegionalSeries,
+} from "@/lib/stats/trendEngine";
 import type {
   CrossRegionComparison,
   ETGDatasetId,
@@ -239,6 +245,7 @@ export async function discoverGlobalEarthTrends(
     eonetRes,
     noaaCdoSettled,
     knmiSettled,
+    knmiMonthlySettled,
     geocaSettled,
     usgsPlumeSettled,
     orbitalSettled,
@@ -249,6 +256,7 @@ export async function discoverGlobalEarthTrends(
     fetchLiveEonetSignals(maxEonetSites),
     Promise.allSettled([fetchNoaaCdoGlobalStations(1995, 2025)]).then((r) => r[0]),
     Promise.allSettled([fetchKnmiClimateIndices(1995, 2025)]).then((r) => r[0]),
+    Promise.allSettled([fetchKnmiMonthlyClimateIndices(1995, 2025)]).then((r) => r[0]),
     Promise.allSettled([fetchGeocaCanadianSeries(1995, 2025)]).then((r) => r[0]),
     Promise.allSettled([fetchUsgsCoastalPlumeDischarge(1995, 2025)]).then((r) => r[0]),
     Promise.allSettled([fetchCsaSwotAndRcmMetadata()]).then((r) => r[0]),
@@ -256,6 +264,12 @@ export async function discoverGlobalEarthTrends(
 
   const noaaCdoRecords = noaaCdoSettled.status === "fulfilled" ? noaaCdoSettled.value : [];
   const knmiRecords = knmiSettled.status === "fulfilled" ? knmiSettled.value : [];
+  const knmiMonthlyById = new Map(
+    (knmiMonthlySettled.status === "fulfilled" ? knmiMonthlySettled.value : []).map((r) => [
+      r.id,
+      r,
+    ])
+  );
   const geocaRecords = geocaSettled.status === "fulfilled" ? geocaSettled.value : [];
   const usgsPlumeRecord = usgsPlumeSettled.status === "fulfilled" ? usgsPlumeSettled.value : null;
   const orbitalMeta =
@@ -500,6 +514,8 @@ export async function discoverGlobalEarthTrends(
         source_system: "NASA GISTEMP v4",
         source_url: gistempFull.sourceUrl,
         parameter: "GISTEMP 64N-90N",
+        value: earlySummary.latestValue,
+        unit: "°C anom",
         provenance_source: "NASA GISTEMP v4 (Live)",
         p_value: earlySummary.mannKendall.pValue,
         theil_sen_slope: Number(earlySummary.theilSen.slope.toFixed(4)),
@@ -558,6 +574,7 @@ export async function discoverGlobalEarthTrends(
         mechanism: "Polar Amplification Cascade",
         amplification_ratio: co2VsArctic.slopeRatio,
         shared_shift_year: co2VsArctic.sharedRegimeShiftYear ?? undefined,
+        cross_scale: true,
         source_snippet: `NOAA CO₂ vs Arctic GISTEMP r=${co2VsArctic.pearsonR.toFixed(2)}`,
         rationale: `Radiative CO₂ rise strongly co-varies with 64N–90N warming (r=${co2VsArctic.pearsonR.toFixed(2)}, r*=${co2VsArctic.detrendedR.toFixed(2)}, p=${co2VsArctic.pValue.toExponential(2)}).`,
         silent: true,
@@ -586,6 +603,7 @@ export async function discoverGlobalEarthTrends(
         amplification_ratio:
           Math.abs(iceVsArctic.slopeRatio) > 1e-9 ? 1 / iceVsArctic.slopeRatio : 0,
         shared_shift_year: iceVsArctic.sharedRegimeShiftYear ?? undefined,
+        cross_scale: true,
         source_snippet: `NOAA/NSIDC Sea Ice vs Arctic GISTEMP r=${iceVsArctic.pearsonR.toFixed(2)}`,
         rationale: `Declining Arctic September sea ice albedo mirrors 64N–90N thermal amplification (r=${iceVsArctic.pearsonR.toFixed(2)}, r*=${iceVsArctic.detrendedR.toFixed(2)}, p=${iceVsArctic.pValue.toExponential(2)}).`,
         silent: true,
@@ -634,7 +652,16 @@ export async function discoverGlobalEarthTrends(
   // 5. Ingest live NASA EONET events and query NASA POWER MERRA-2 (1995-2025) at each event coordinate
   const eonetSignals = eonetRes.signals;
   for (const evSig of eonetSignals) {
-    store.createNode({ ...evSig, silent: true });
+    store.createNode({
+      ...evSig,
+      properties: {
+        ...evSig.properties,
+        temporal_scale: evSig.properties.temporal_scale ?? "impulse",
+        event_intensity: evSig.properties.event_intensity ?? 1.0,
+        event_decay_days: evSig.properties.event_decay_days ?? 14,
+      },
+      silent: true,
+    });
     store.createEdge({
       uuid: `edge-eonet-mon-${evSig.uuid}`,
       source_uuid: "concept-nasa-eonet",
@@ -659,6 +686,7 @@ export async function discoverGlobalEarthTrends(
     const { evSig, multi } = result.value;
     const lat = evSig.properties.lat!;
     const lng = evSig.properties.lng!;
+    const siteRegion = evSig.properties.region || classifyEarthRegionByCoord(lat, lng).label;
 
     // Analyze primary thermal series (skin temp TS for ocean/ice, T2M air temp for land events)
     const isOceanOrIce = evSig.properties.dataset === "ocean_temp";
@@ -700,7 +728,7 @@ export async function discoverGlobalEarthTrends(
           importance: tSummary.mannKendall.significant ? 8 : 6,
           lat,
           lng,
-          region: evSig.properties.name,
+          region: siteRegion,
           dataset: thermalDataset,
           producer_type: "nasa_satellite",
           source_system: "NASA POWER MERRA-2",
@@ -727,6 +755,14 @@ export async function discoverGlobalEarthTrends(
         silent: true,
       });
 
+      const monthlyThermal =
+        isOceanOrIce && (multi.monthly?.ts?.length ?? 0) >= 12
+          ? multi.monthly?.ts
+          : multi.monthly?.t2m;
+      if (monthlyThermal && monthlyThermal.length >= 12) {
+        store.setNodeMultiScaleSeries(sigId, "month", monthlyThermal, true);
+      }
+
       // Promote significant coordinate climate shifts into regional Insight nodes with multi-source corroboration
       if (tSummary.mannKendall.significant) {
         const directionWord = tSummary.theilSen.slope >= 0 ? "Warming" : "Cooling";
@@ -744,7 +780,7 @@ export async function discoverGlobalEarthTrends(
             importance: 9,
             lat,
             lng,
-            region: evSig.properties.name,
+            region: siteRegion,
             dataset: thermalDataset,
             producer_type: "nasa_satellite",
             source_system: "NASA POWER + EONET Synthesis",
@@ -827,7 +863,7 @@ export async function discoverGlobalEarthTrends(
         seriesCandidates.push({
           nodeUuid: insightNode.uuid,
           name: insightNode.properties.name,
-          region: evSig.properties.name,
+          region: siteRegion,
           lat,
           lng,
           dataset: thermalDataset,
@@ -839,7 +875,7 @@ export async function discoverGlobalEarthTrends(
         seriesCandidates.push({
           nodeUuid: sigId,
           name: `MERRA-2 Thermal (${evSig.properties.name.slice(0, 28)})`,
-          region: evSig.properties.name,
+          region: siteRegion,
           lat,
           lng,
           dataset: thermalDataset,
@@ -878,7 +914,7 @@ export async function discoverGlobalEarthTrends(
             importance: pSummary.mannKendall.significant ? 8 : 6,
             lat,
             lng,
-            region: evSig.properties.name,
+            region: siteRegion,
             dataset: "hydrology",
             producer_type: "nasa_satellite",
             source_system: "NASA POWER MERRA-2",
@@ -905,11 +941,15 @@ export async function discoverGlobalEarthTrends(
           silent: true,
         });
 
+        if (multi.monthly?.precip && multi.monthly.precip.length >= 12) {
+          store.setNodeMultiScaleSeries(hydroUuid, "month", multi.monthly.precip, true);
+        }
+
         hydroNodeUuid = hydroUuid;
         seriesCandidates.push({
           nodeUuid: hydroUuid,
           name: `MERRA-2 Precip ${hydroLabel} (${evSig.properties.name.slice(0, 24)})`,
-          region: evSig.properties.name,
+          region: siteRegion,
           lat,
           lng,
           dataset: "hydrology",
@@ -949,7 +989,7 @@ export async function discoverGlobalEarthTrends(
             importance: rhSummary.mannKendall.significant ? 8 : 6,
             lat,
             lng,
-            region: evSig.properties.name,
+            region: siteRegion,
             dataset: "deforestation",
             producer_type: "nasa_satellite",
             source_system: "NASA POWER MERRA-2",
@@ -976,11 +1016,15 @@ export async function discoverGlobalEarthTrends(
           silent: true,
         });
 
+        if (multi.monthly?.rh2m && multi.monthly.rh2m.length >= 12) {
+          store.setNodeMultiScaleSeries(rhUuid, "month", multi.monthly.rh2m, true);
+        }
+
         rhNodeUuid = rhUuid;
         seriesCandidates.push({
           nodeUuid: rhUuid,
           name: `MERRA-2 RH2M ${rhLabel} (${evSig.properties.name.slice(0, 22)})`,
-          region: evSig.properties.name,
+          region: siteRegion,
           lat,
           lng,
           dataset: "deforestation",
@@ -1230,11 +1274,18 @@ export async function discoverGlobalEarthTrends(
         regime_shift_year: aSummary.changePoint?.significant ? aSummary.changePoint.date : undefined,
         theil_sen_slope: Number(aSummary.theilSen.slope.toFixed(4)),
         slope_unit: rec.slopeUnit,
+        temporal_scale: "year",
         series: rec.points,
         observed_at: `${lastYr}-07-01T00:00:00.000Z`,
         created_at: now,
       },
     });
+
+    const monthlyKnmi = kind === "knmi" ? knmiMonthlyById.get(rec.id) : undefined;
+    if (monthlyKnmi && monthlyKnmi.points.length >= 12) {
+      store.setNodeMultiScaleSeries(sigUuid, "month", monthlyKnmi.points, true);
+      store.setNodeMultiScaleSeries(sigUuid, "year", rec.points, true);
+    }
 
     store.createEdge({
       uuid: `edge-mon-${rec.id}`,
@@ -1293,7 +1344,7 @@ export async function discoverGlobalEarthTrends(
         importance: 7,
         lat: pass.lat,
         lng: pass.lng,
-        region: `SWOT Swath (${pass.lat}°, ${pass.lng}°)`,
+        region: classifyEarthRegionByCoord(pass.lat, pass.lng).label,
         dataset: "hydrology",
         producer_type: "nasa_satellite",
         source_system: "NASA/CNES/CSA SWOT",
@@ -1552,6 +1603,7 @@ export async function discoverGlobalEarthTrends(
           mechanism: cmp.mechanism,
           amplification_ratio: ampRatio,
           shared_shift_year: cmp.sharedRegimeShiftYear ?? undefined,
+          cross_scale: true,
           source_snippet: `${knmiItem.rec.parameter} teleconnection r=${cmp.pearsonR.toFixed(2)} (r*=${cmp.detrendedR.toFixed(2)})`,
           rationale: `KNMI ${knmiItem.rec.parameter} exhibits a remote coupling with ${target.name} (${cmp.mechanism}: r=${cmp.pearsonR.toFixed(2)}, detrended r*=${cmp.detrendedR.toFixed(2)}, Δt=${directedLag} ${cmp.lagUnit}, p=${cmp.pValue.toFixed(4)}).`,
           silent: true,
@@ -1562,17 +1614,14 @@ export async function discoverGlobalEarthTrends(
   }
 
   // 6. Wire data-driven cross-region Knowledge Graph connections (drives_opposite & correlates_with)
-  const oppositeCandidates: Array<{
+  // Apply Benjamini-Hochberg FDR multiple-testing correction and prioritize interannual/lagged
+  // physical variability over pure shared secular drift.
+  const testedPairs: Array<{
     a: SeriesCandidate;
     b: SeriesCandidate;
     comp: CrossRegionComparison;
-    score: number;
-  }> = [];
-
-  const coTrendCandidates: Array<{
-    a: SeriesCandidate;
-    b: SeriesCandidate;
-    comp: CrossRegionComparison;
+    couplingP: number;
+    rawP: number;
   }> = [];
 
   for (let i = 0; i < seriesCandidates.length; i++) {
@@ -1591,32 +1640,102 @@ export async function discoverGlobalEarthTrends(
         lngB: b.lng,
         datasetB: b.dataset,
       });
-      const slopeA = a.summary.theilSen.slope;
-      const slopeB = b.summary.theilSen.slope;
+      if (comp.alignedPoints.length < 3) continue;
 
-      // Opposite-trend dipole: opposite Theil-Sen slopes AND negative correlation r <= -0.35, p < 0.05
-      if (slopeA * slopeB < 0 && comp.pearsonR <= -0.35 && comp.pValue < 0.05) {
-        const atLeastOneSignificant =
-          a.summary.mannKendall.significant || b.summary.mannKendall.significant;
-        oppositeCandidates.push({
-          a,
-          b,
-          comp,
-          score: Math.abs(comp.pearsonR) + (atLeastOneSignificant ? 0.25 : 0),
-        });
-      } else if (slopeA * slopeB > 0 && comp.pearsonR >= 0.78 && comp.pValue < 0.005) {
-        // Avoid over-connecting CO2 to every GISTEMP band in a tight clique; cap per node later
-        coTrendCandidates.push({
-          a,
-          b,
-          comp,
-        });
-      }
+      const rawP = Math.min(comp.pValue, comp.detrendedPValue, comp.optimalLagPValue);
+      const couplingP = comp.isSecularDriftOnly
+        ? Math.min(comp.detrendedPValue, comp.optimalLagPValue)
+        : rawP;
+
+      testedPairs.push({ a, b, comp, couplingP, rawP });
     }
   }
 
+  const couplingQs = benjaminiHochbergAdjust(testedPairs.map((p) => p.couplingP));
+  const rawQs = benjaminiHochbergAdjust(testedPairs.map((p) => p.rawP));
+
+  const oppositeCandidates: Array<{
+    a: SeriesCandidate;
+    b: SeriesCandidate;
+    comp: CrossRegionComparison;
+    fdrQ: number;
+    score: number;
+  }> = [];
+
+  const coTrendCandidates: Array<{
+    a: SeriesCandidate;
+    b: SeriesCandidate;
+    comp: CrossRegionComparison;
+    fdrQ: number;
+    score: number;
+  }> = [];
+
+  testedPairs.forEach((pair, idx) => {
+    const { a, b, comp } = pair;
+    const fdrQ = couplingQs[idx] ?? 1;
+    comp.fdrQValue = fdrQ;
+    const slopeA = a.summary.theilSen.slope;
+    const slopeB = b.summary.theilSen.slope;
+    const atLeastOneSignificant =
+      (a.summary.mannKendall.significant && a.summary.mannKendall.significantAdjusted) ||
+      (b.summary.mannKendall.significant && b.summary.mannKendall.significantAdjusted);
+    const physicalStrength = Math.max(Math.abs(comp.detrendedR), Math.abs(comp.optimalLagR));
+
+    if (
+      !comp.isSecularDriftOnly &&
+      fdrQ < 0.05 &&
+      slopeA * slopeB < 0 &&
+      (comp.pearsonR <= -0.35 || comp.optimalLagR <= -0.45)
+    ) {
+      oppositeCandidates.push({
+        a,
+        b,
+        comp,
+        fdrQ,
+        score:
+          0.55 * physicalStrength +
+          0.45 * Math.abs(comp.pearsonR) +
+          (atLeastOneSignificant ? 0.2 : 0),
+      });
+    } else if (
+      !comp.isSecularDriftOnly &&
+      fdrQ < 0.05 &&
+      slopeA * slopeB > 0 &&
+      Math.max(comp.pearsonR, comp.optimalLagR) >= 0.72
+    ) {
+      coTrendCandidates.push({
+        a,
+        b,
+        comp,
+        fdrQ,
+        score: 0.6 * physicalStrength + 0.4 * Math.abs(comp.pearsonR),
+      });
+    }
+  });
+
+  // Fallback only if zero non-secular pairs survive FDR across small batches
+  if (oppositeCandidates.length === 0) {
+    testedPairs.forEach((pair, idx) => {
+      const rawQ = rawQs[idx] ?? 1;
+      if (
+        rawQ < 0.05 &&
+        pair.a.summary.theilSen.slope * pair.b.summary.theilSen.slope < 0 &&
+        pair.comp.pearsonR <= -0.45
+      ) {
+        pair.comp.fdrQValue = rawQ;
+        oppositeCandidates.push({
+          a: pair.a,
+          b: pair.b,
+          comp: pair.comp,
+          fdrQ: rawQ,
+          score: Math.abs(pair.comp.pearsonR) * 0.75,
+        });
+      }
+    });
+  }
+
   oppositeCandidates.sort((x, y) => y.score - x.score);
-  coTrendCandidates.sort((x, y) => y.comp.pearsonR - x.comp.pearsonR);
+  coTrendCandidates.sort((x, y) => y.score - x.score);
 
   const oppDegree = new Map<string, number>();
   let oppositeDipolesWired = 0;
@@ -1657,8 +1776,8 @@ export async function discoverGlobalEarthTrends(
       mechanism: cand.comp.mechanism,
       amplification_ratio: ampRatio,
       shared_shift_year: cand.comp.sharedRegimeShiftYear ?? undefined,
-      source_snippet: `Empirical r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} (p=${cand.comp.pValue.toFixed(4)})`,
-      rationale: `${src.name} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) diverges from ${tgt.name} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) via ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, detrended r*=${cand.comp.detrendedR.toFixed(2)}, Δt=${directedLag} ${cand.comp.lagUnit}).`,
+      source_snippet: `Empirical r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
+      rationale: `${src.name} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) diverges from ${tgt.name} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) via ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, detrended r*=${cand.comp.detrendedR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}, Δt=${directedLag} ${cand.comp.lagUnit}).`,
       silent: true,
     });
     oppDegree.set(src.nodeUuid, (oppDegree.get(src.nodeUuid) ?? 0) + 1);
@@ -1697,8 +1816,8 @@ export async function discoverGlobalEarthTrends(
       mechanism: cand.comp.mechanism,
       amplification_ratio: ampRatio,
       shared_shift_year: cand.comp.sharedRegimeShiftYear ?? undefined,
-      source_snippet: `Co-trending r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} (p=${cand.comp.pValue.toExponential(1)})`,
-      rationale: `Synchronized shift between ${src.region} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) and ${tgt.region} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) — ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, r*=${cand.comp.detrendedR.toFixed(2)}).`,
+      source_snippet: `Co-trending r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
+      rationale: `Synchronized shift between ${src.region} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) and ${tgt.region} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) — ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, r*=${cand.comp.detrendedR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}).`,
       silent: true,
     });
     coDegree.set(src.nodeUuid, degA + 1);

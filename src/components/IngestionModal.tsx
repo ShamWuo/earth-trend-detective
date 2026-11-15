@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useRef, useState } from "react";
-import { Bot, Cpu, ExternalLink, FileSpreadsheet, Globe2, Satellite, Send, Upload, X } from "lucide-react";
+import { Bot, Cpu, Download, ExternalLink, FileSpreadsheet, Globe2, Satellite, Send, Upload, X } from "lucide-react";
 import {
   CHALLENGE_SPACE_AGENCY_RESOURCES,
   EARTH_TREND_DATASETS,
@@ -286,6 +286,64 @@ export function IngestionModal({
     }
   };
 
+  const handleExportWorkspaceBundle = async () => {
+    setRunning(true);
+    setDsError("");
+    setDsStatus("");
+    try {
+      const res = await fetch("/api/graph?format=bundle", { cache: "no-store" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setDsError(d.error || "Failed to export ETG workspace bundle.");
+        return;
+      }
+      const bundle = await res.json();
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `etg-workspace-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setDsStatus("Exported ETG workspace bundle (.json).");
+    } catch (err) {
+      setDsError(err instanceof Error ? err.message : "Failed to export bundle.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const handleImportBundleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setRunning(true);
+    setDsError("");
+    setDsStatus("");
+    try {
+      const text = await file.text();
+      const bundle = JSON.parse(text);
+      const res = await fetch("/api/graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "import_bundle", bundle, merge: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDsError(data.error || "Failed to import ETG workspace bundle.");
+        return;
+      }
+      setDsStatus(
+        `Imported bundle: ${data.importedNodes ?? 0} node(s), ${data.importedEdges ?? 0} edge(s).`
+      );
+      await onIngested();
+    } catch (err) {
+      setDsError(err instanceof Error ? err.message : "Invalid JSON workspace bundle.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const insightNodes = nodes.filter((n) => n.label === "Insight");
 
   return (
@@ -320,7 +378,7 @@ export function IngestionModal({
       <div
         role="tablist"
         aria-label="Data ingestion channels"
-        className="etg-tablist flex-wrap bg-surface text-xs"
+        className="etg-tablist bg-surface text-xs"
       >
         <button
           type="button"
@@ -378,7 +436,7 @@ export function IngestionModal({
       <div className="flex-1 overflow-y-auto text-xs">
         <div role="tabpanel" hidden={tab !== "dataset"}>
           <div className="space-y-4 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-inset p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
                 <div className="font-semibold text-text-primary">
                   NASA, NOAA, KNMI &amp; CSA Live Discovery
@@ -391,10 +449,50 @@ export function IngestionModal({
                 type="button"
                 onClick={runLiveDiscoveryFromModal}
                 disabled={running}
-                className="rounded-lg bg-accent px-3 py-2 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                className="rounded-sm bg-accent px-3 py-2 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
               >
                 {running ? "Discovering…" : "Run Live Discovery"}
               </button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
+              <div>
+                <div className="font-semibold text-text-primary">
+                  Portable Workspace Bundle (.json)
+                </div>
+                <div className="mt-0.5 text-[11px] text-text-muted">
+                  Export or merge a full scientific Earth Trend Graph snapshot (nodes, time-series, edges, and metadata).
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleExportWorkspaceBundle()}
+                  disabled={running}
+                  className="inline-flex items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-3 py-1.5 font-medium text-text-primary hover:border-accent-fg disabled:opacity-50 cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Export Bundle</span>
+                </button>
+                <div className="relative">
+                  <input
+                    id={`${baseId}-bundle-file`}
+                    name="workspace_bundle_file"
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(e) => void handleImportBundleFile(e)}
+                    disabled={running}
+                    className="visually-hidden"
+                  />
+                  <label
+                    htmlFor={`${baseId}-bundle-file`}
+                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-3 py-1.5 font-medium text-text-primary hover:border-accent-fg"
+                  >
+                    <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Import Bundle</span>
+                  </label>
+                </div>
+              </div>
             </div>
 
             <form onSubmit={submitDatasetImport} className="space-y-3 border-t border-border pt-3">
@@ -419,7 +517,7 @@ export function IngestionModal({
                   </label>
                   <label
                     htmlFor={`${baseId}-ds-file`}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface-inset px-3 py-2 text-xs text-text-muted hover:border-accent-fg hover:text-text-primary"
+                    className="flex cursor-pointer items-center gap-2 rounded-sm border border-dashed border-border-strong bg-surface-inset px-3 py-2 text-xs text-text-muted hover:border-accent-fg hover:text-text-primary"
                   >
                     <Upload className="h-3.5 w-3.5" />
                     <span>Choose .csv, .json, .txt, .dat, or .asc</span>
@@ -466,19 +564,19 @@ export function IngestionModal({
               <button
                 type="submit"
                 disabled={running}
-                className="rounded-lg border border-border-strong bg-surface-elevated px-3 py-2 font-semibold text-text-primary hover:border-accent-fg disabled:opacity-50 cursor-pointer"
+                className="rounded-sm border border-border-strong bg-surface-elevated px-3 py-2 font-semibold text-text-primary hover:border-accent-fg disabled:opacity-50 cursor-pointer"
               >
                 {running ? "Analyzing & Wiring Graph…" : "Analyze Series & Wire into Knowledge Graph"}
               </button>
             </form>
 
             {dsStatus && (
-              <div role="status" className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 p-2.5 font-medium text-emerald-300">
+              <div role="status" className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300">
                 {dsStatus}
               </div>
             )}
             {dsError && (
-              <div role="status" className="rounded-lg border border-rose-500/35 bg-rose-500/10 p-2.5 font-medium text-rose-300">
+              <div role="status" className="rounded-md border border-rose-400 bg-rose-950 p-2.5 font-medium text-rose-300">
                 {dsError}
               </div>
             )}
@@ -487,7 +585,7 @@ export function IngestionModal({
 
         <div role="tabpanel" hidden={tab !== "agencies"}>
           <div className="space-y-4 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface-inset p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
                 <div className="font-semibold text-text-primary">
                   Official Space-Agency Challenge Resources (12)
@@ -500,14 +598,14 @@ export function IngestionModal({
                 type="button"
                 onClick={runLiveDiscoveryFromModal}
                 disabled={running}
-                className="rounded-lg bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                className="rounded-sm bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
               >
                 {running ? "Syncing…" : "Ingest All Live Agency Feeds"}
               </button>
             </div>
 
             {dsStatus && (
-              <div role="status" className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 p-2.5 font-medium text-emerald-300">
+              <div role="status" className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300">
                 {dsStatus}
               </div>
             )}
@@ -526,7 +624,7 @@ export function IngestionModal({
                     (resItem) => (
                       <div
                         key={resItem.id}
-                        className="flex flex-col justify-between gap-2 rounded-xl border border-border bg-surface-inset p-3"
+                        className="flex flex-col justify-between gap-2 rounded-md border border-border bg-surface-inset p-3"
                       >
                         <div className="space-y-1">
                           <div className="flex items-start justify-between gap-2">
@@ -540,12 +638,12 @@ export function IngestionModal({
                               <ExternalLink className="h-3 w-3 shrink-0 text-text-subtle" />
                             </a>
                             <span
-                              className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                              className={`shrink-0 rounded-sm border px-2 py-0.5 font-mono text-[10px] font-semibold ${
                                 resItem.integrationRole === "Live API Wired"
-                                  ? "border border-emerald-500/35 bg-emerald-500/10 text-emerald-400"
+                                  ? "border-emerald-400 bg-emerald-950 text-emerald-300"
                                   : resItem.integrationRole === "Import Parser Ready"
-                                    ? "border border-sky-500/35 bg-sky-500/10 text-sky-400"
-                                    : "border border-amber-500/35 bg-amber-500/10 text-amber-400"
+                                    ? "border-sky-400 bg-sky-950 text-sky-300"
+                                    : "border-amber-400 bg-amber-950 text-amber-300"
                               }`}
                             >
                               {resItem.integrationRole}
@@ -555,7 +653,7 @@ export function IngestionModal({
                             {resItem.summary}
                           </p>
                         </div>
-                        <div className="border-t border-border/60 pt-1.5 text-[11px] text-text-subtle">
+                        <div className="border-t border-border pt-1.5 text-[11px] text-text-subtle">
                           {resItem.integrationNote}
                         </div>
                       </div>
@@ -608,6 +706,16 @@ export function IngestionModal({
                     setMcpArgs('{\n  "lat": 0,\n  "lng": 0,\n  "dataset": "nasa_power"\n}');
                   } else if (next === "etg_ingest_signal") {
                     setMcpArgs('{\n  "name": "",\n  "description": "",\n  "lat": 0,\n  "lng": 0,\n  "dataset": "community",\n  "confidence": 0.9\n}');
+                  } else if (next === "etg_connect_nodes") {
+                    setMcpArgs('{\n  "source_uuid": "",\n  "target_uuid": "",\n  "type": "leads",\n  "optimal_lag_steps": 1,\n  "lag_unit": "days",\n  "mechanism": ""\n}');
+                  } else if (next === "etg_unlink_or_update") {
+                    setMcpArgs('{\n  "action": "update_node",\n  "uuid": "",\n  "patch": {\n    "domain_tags": ["solar"]\n  }\n}');
+                  } else if (next === "etg_traverse_subgraph") {
+                    setMcpArgs('{\n  "root_uuid": "",\n  "max_hops": 2,\n  "direction": "both"\n}');
+                  } else if (next === "etg_discover_missing_links") {
+                    setMcpArgs('{\n  "min_abs_r": 0.45,\n  "limit": 10\n}');
+                  } else if (next === "etg_predict_from_graph") {
+                    setMcpArgs('{\n  "target_uuid": "",\n  "max_hops": 2,\n  "horizon_steps": 1\n}');
                   } else {
                     setMcpArgs('{\n  "only_opposite_trends": true\n}');
                   }
@@ -619,6 +727,11 @@ export function IngestionModal({
                 <option value="etg_analyze_timeseries">etg_analyze_timeseries</option>
                 <option value="etg_ingest_signal">etg_ingest_signal</option>
                 <option value="etg_trace_teleconnection">etg_trace_teleconnection</option>
+                <option value="etg_connect_nodes">etg_connect_nodes</option>
+                <option value="etg_unlink_or_update">etg_unlink_or_update</option>
+                <option value="etg_traverse_subgraph">etg_traverse_subgraph</option>
+                <option value="etg_discover_missing_links">etg_discover_missing_links</option>
+                <option value="etg_predict_from_graph">etg_predict_from_graph</option>
               </select>
 
               <label htmlFor={`${baseId}-mcp-args`} className="sr-only">

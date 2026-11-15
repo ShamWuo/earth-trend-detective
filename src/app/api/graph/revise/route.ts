@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEtgStore } from "@/lib/graph/etgStore";
+import { validateGraphAction } from "@/lib/graph/graphGuard";
 import type { ETGDatasetId, ETGNodeLabel } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +30,20 @@ export async function POST(req: NextRequest) {
     }
 
     const store = getEtgStore();
+    const verdict = validateGraphAction(store, {
+      type: "revise_belief",
+      priorNodeUuid: body.priorNodeUuid,
+      newName: body.newName,
+      newDescription: body.newDescription,
+      rationale: body.rationale,
+    });
+    if (!verdict.allowed) {
+      return NextResponse.json(
+        { error: verdict.reason, rule: verdict.rule, guardVerdict: verdict },
+        { status: 400 }
+      );
+    }
+
     const result = store.reviseBelief({
       priorNodeUuid: body.priorNodeUuid,
       newName: body.newName,

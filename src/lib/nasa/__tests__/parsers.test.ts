@@ -5,7 +5,10 @@ import {
   parseNoaaCo2AnnMean,
   parseNsidcSeaIceCsv,
 } from "@/lib/nasa/gistempAndCo2Client";
-import { parseNasaPowerMonthlyPayload } from "@/lib/nasa/nasaPowerClient";
+import {
+  computeMonthlyVpdSeries,
+  parseNasaPowerMonthlyPayload,
+} from "@/lib/nasa/nasaPowerClient";
 import {
   parseGeocaAhccdJson,
   parseGeocaHydrometricJson,
@@ -238,5 +241,33 @@ describe("NASA & NOAA live dataset parsers", () => {
     expect(dRows[0].lng).toBe(-119.8);
     expect(dRows[0].name).toBe("Root Zone Soil Moisture");
     expect(dRows[1].value).toBe(388.2);
+  });
+
+  it("computes annual Tetens Vapor Pressure Deficit (kPa) from monthly T2M_MAX and RH2M while skipping M13 & sentinels", () => {
+    const tMax: Record<string, number> = {
+      "202213": 28, // M13 summary must be skipped
+      "202313": -999,
+    };
+    const rh: Record<string, number> = {
+      "202213": 40,
+      "202313": 35,
+    };
+    for (let m = 1; m <= 12; m++) {
+      const k22 = `2022${String(m).padStart(2, "0")}`;
+      const k23 = `2023${String(m).padStart(2, "0")}`;
+      tMax[k22] = 25;
+      rh[k22] = 50;
+      tMax[k23] = m <= 8 ? 30 : -999; // 8 valid months >= 6 threshold; last 4 sentinels skipped
+      rh[k23] = 25;
+    }
+
+    const vpd = computeMonthlyVpdSeries(tMax, rh);
+    expect(vpd).toHaveLength(2);
+    expect(vpd[0].date).toBe("2022");
+    // es(25°C) = 0.61078 * exp(17.27*25 / (25+237.3)) ≈ 3.167 kPa -> 50% RH => ~1.584 kPa
+    expect(vpd[0].value).toBeCloseTo(1.5835, 2);
+    expect(vpd[1].date).toBe("2023");
+    // 30°C & 25% RH yields strictly higher fire-weather aridity than 25°C & 50% RH
+    expect(vpd[1].value).toBeGreaterThan(vpd[0].value);
   });
 });

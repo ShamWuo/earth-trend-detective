@@ -118,6 +118,61 @@ export async function GET(req: NextRequest) {
         },
       },
     },
+    "/api/graph/traverse": {
+      get: {
+        tags: ["Graph Traversal & Link Discovery"],
+        summary: "Traverse k-hop upstream/downstream neighborhoods, weighted causal paths, or discover latent missing links",
+        operationId: "traverseEtgSubgraph",
+        parameters: [
+          { name: "mode", in: "query", schema: { type: "string", enum: ["subgraph", "paths", "discover_links"] } },
+          { name: "rootUuid", in: "query", schema: { type: "string" } },
+          { name: "maxHops", in: "query", schema: { type: "integer" } },
+          { name: "direction", in: "query", schema: { type: "string", enum: ["upstream", "downstream", "both"] } },
+          { name: "anchorUuid", in: "query", schema: { type: "string" } },
+        ],
+        responses: {
+          "200": { description: "Subgraph traversal, paths, or candidate link suggestions" },
+        },
+      },
+    },
+    "/api/graph/predict": {
+      get: {
+        tags: ["Graph-Reading Predictor & ML Export"],
+        summary: "Run live 3-way Graph-Aware Ridge forecast on any ETG node or export PyG/NetworkX tensor bundle (format=ml_export)",
+        operationId: "predictFromEtgGraph",
+        parameters: [
+          { name: "targetUuid", in: "query", schema: { type: "string" } },
+          { name: "maxHops", in: "query", schema: { type: "integer" } },
+          { name: "horizonSteps", in: "query", schema: { type: "integer" } },
+          { name: "format", in: "query", schema: { type: "string", enum: ["prediction", "ml_export"] } },
+        ],
+        responses: {
+          "200": { description: "3-way forecast comparison + neighbor contributions or ML tensor export" },
+        },
+      },
+    },
+    "/api/graph/microscope": {
+      get: {
+        tags: ["AI Trend Microscope"],
+        summary:
+          "Scan the ETG with the 3-in-1 AI Trend Microscope for early pre-Mann-Kendall trend inflections, directional lead-lag vs. confounder illusions, and secular vs. cycle/glitch de-aliasing.",
+        operationId: "scanEtgTrendMicroscope",
+        parameters: [
+          { name: "focusUuid", in: "query", schema: { type: "string" } },
+          { name: "lat", in: "query", schema: { type: "number" } },
+          { name: "lng", in: "query", schema: { type: "number" } },
+          { name: "dataset", in: "query", schema: { type: "string" } },
+          { name: "maxHops", in: "query", schema: { type: "integer" } },
+          { name: "topK", in: "query", schema: { type: "integer" } },
+        ],
+        responses: {
+          "200": {
+            description:
+              "Node and link perceptual cue cards plus compact aiPerceptionBrief",
+          },
+        },
+      },
+    },
   };
 
   for (const tool of ETG_MCP_TOOLS) {

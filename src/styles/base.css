@@ -1,3 +1,13 @@
+:root {
+  --target-size: 24px;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --target-size: 44px;
+  }
+}
+
 body {
   background: var(--bg);
   color: var(--text-primary);
@@ -9,6 +19,10 @@ body {
 h1, h2, h3, h4, h5, h6 {
   font-family: var(--font-outfit), Arial, Helvetica, sans-serif;
   letter-spacing: -0.015em;
+}
+
+h1, h2, h3 {
+  text-wrap: balance;
 }
 
 /* Focus visibility (WCAG 2.4.7) */
@@ -169,7 +183,7 @@ input[type="range"].etg-slider:focus-visible {
 
 .etg-table-region thead th {
   text-align: left;
-  padding: 0.45rem 0.65rem;
+  padding: 0.4rem 0.5rem;
   font-weight: 600;
   color: var(--text-subtle);
   border-bottom: 1px solid var(--border);
@@ -182,7 +196,7 @@ input[type="range"].etg-slider:focus-visible {
   z-index: 1;
   background: var(--surface);
   text-align: left;
-  padding: 0.4rem 0.65rem;
+  padding: 0.38rem 0.5rem;
   font-weight: 600;
   color: var(--text-primary);
   border-bottom: 1px solid var(--border-subtle);
@@ -190,13 +204,14 @@ input[type="range"].etg-slider:focus-visible {
 }
 
 .etg-table-region tbody td {
-  padding: 0.4rem 0.65rem;
+  padding: 0.38rem 0.5rem;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-@container (width < 420px) {
+@container (width < 320px) {
   .etg-table-region table,
   .etg-table-region thead,
   .etg-table-region tbody,
@@ -206,6 +221,7 @@ input[type="range"].etg-slider:focus-visible {
     display: block;
   }
 
+  /* MANDATORY: Hide column header from layout and screen readers. */
   .etg-table-region thead {
     display: none;
   }
@@ -264,6 +280,51 @@ input[type="range"].etg-slider:focus-visible {
   color: var(--form-field-placeholder);
 }
 
+.etg-chat-textarea {
+  field-sizing: content;
+  height: auto;
+  width: 100%;
+  min-block-size: 2.25lh;
+  max-block-size: 8lh;
+  resize: none;
+}
+
+/* ─── Native Accessible Checkboxes (MWG Checkbox Pattern) ─── */
+.etg-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.etg-check-label:hover {
+  background: var(--surface-band);
+}
+
+.checkbox-native {
+  accent-color: var(--accent);
+  inline-size: 1.05rem;
+  block-size: 1.05rem;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.checkbox-native:focus-visible {
+  outline: 2px solid var(--accent-fg);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .etg-check-label {
+    min-height: 44px;
+    padding-inline: 0.5rem;
+  }
+}
+
 /* ─── Graph Void Surface (Dark Obsidian / Light Warm Ivory) ─── */
 .etg-graph-void {
   background: radial-gradient(circle at 50% 42%, #131622 0%, #0b0c10 72%, #07080c 100%);
@@ -276,29 +337,27 @@ input[type="range"].etg-slider:focus-visible {
 }
 
 .etg-hud-pill {
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: var(--surface);
   border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.45);
 }
 
 .light .etg-hud-pill {
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--surface);
   box-shadow: 0 10px 28px -12px rgba(24, 24, 27, 0.16);
 }
 
 /* ─── Native Popover Overlays (Viewport-Aware Positioning) ─── */
 .etg-popover[popover] {
+  box-sizing: border-box;
   border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--surface) 96%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
   color: var(--text-primary);
   box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.55);
-  max-inline-size: min(25rem, calc(100dvw - 3rem));
-  max-block-size: min(76dvh, 36rem);
+  max-inline-size: min(25rem, calc(100dvw - 1.5rem));
+  max-block-size: min(76dvh, calc(100dvh - 5rem), 36rem);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -330,7 +389,7 @@ input[type="range"].etg-slider:focus-visible {
     margin: 0;
     margin-block-start: 0.5rem;
     position-area: block-end span-inline-end;
-    position-try-fallbacks: flip-block, flip-inline;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
   }
 
   .etg-popover[popover].etg-popover-end {
@@ -348,7 +407,7 @@ input[type="range"].etg-slider:focus-visible {
 @supports not (position-area: block-end) {
   .etg-popover[popover] {
     position: fixed;
-    inset-block-start: 4.5rem;
+    inset-block-start: 3.5rem;
     inset-inline-start: 1.25rem;
     margin: 0;
   }
@@ -381,15 +440,23 @@ input[type="range"].etg-slider:focus-visible {
 /* ─── Accessible Tabs (Constant Dimensions + Border Underline) ─── */
 .etg-tablist {
   display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
   gap: 0.5rem;
   border-bottom: 1px solid var(--border);
-  padding-inline: 1.75rem;
+  padding-inline: 1.25rem;
+}
+
+.etg-tablist::-webkit-scrollbar {
+  display: none;
 }
 
 .etg-tab {
   position: relative;
-  padding: 0.9rem 0.75rem;
-  font-size: 0.84375rem;
+  flex: none;
+  padding: 0.75rem 0.65rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   color: var(--text-muted);
   background: transparent;
@@ -418,8 +485,16 @@ input[type="range"].etg-slider:focus-visible {
 /* ─── Progressive Disclosure Details ─── */
 .etg-details {
   border: 1px solid var(--border);
-  border-radius: 0.875rem;
-  background: color-mix(in srgb, var(--surface-band) 65%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--surface-band);
+}
+
+@media (forced-colors: active) {
+  .etg-hud-pill,
+  .etg-popover[popover],
+  .etg-details {
+    border: 1px solid ButtonBorder;
+  }
 }
 
 .etg-details > summary {
@@ -473,4 +548,158 @@ input[type="range"].etg-slider:focus-visible {
 .etg-chip-scroller > * {
   flex: 0 0 auto;
   scroll-snap-align: start;
+}
+
+/* ─── Theme-Adaptive Trend Tone Text (WCAG >= 4.5:1 in Dark & Light) ─── */
+.etg-tone-warm {
+  color: #fcd34d;
+}
+.etg-tone-cool {
+  color: #7dd3fc;
+}
+.etg-tone-rise {
+  color: #fda4af;
+}
+
+.light .etg-tone-warm {
+  color: #b45309;
+}
+.light .etg-tone-cool {
+  color: #0369a1;
+}
+.light .etg-tone-rise {
+  color: #be123c;
+}
+
+.etg-globe-void {
+  background: radial-gradient(circle at 50% 50%, #0b1930 0%, #050b18 58%, #02040a 100%);
+}
+
+.light .etg-globe-void {
+  background: radial-gradient(circle at 50% 48%, #1e3a5f 0%, #102038 62%, #0a1424 100%);
+}
+
+/* ─── Animated Causal Flow Lines (Respecting Reduced Motion) ─── */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes etg-causal-dash {
+    to {
+      stroke-dashoffset: -28;
+    }
+  }
+
+  .etg-causal-flow-line {
+    stroke-dasharray: 5 9;
+    animation: etg-causal-dash 1.25s linear infinite;
+  }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+input.visually-hidden:focus-visible + label {
+  outline: 2px solid var(--color-accent-primary, #38bdf8);
+  outline-offset: 2px;
+}
+
+/* ─── Responsive Container-Query Table (Prospective Verification Ledger) ─── */
+.etg-table-wrapper {
+  overflow: auto;
+  max-inline-size: 100%;
+  max-block-size: min(360px, 65vh);
+  container-type: inline-size;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+}
+
+.etg-table-wrapper:focus-visible {
+  outline: 2px solid var(--color-accent-primary, #38bdf8);
+  outline-offset: 2px;
+}
+
+.etg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
+.etg-table th,
+.etg-table td {
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-hairline, rgba(255, 255, 255, 0.07));
+}
+
+.etg-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-band);
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.625rem;
+}
+
+@container (width < 460px) {
+  /* MANDATORY: Hide column header from layout and screen readers. */
+  .etg-table-wrapper thead {
+    display: none;
+  }
+
+  .etg-table tbody tr {
+    display: block;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid var(--color-border-hairline, rgba(255, 255, 255, 0.1));
+  }
+
+  .etg-table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .etg-table td,
+  .etg-table tbody th {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 0.35rem;
+    padding: 0.18rem 0;
+    border-bottom: none;
+    text-align: left;
+  }
+
+  .etg-table td:nth-child(1)::before,
+  .etg-table tbody th:nth-child(1)::before {
+    content: var(--label-1, "Horizon") ": ";
+    color: var(--color-text-muted, #94a3b8);
+    font-weight: 600;
+  }
+
+  .etg-table td:nth-child(2)::before {
+    content: var(--label-2, "Forecast") ": ";
+    color: var(--color-text-muted, #94a3b8);
+    font-weight: 600;
+  }
+
+  .etg-table td:nth-child(3)::before {
+    content: var(--label-3, "Actual") ": ";
+    color: var(--color-text-muted, #94a3b8);
+    font-weight: 600;
+  }
+
+  .etg-table td:nth-child(4)::before {
+    content: var(--label-4, "Outcome") ": ";
+    color: var(--color-text-muted, #94a3b8);
+    font-weight: 600;
+  }
 }

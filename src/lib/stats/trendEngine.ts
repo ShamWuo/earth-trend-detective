@@ -7,6 +7,7 @@ import type {
   OlsRegressionResult,
   PettittChangePointResult,
   RollingCorrelationPoint,
+  SeasonalMannKendallResult,
   TheilSenResult,
   TimeSeriesPoint,
   TrendAnalysisPoint,
@@ -38,6 +39,39 @@ export function twoTailedNormalPValue(z: number): number {
   return Math.min(1, Math.max(0, p));
 }
 
+function computeTieCorrectedMkCore(values: readonly number[]): { s: number; varS: number } {
+  const n = values.length;
+  if (n < 2) return { s: 0, varS: 0 };
+  let s = 0;
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const diff = values[j] - values[i];
+      if (diff > 1e-12) s += 1;
+      else if (diff < -1e-12) s -= 1;
+    }
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const tieCounts: number[] = [];
+  let run = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    if (Math.abs(sorted[i] - sorted[i - 1]) <= 1e-12) {
+      run += 1;
+    } else {
+      if (run > 1) tieCounts.push(run);
+      run = 1;
+    }
+  }
+  if (run > 1) tieCounts.push(run);
+
+  let tieSum = 0;
+  for (const tp of tieCounts) {
+    tieSum += tp * (tp - 1) * (2 * tp + 5);
+  }
+  const varS = Math.max(0, (n * (n - 1) * (2 * n + 5) - tieSum) / 18);
+  return { s, varS };
+}
+
 /**
  * Exact tie-corrected Mann-Kendall trend test with Hamed & Rao (1998)
  * autocorrelation variance adjustment for serially correlated climate series.
@@ -63,35 +97,7 @@ export function mannKendallTest(values: readonly number[], alpha = 0.05): MannKe
     };
   }
 
-  let s = 0;
-  for (let i = 0; i < n - 1; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const diff = values[j] - values[i];
-      if (diff > 1e-12) s += 1;
-      else if (diff < -1e-12) s -= 1;
-    }
-  }
-
-  // Count tied groups
-  const sorted = [...values].sort((a, b) => a - b);
-  const tieCounts: number[] = [];
-  let run = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    if (Math.abs(sorted[i] - sorted[i - 1]) <= 1e-12) {
-      run += 1;
-    } else {
-      if (run > 1) tieCounts.push(run);
-      run = 1;
-    }
-  }
-  if (run > 1) tieCounts.push(run);
-
-  let tieSum = 0;
-  for (const tp of tieCounts) {
-    tieSum += tp * (tp - 1) * (2 * tp + 5);
-  }
-
-  const varS = Math.max(0, (n * (n - 1) * (2 * n + 5) - tieSum) / 18);
+  const { s, varS } = computeTieCorrectedMkCore(values);
   let zScore = 0;
   if (varS > 0) {
     if (s > 0) zScore = (s - 1) / Math.sqrt(varS);
@@ -404,6 +410,100 @@ export function computePettittChangePoint(
 }
 
 /**
+ * Hirsch, Slack & Smith (1982) Seasonal Mann-Kendall test & within-season Theil-Sen slope.
+ * Compares each calendar month solely against the same month in subsequent years to remove
+ * annual seasonal cycles before evaluating secular environmental drift.
+ */
+export function computeSeasonalMannKendall(
+  points: readonly TimeSeriesPoint[],
+  alpha = 0.05
+): SeasonalMannKendallResult | null {
+  if (points.length < 18) return null;
+  const sorted = [...points].sort((a, b) => a.t - b.t);
+
+  const monthBuckets = new Map<number, Array<{ idx: number; pt: TimeSeriesPoint }>>();
+  const monthByIdx = new Array<number | null>(sorted.length).fill(null);
+
+  for (let i = 0; i < sorted.length; i++) {
+    const pt = sorted[i];
+    const m = pt.date.trim().match(/^(\d{4})[-/](\d{1,2})/);
+    if (!m) continue;
+    const month = Number(m[2]);
+    if (month < 1 || month > 12) continue;
+    monthByIdx[i] = month;
+    const list = monthBuckets.get(month) ?? [];
+    list.push({ idx: i, pt });
+    monthBuckets.set(month, list);
+  }
+
+  const activeSeasons = Array.from(monthBuckets.entries()).filter(([, grp]) => grp.length >= 2);
+  if (activeSeasons.length < 2) return null;
+
+  const overallMean = sorted.reduce((acc, p) => acc + p.value, 0) / sorted.length;
+  const monthMeans = new Map<number, number>();
+  for (const [month, grp] of monthBuckets.entries()) {
+    const meanM = grp.reduce((acc, item) => acc + item.pt.value, 0) / grp.length;
+    monthMeans.set(month, meanM);
+  }
+
+  const deseasonalizedValues = sorted.map((p, idx) => {
+    const month = monthByIdx[idx];
+    const clim = month !== null ? (monthMeans.get(month) ?? overallMean) : overallMean;
+    return p.value - clim;
+  });
+
+  let totalS = 0;
+  let totalVarS = 0;
+  let totalPairs = 0;
+  const withinMonthSlopes: number[] = [];
+
+  for (const [, grp] of activeSeasons) {
+    const vals = grp.map((item) => item.pt.value);
+    const { s, varS } = computeTieCorrectedMkCore(vals);
+    totalS += s;
+    totalVarS += varS;
+    for (let i = 0; i < grp.length - 1; i++) {
+      for (let j = i + 1; j < grp.length; j++) {
+        const dt = grp[j].pt.t - grp[i].pt.t;
+        if (dt > 1e-6) {
+          withinMonthSlopes.push((grp[j].pt.value - grp[i].pt.value) / dt);
+          totalPairs += 1;
+        }
+      }
+    }
+  }
+
+  let zScore = 0;
+  if (totalVarS > 0) {
+    if (totalS > 0) zScore = (totalS - 1) / Math.sqrt(totalVarS);
+    else if (totalS < 0) zScore = (totalS + 1) / Math.sqrt(totalVarS);
+  }
+  const pValue = twoTailedNormalPValue(zScore);
+  const significant = pValue < alpha && totalS !== 0;
+  const direction: SeasonalMannKendallResult["direction"] = significant
+    ? totalS > 0
+      ? "increasing"
+      : "decreasing"
+    : "no_trend";
+
+  withinMonthSlopes.sort((a, b) => a - b);
+  const seasonalTheilSenSlope = medianOfSorted(withinMonthSlopes);
+
+  return {
+    seasonsDetected: activeSeasons.length,
+    totalPairs,
+    s: totalS,
+    varS: totalVarS,
+    zScore,
+    pValue,
+    significant,
+    direction,
+    seasonalTheilSenSlope,
+    deseasonalizedValues,
+  };
+}
+
+/**
  * Full statistical trend analysis on a coordinate time-series.
  */
 export function analyzeTimeSeries(
@@ -434,6 +534,7 @@ export function analyzeTimeSeries(
   const ts = theilSenEstimator(sorted, mk.varS);
   const ols = computeOlsRegression(sorted);
   const changePoint = computePettittChangePoint(sorted);
+  const seasonalAnalysis = computeSeasonalMannKendall(sorted, options.alpha ?? 0.05);
 
   const points: TrendAnalysisPoint[] = sorted.map((p, idx) => {
     const start = Math.max(0, idx - 2);
@@ -442,6 +543,9 @@ export function analyzeTimeSeries(
       windowSlice.reduce((acc, v) => acc + v, 0) / Math.max(1, windowSlice.length);
     const theilSenFit = ts.slope * p.t + ts.intercept;
     const zScore = stdDev > 1e-12 ? (p.value - mean) / stdDev : 0;
+    const anomalyValue = seasonalAnalysis
+      ? seasonalAnalysis.deseasonalizedValues[idx]
+      : p.value - mean;
     return {
       date: p.date,
       t: p.t,
@@ -449,14 +553,20 @@ export function analyzeTimeSeries(
       movingAverage,
       theilSenFit,
       zScore,
+      anomalyValue,
     };
   });
 
   const latestValue = values[n - 1] ?? 0;
   const latestAnomalyZ = stdDev > 1e-12 ? (latestValue - mean) / stdDev : 0;
 
+  // Respect Hamed & Rao (1998) serial-correlation adjustment on n >= 10 series
+  // to avoid red-noise AR(1) false positives in environmental telemetry.
+  const effectiveSignificant =
+    mk.n >= 10 ? mk.significant && mk.significantAdjusted : mk.significant;
+
   let verdict: TrendAnalysisSummary["verdict"] = "Normal Environmental Variability";
-  if (mk.significant && Math.abs(ts.slope) > 1e-9) {
+  if (effectiveSignificant && Math.abs(ts.slope) > 1e-9) {
     verdict =
       mk.direction === "increasing"
         ? "Statistically Significant Increasing Trend"
@@ -481,6 +591,7 @@ export function analyzeTimeSeries(
     theilSen: ts,
     ols,
     changePoint,
+    seasonalAnalysis,
     verdict,
     points,
   };
@@ -538,6 +649,92 @@ function fisherPValue(r: number, n: number): number {
   const clampedR = Math.max(-0.9999, Math.min(0.9999, r));
   const fisherZ = 0.5 * Math.log((1 + clampedR) / (1 - clampedR)) * Math.sqrt(n - 3);
   return twoTailedNormalPValue(fisherZ);
+}
+
+/**
+ * Benjamini & Hochberg (1995) step-up False Discovery Rate (FDR) adjustment.
+ * Maps raw two-tailed p-values to adjusted q-values in [0, 1] preserving input order.
+ */
+export function benjaminiHochbergAdjust(pValues: readonly number[]): number[] {
+  const m = pValues.length;
+  if (m === 0) return [];
+
+  const indexed = pValues.map((rawP, idx) => ({
+    idx,
+    p: Number.isFinite(rawP) ? Math.max(0, Math.min(1, rawP)) : 1,
+  }));
+  indexed.sort((a, b) => a.p - b.p);
+
+  const qSorted = new Array<number>(m);
+  let runningMin = 1;
+  for (let rank = m - 1; rank >= 0; rank--) {
+    const rawQ = (m / (rank + 1)) * indexed[rank].p;
+    runningMin = Math.min(runningMin, Math.min(1, rawQ));
+    qSorted[rank] = Number(Math.max(0, runningMin).toFixed(8));
+  }
+
+  const out = new Array<number>(m);
+  for (let rank = 0; rank < m; rank++) {
+    out[indexed[rank].idx] = qSorted[rank];
+  }
+  return out;
+}
+
+interface ParsedCalendarKey {
+  year: string;
+  yearMonth?: string;
+}
+
+function parseCalendarKey(dateStr: string): ParsedCalendarKey | null {
+  const trimmed = dateStr.trim();
+  const yOnly = trimmed.match(/^(\d{4})$/);
+  if (yOnly) {
+    const y = Number(yOnly[1]);
+    return y >= 1800 && y <= 2150 ? { year: yOnly[1] } : null;
+  }
+  const isoLike = trimmed.match(/^(\d{4})[-/](\d{1,2})(?:[-/]\d{1,2}(?:[T\s].*)?)?$/);
+  if (isoLike) {
+    const y = Number(isoLike[1]);
+    const mo = Number(isoLike[2]);
+    if (y >= 1800 && y <= 2150 && mo >= 1 && mo <= 12) {
+      return { year: isoLike[1], yearMonth: `${isoLike[1]}-${String(mo).padStart(2, "0")}` };
+    }
+    return null;
+  }
+  const compact = trimmed.match(/^(\d{4})(\d{2})(?:\d{2})?$/);
+  if (compact) {
+    const y = Number(compact[1]);
+    const mo = Number(compact[2]);
+    if (y >= 1800 && y <= 2150 && mo >= 1 && mo <= 12) {
+      return { year: compact[1], yearMonth: `${compact[1]}-${compact[2]}` };
+    }
+  }
+  return null;
+}
+
+function aggregateByCalendarBucket(
+  series: readonly TimeSeriesPoint[],
+  granularity: "yearMonth" | "year"
+): Map<string, { t: number; value: number }> {
+  const buckets = new Map<string, { sumVal: number; sumT: number; count: number }>();
+  for (const pt of series) {
+    const parsed = parseCalendarKey(pt.date);
+    const key = granularity === "yearMonth" ? parsed?.yearMonth : parsed?.year;
+    if (!key) continue;
+    const prev = buckets.get(key) ?? { sumVal: 0, sumT: 0, count: 0 };
+    prev.sumVal += pt.value;
+    prev.sumT += pt.t;
+    prev.count += 1;
+    buckets.set(key, prev);
+  }
+  const out = new Map<string, { t: number; value: number }>();
+  for (const [key, agg] of buckets.entries()) {
+    out.set(key, {
+      t: agg.sumT / agg.count,
+      value: agg.sumVal / agg.count,
+    });
+  }
+  return out;
 }
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -688,18 +885,59 @@ export function compareRegionalSeries(
     }
   }
 
-  // Fallback to positional alignment if date labels differ
+  // Calendar-aware bucket fallback when date string formats differ (e.g. "2020-06-15" vs "2020"),
+  // strictly refusing positional alignment across non-overlapping calendar eras.
   if (paired.length < 3) {
-    paired.length = 0;
-    const len = Math.min(seriesA.length, seriesB.length);
-    for (let i = 0; i < len; i++) {
-      paired.push({
-        date: seriesA[i].date,
-        tA: seriesA[i].t,
-        tB: seriesB[i].t,
-        rawA: seriesA[i].value,
-        rawB: seriesB[i].value,
-      });
+    const calFractionA =
+      seriesA.length > 0
+        ? seriesA.filter((p) => parseCalendarKey(p.date) !== null).length / seriesA.length
+        : 0;
+    const calFractionB =
+      seriesB.length > 0
+        ? seriesB.filter((p) => parseCalendarKey(p.date) !== null).length / seriesB.length
+        : 0;
+    const bothCalendar = calFractionA >= 0.8 && calFractionB >= 0.8;
+
+    if (bothCalendar) {
+      paired.length = 0;
+      const hasMonthA = seriesA.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / seriesA.length >= 0.8;
+      const hasMonthB = seriesB.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / seriesB.length >= 0.8;
+
+      if (hasMonthA && hasMonthB) {
+        const bA = aggregateByCalendarBucket(seriesA, "yearMonth");
+        const bB = aggregateByCalendarBucket(seriesB, "yearMonth");
+        const keys = [...bA.keys()].filter((k) => bB.has(k)).sort();
+        for (const key of keys) {
+          const a = bA.get(key)!;
+          const b = bB.get(key)!;
+          paired.push({ date: key, tA: a.t, tB: b.t, rawA: a.value, rawB: b.value });
+        }
+      }
+
+      if (paired.length < 3) {
+        paired.length = 0;
+        const yA = aggregateByCalendarBucket(seriesA, "year");
+        const yB = aggregateByCalendarBucket(seriesB, "year");
+        const keys = [...yA.keys()].filter((k) => yB.has(k)).sort();
+        for (const key of keys) {
+          const a = yA.get(key)!;
+          const b = yB.get(key)!;
+          paired.push({ date: key, tA: a.t, tB: b.t, rawA: a.value, rawB: b.value });
+        }
+      }
+    } else {
+      // Only align by index when synthetic non-calendar step identifiers are used
+      paired.length = 0;
+      const len = Math.min(seriesA.length, seriesB.length);
+      for (let i = 0; i < len; i++) {
+        paired.push({
+          date: seriesA[i].date,
+          tA: seriesA[i].t,
+          tB: seriesB[i].t,
+          rawA: seriesA[i].value,
+          rawB: seriesB[i].value,
+        });
+      }
     }
   }
 
@@ -872,6 +1110,21 @@ export function compareRegionalSeries(
     classification,
   });
 
+  const hasInterannualVariability =
+    n >= 10 &&
+    stdA > 1e-9 &&
+    stdB > 1e-9 &&
+    stdResA / stdA > 0.05 &&
+    stdResB / stdB > 0.05;
+  const hasPhysicalVariabilityCoupling =
+    (Math.abs(detrendedR) >= 0.3 && detrendedPValue < 0.08) ||
+    (Math.abs(optimalLagR) >= 0.35 && optimalLagPValue < 0.05);
+  const isSecularDriftOnly =
+    hasInterannualVariability &&
+    Math.abs(pearsonR) >= 0.45 &&
+    pValue < 0.05 &&
+    !hasPhysicalVariabilityCoupling;
+
   return {
     pearsonR,
     spearmanRho,
@@ -891,6 +1144,7 @@ export function compareRegionalSeries(
     mechanism,
     couplingRegime,
     classification,
+    isSecularDriftOnly,
     alignedPoints,
   };
 }

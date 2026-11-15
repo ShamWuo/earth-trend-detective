@@ -7,6 +7,8 @@ out/
 
 # Local ETG persistence cache
 .etg-cache/
+.data/
+__pycache__/
 
 # Env
 .env

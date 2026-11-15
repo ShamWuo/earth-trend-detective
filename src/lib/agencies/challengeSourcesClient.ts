@@ -196,6 +196,40 @@ export function parseKnmiIndexDat(
   return points.sort((a, b) => a.t - b.t);
 }
 
+/**
+ * Pure parser for KNMI Climate Explorer `.dat` monthly index tables preserving
+ * all 12 monthly columns (`YYYY-MM`) for multi-scale teleconnection modeling.
+ */
+export function parseKnmiMonthlyIndexDat(
+  text: string,
+  startYear = 1995,
+  endYear = 2025
+): TimeSeriesPoint[] {
+  const points: TimeSeriesPoint[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    const parts = line.split(/\s+/);
+    if (parts.length < 2) continue;
+
+    const year = Number(parts[0]);
+    if (!Number.isInteger(year) || year < startYear || year > endYear) continue;
+
+    for (let m = 1; m <= Math.min(12, parts.length - 1); m++) {
+      const v = Number(parts[m]);
+      if (!Number.isFinite(v) || v <= -900) continue;
+      points.push({
+        date: `${year}-${String(m).padStart(2, "0")}`,
+        t: Number((year + (m - 0.5) / 12).toFixed(4)),
+        value: Number(v.toFixed(3)),
+      });
+    }
+  }
+
+  return points.sort((a, b) => a.t - b.t);
+}
+
 interface KnmiIndexSpec {
   id: string;
   url: string;
@@ -275,6 +309,47 @@ export async function fetchKnmiClimateIndices(
       const points = parseKnmiIndexDat(txt, startYear, endYear);
       if (points.length < 5) {
         throw new Error(`KNMI ${spec.id} yielded insufficient annual rows`);
+      }
+      const record: AgencyTimeSeriesRecord = {
+        id: spec.id,
+        name: spec.name,
+        region: spec.region,
+        lat: spec.lat,
+        lng: spec.lng,
+        dataset: spec.dataset,
+        parameter: spec.parameter,
+        unit: spec.unit,
+        slopeUnit: spec.slopeUnit,
+        sourceSystem: "KNMI Climate Explorer",
+        sourceUrl: spec.url,
+        provenance: "KNMI Climate Explorer (Live)",
+        producerType: "research_station",
+        points,
+      };
+      return record;
+    })
+  );
+
+  return settled
+    .filter((r): r is PromiseFulfilledResult<AgencyTimeSeriesRecord> => r.status === "fulfilled")
+    .map((r) => r.value);
+}
+
+export async function fetchKnmiMonthlyClimateIndices(
+  startYear = 1995,
+  endYear = 2025
+): Promise<AgencyTimeSeriesRecord[]> {
+  const settled = await Promise.allSettled(
+    KNMI_INDICES.map(async (spec) => {
+      const res = await fetch(spec.url, {
+        signal: AbortSignal.timeout(10000),
+        headers: { "User-Agent": USER_AGENT },
+      });
+      if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
+      const txt = await res.text();
+      const points = parseKnmiMonthlyIndexDat(txt, startYear, endYear);
+      if (points.length < 24) {
+        throw new Error(`KNMI ${spec.id} yielded insufficient monthly rows`);
       }
       const record: AgencyTimeSeriesRecord = {
         id: spec.id,

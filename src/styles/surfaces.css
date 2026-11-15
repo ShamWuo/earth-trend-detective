@@ -14,3 +14,27 @@
     linear-gradient(90deg, var(--blueprint-line) 1px, transparent 1px);
   background-size: 40px 40px;
 }
+
+/* Native Popover API + CSS Anchor Positioning (progressive enhancement per MDN / web.dev) */
+.etg-guide-trigger {
+  anchor-name: --etg-guide-anchor;
+}
+
+.etg-guide-popover {
+  position-anchor: --etg-guide-anchor;
+}
+
+@supports (position-area: block-end) {
+  .etg-guide-popover {
+    inset: auto;
+    margin: 0.375rem 0 0 0;
+    position-area: block-end span-inline-end;
+    position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+  }
+}
+
+@supports not (position-area: block-end) {
+  .etg-guide-popover {
+    max-width: min(26rem, calc(100vw - 2rem));
+  }
+}

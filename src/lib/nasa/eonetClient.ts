@@ -1,4 +1,5 @@
 import { haversineKm } from "@/lib/graph/etgStore";
+import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
 import type { ETGDatasetId, ETGNode } from "@/types/etg";
 
 interface EonetGeometry {
@@ -143,6 +144,7 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
         importance: 8,
         lat: Number(lat.toFixed(3)),
         lng: Number(lng.toFixed(3)),
+        region: classifyEarthRegionByCoord(lat, lng).label,
         dataset,
         producer_type: "nasa_satellite",
         confidence: 0.92,

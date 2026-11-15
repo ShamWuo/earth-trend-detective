@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
+  Download,
   GitCompare,
   Globe2,
-  MoreHorizontal,
+  MoreVertical,
   Network,
   Plus,
   RefreshCw,
@@ -13,30 +14,59 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
+  Sun,
+  Upload,
   X,
 } from "lucide-react";
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import { findMultiHopCascades } from "@/lib/graph/cascadeTracer";
-import { ETG_LABEL_PALETTE } from "@/lib/graph/graphVisuals";
+import { ETG_LABEL_PALETTE, filterEtgGraphData } from "@/lib/graph/graphVisuals";
 import type {
+  CandidateLinkSuggestion,
   CrossRegionComparison,
+  CurrentEarthConditions,
   EarthCascadeChain,
   ETGDatasetId,
   ETGEdge,
   ETGNode,
   ETGNodeLabel,
   ETGRelationshipType,
+  NodeTrendMicroscopeCue,
+  RelationCategory,
+  SubgraphTraversalResult,
+  TelemetryFailureKind,
+  TelemetryQueryDiagnostics,
+  TemperatureUnit,
   TrendAnalysisSummary,
+  TrendMicroscopeScanResult,
 } from "@/types/etg";
+import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
+import { inferEmbeddedSeriesUnits } from "@/lib/earth/currentConditionsClient";
 import { DATASET_BY_ID } from "@/lib/datasets";
-import { humanizeNodeText } from "@/lib/plainLanguage";
+import {
+  ALL_ETG_RELATIONSHIP_TYPES,
+  ALL_RELATION_CATEGORIES,
+  RELATION_CATEGORY_META,
+  classifyRelationCategory,
+  findNearbyFilteredNodes,
+  formatRelationForDisplay,
+  getRelationshipTypesForFilter,
+  humanizeNodeText,
+} from "@/lib/plainLanguage";
+import { assignNodeRegions, extractRegionOptions } from "@/lib/graph/regionalSubgraph";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { DatasetSelector } from "@/components/DatasetSelector";
 import { TimelineScrubber } from "@/components/TimelineScrubber";
-import { EarthGlobe3D } from "@/components/EarthGlobe3D";
-import { EarthTrendGraphView } from "@/components/EarthTrendGraphView";
+import { EarthGlobe3D, type RegionalFocusRequest } from "@/components/EarthGlobe3D";
+import {
+  EarthTrendGraphView,
+  type TraversalFilterState,
+} from "@/components/EarthTrendGraphView";
+import { GraphNodeWorkbenchPanel } from "@/components/GraphNodeWorkbenchPanel";
 import { CompactSpotCard } from "@/components/CompactSpotCard";
 import { IngestionModal, type IngestionTabId } from "@/components/IngestionModal";
+import { SolarMicrogridPanel } from "@/components/SolarMicrogridPanel";
+import { AiGraphChatPanel } from "@/components/AiGraphChatPanel";
 
 type WorkspaceViewMode = "graph" | "globe";
 type GraphRenderMode = "3d" | "2d";
@@ -58,22 +88,63 @@ const GRIDDED_TOPIC_SET = new Set<ETGDatasetId>([
   "air_quality",
 ]);
 
-interface DetectiveBriefing {
-  engine: string;
-  briefing: string;
-  citedNodes: string[];
-  telemetrySummary?: {
-    verdict: string;
-    pValue: number;
-    slope: number;
-    slopeUnit: string;
-  };
-}
+const EMPTY_ROLE_BY_NODE: SubgraphTraversalResult["roleByNode"] = {};
+const EMPTY_HOP_BY_NODE: SubgraphTraversalResult["hopByNode"] = {};
+const EMPTY_CASCADE_EDGE_UUIDS: string[] = [];
 
 function getNodeTimestampMs(node: ETGNode): number {
   const raw = node.properties.observed_at || node.properties.created_at;
   const parsed = Date.parse(raw);
   return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function isSameSpotCoord(
+  a: { lat: number; lng: number } | null | undefined,
+  lat: number,
+  lng: number
+): boolean {
+  return Boolean(
+    a &&
+      Number.isFinite(a.lat) &&
+      Number.isFinite(a.lng) &&
+      Math.hypot(a.lat - lat, a.lng - lng) <= 0.25
+  );
+}
+
+function computeClientEmbeddedSummary(
+  node: ETGNode | null | undefined
+): TrendAnalysisSummary | null {
+  if (!node) return null;
+  if (
+    typeof node.properties.lat !== "number" ||
+    typeof node.properties.lng !== "number"
+  ) {
+    return null;
+  }
+  const rawSeries = node.properties.series;
+  if (!Array.isArray(rawSeries) || rawSeries.length < 5) return null;
+
+  const cleanSeries = rawSeries.filter(
+    (pt) =>
+      pt &&
+      typeof pt.date === "string" &&
+      typeof pt.t === "number" &&
+      Number.isFinite(pt.t) &&
+      typeof pt.value === "number" &&
+      Number.isFinite(pt.value)
+  );
+  if (cleanSeries.length < 5) return null;
+
+  const { unit, slopeUnit } = inferEmbeddedSeriesUnits(node.properties);
+  return analyzeTimeSeries(cleanSeries, {
+    lat: node.properties.lat,
+    lng: node.properties.lng,
+    dataset: node.properties.dataset || "nasa_power",
+    parameter: node.properties.parameter || node.properties.name,
+    unit,
+    slopeUnit,
+    provenance: node.properties.provenance_source || "Empirical Dataset (Imported)",
+  });
 }
 
 function hidePopoverById(id: string) {
@@ -87,11 +158,118 @@ function hidePopoverById(id: string) {
   }
 }
 
+interface GuidedDipoleCase {
+  id: string;
+  shortLabel: string;
+  title: string;
+  subtitle: string;
+  spotA: { lat: number; lng: number; dataset: ETGDatasetId; name: string };
+  spotB: { lat: number; lng: number; dataset: ETGDatasetId; name: string };
+}
+
+const GUIDED_DIPOLE_CASES: readonly GuidedDipoleCase[] = [
+  {
+    id: "enso-pacific-dipole",
+    shortLabel: "ENSO Rainfall Seesaw",
+    title: "ENSO Pacific Rainfall Seesaw",
+    subtitle:
+      "Warm Eastern Pacific boosts South American coastal moisture while suppressing Maritime Continent rainfall",
+    spotA: { lat: -12.05, lng: -77.04, dataset: "hydrology", name: "Lima / Coastal Peru" },
+    spotB: { lat: -12.46, lng: 130.84, dataset: "hydrology", name: "Darwin / Northern Australia" },
+  },
+  {
+    id: "arctic-north-atlantic",
+    shortLabel: "Arctic vs. Subpolar Gyre",
+    title: "Arctic Amplification vs. Subpolar Gyre",
+    subtitle:
+      "Rapid high-Arctic surface warming contrasted against North Atlantic subpolar ocean temperature shifts",
+    spotA: { lat: 78.22, lng: 15.63, dataset: "nasa_power", name: "Svalbard / Barents Sea" },
+    spotB: { lat: 53.0, lng: -35.0, dataset: "ocean_temp", name: "Subpolar North Atlantic" },
+  },
+  {
+    id: "western-us-aridity-east-hydro",
+    shortLabel: "West VPD vs. Midwest Discharge",
+    title: "Western Fire Aridity vs. Midwest Discharge",
+    subtitle:
+      "Rising Vapor Pressure Deficit fuel aridity in the West vs. wetting river discharge trends in the Midwest",
+    spotA: { lat: 39.73, lng: -121.61, dataset: "wildfire", name: "Northern California Foothills" },
+    spotB: { lat: 37.0, lng: -89.18, dataset: "hydrology", name: "Lower Ohio / Mississippi Basin" },
+  },
+  {
+    id: "boulder-front-range-aridity",
+    shortLabel: "Boulder VPD vs. Divide Moisture",
+    title: "Boulder Front Range Aridity vs. Continental Divide Moisture",
+    subtitle:
+      "Boulder foothills warming & Vapor Pressure Deficit shifts contrasted with high-elevation Continental Divide snow/moisture",
+    spotA: { lat: 40.015, lng: -105.2705, dataset: "wildfire", name: "Boulder, CO (Front Range)" },
+    spotB: { lat: 40.055, lng: -105.588, dataset: "hydrology", name: "Niwot Ridge / Continental Divide" },
+  },
+];
+
+const TO_RAD = Math.PI / 180;
+const TO_DEG = 180 / Math.PI;
+
+/**
+ * Computes a framing center and camera radius that keeps both dipole endpoints
+ * in view while avoiding polar pull on wide trans-oceanic pairs (e.g., Peru ↔ Australia).
+ */
+export function computeDipoleFramingTarget(
+  spotA: { lat: number; lng: number },
+  spotB: { lat: number; lng: number }
+): { lat: number; lng: number; radius: number } {
+  const phi1 = spotA.lat * TO_RAD;
+  const lam1 = spotA.lng * TO_RAD;
+  const phi2 = spotB.lat * TO_RAD;
+  const lam2 = spotB.lng * TO_RAD;
+
+  const u1x = Math.cos(phi1) * Math.cos(lam1);
+  const u1y = Math.sin(phi1);
+  const u1z = Math.cos(phi1) * Math.sin(lam1);
+
+  const u2x = Math.cos(phi2) * Math.cos(lam2);
+  const u2y = Math.sin(phi2);
+  const u2z = Math.cos(phi2) * Math.sin(lam2);
+
+  const dot = Math.max(-1, Math.min(1, u1x * u2x + u1y * u2y + u1z * u2z));
+  const omega = Math.acos(dot);
+
+  let mx = u1x + u2x;
+  let my = u1y + u2y;
+  let mz = u1z + u2z;
+  let mLenSq = mx * mx + my * my + mz * mz;
+
+  if (mLenSq < 1e-6) {
+    // Nearly antipodal: cross u1 with an orthogonal reference axis
+    const ax = Math.abs(u1y) < 0.9 ? 0 : 1;
+    const ay = Math.abs(u1y) < 0.9 ? 1 : 0;
+    const az = 0;
+    mx = u1y * az - u1z * ay;
+    my = u1z * ax - u1x * az;
+    mz = u1x * ay - u1y * ax;
+    mLenSq = mx * mx + my * my + mz * mz || 1;
+  }
+
+  const mLen = Math.sqrt(mLenSq);
+  mx /= mLen;
+  my /= mLen;
+  mz /= mLen;
+
+  const midLat = Math.asin(Math.max(-1, Math.min(1, my))) * TO_DEG;
+  const midLng = Math.atan2(mz, mx) * TO_DEG;
+  const lat = omega > 1.8 ? (spotA.lat + spotB.lat) / 2 : midLat;
+  const radius = Math.min(295, Math.max(248, Math.round(238 + omega * 22)));
+
+  return { lat, lng: midLng, radius };
+}
+
 export function DetectiveWorkspace({
   initialSnapshot,
+  initialDemoMode = null,
 }: {
   initialSnapshot: EtgGraphSnapshot;
+  initialDemoMode?: "spaceapps" | "veritas" | null;
 }) {
+  const bundleInputId = useId();
   const [snapshot, setSnapshot] = useState<EtgGraphSnapshot>(initialSnapshot);
   const [viewMode, setViewMode] = useState<WorkspaceViewMode>("globe");
   const [graphRenderMode, setGraphRenderMode] = useState<GraphRenderMode>("3d");
@@ -113,6 +291,42 @@ export function DetectiveWorkspace({
     targetUuid?: string;
   } | null>(null);
   const [activeCascade, setActiveCascade] = useState<EarthCascadeChain | null>(null);
+  const [solarGraphOpen, setSolarGraphOpen] = useState(false);
+  const [aiStudioOpen, setAiStudioOpen] = useState<boolean>(
+    () => initialDemoMode !== "veritas"
+  );
+  const [regionalFocusRequest, setRegionalFocusRequest] =
+    useState<RegionalFocusRequest | null>(null);
+  const regionalFocusSeqRef = useRef(0);
+
+  const requestRegionalFocus = useCallback((lat: number, lng: number, radius = 132) => {
+    regionalFocusSeqRef.current += 1;
+    setRegionalFocusRequest({
+      lat,
+      lng,
+      radius,
+      seq: regionalFocusSeqRef.current,
+    });
+  }, []);
+
+  // Flexible Knowledge Graph Workbench State
+  const [connectMode, setConnectMode] = useState(false);
+  const [connectSourceUuid, setConnectSourceUuid] = useState<string | null>(null);
+  const [pendingConnectPair, setPendingConnectPair] = useState<{
+    sourceUuid: string;
+    targetUuid: string;
+  } | null>(null);
+  const [quickAddNodeOpen, setQuickAddNodeOpen] = useState(false);
+  const [candidateLinks, setCandidateLinks] = useState<CandidateLinkSuggestion[]>([]);
+  const [discoveringLinks, setDiscoveringLinks] = useState(false);
+  const [traversalFilter, setTraversalFilter] = useState<TraversalFilterState>({
+    maxHops: null,
+    direction: "both",
+    layoutMode: "force",
+  });
+  const [traversalSubgraph, setTraversalSubgraph] = useState<SubgraphTraversalResult | null>(null);
+  const [traversalHistory, setTraversalHistory] = useState<Array<{ uuid: string; name: string }>>([]);
+  const [selectedRegionScope, setSelectedRegionScope] = useState<string | null>(null);
 
   // Timeline state (used in 3D Earth view & observation filtering)
   const { minMs, maxMs } = useMemo(() => {
@@ -133,11 +347,57 @@ export function DetectiveWorkspace({
   // Telemetry state
   const [telemetryPrimary, setTelemetryPrimary] = useState<TrendAnalysisSummary | null>(null);
   const [telemetrySecondary, setTelemetrySecondary] = useState<TrendAnalysisSummary | null>(null);
+  const [telemetryCurrent, setTelemetryCurrent] = useState<CurrentEarthConditions | null>(null);
+  const [telemetrySecondaryCurrent, setTelemetrySecondaryCurrent] =
+    useState<CurrentEarthConditions | null>(null);
   const [telemetrySummaries, setTelemetrySummaries] = useState<TrendAnalysisSummary[]>([]);
   const [focusedSummaryDataset, setFocusedSummaryDataset] = useState<ETGDatasetId | null>(null);
   const [comparison, setComparison] = useState<CrossRegionComparison | null>(null);
   const [telemetryLoading, setTelemetryLoading] = useState(false);
   const [telemetryError, setTelemetryError] = useState<string | null>(null);
+  const [telemetryDiagnostics, setTelemetryDiagnostics] =
+    useState<TelemetryQueryDiagnostics | null>(null);
+  const [telemetryFailureKind, setTelemetryFailureKind] =
+    useState<TelemetryFailureKind | null>(null);
+
+  // User display preferences (persisted in localStorage)
+  const [tempUnit, setTempUnit] = useState<TemperatureUnit>("C");
+  const [tempUnitHydrated, setTempUnitHydrated] = useState(false);
+  const [mobileSheetCollapsed, setMobileSheetCollapsed] = useState(false);
+  const [enabledRelationCategories, setEnabledRelationCategories] = useState<RelationCategory[]>([
+    ...ALL_RELATION_CATEGORIES,
+  ]);
+  const [relationPopoverFilter, setRelationPopoverFilter] = useState<
+    "all" | "opposite" | "causal" | "coupled" | "chains"
+  >("all");
+
+  useEffect(() => {
+    try {
+      const savedUnit = window.localStorage.getItem("etg:temp-unit:v1");
+      if (savedUnit === "C" || savedUnit === "F") {
+        setTempUnit(savedUnit);
+      }
+    } catch {
+      // Ignore storage errors
+    } finally {
+      setTempUnitHydrated(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!tempUnitHydrated) return;
+    try {
+      window.localStorage.setItem("etg:temp-unit:v1", tempUnit);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [tempUnitHydrated, tempUnit]);
+
+  const toggleRelationCategoryFilter = useCallback((cat: RelationCategory) => {
+    setEnabledRelationCategories((prev) =>
+      prev.includes(cat) ? prev.filter((item) => item !== cat) : [...prev, cat]
+    );
+  }, []);
 
   // Modal state
   const [ingestOpen, setIngestOpen] = useState(false);
@@ -154,32 +414,164 @@ export function DetectiveWorkspace({
     return () => window.clearTimeout(t);
   }, [statusMessage]);
 
-  // AI Detective synthesis
-  const [question, setQuestion] = useState("");
-  const [detectiveBusy, setDetectiveBusy] = useState(false);
-  const [briefing, setBriefing] = useState<DetectiveBriefing | null>(null);
+  const [microscopeScan, setMicroscopeScan] = useState<TrendMicroscopeScanResult | null>(null);
 
   // View-transition focus target & telemetry refs
   const viewHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const telemetrySummariesRef = useRef<TrendAnalysisSummary[]>([]);
   telemetrySummariesRef.current = telemetrySummaries;
+  const telemetryPrimaryRef = useRef<TrendAnalysisSummary | null>(null);
+  telemetryPrimaryRef.current = telemetryPrimary;
+  const telemetryCurrentRef = useRef<CurrentEarthConditions | null>(null);
+  telemetryCurrentRef.current = telemetryCurrent;
   const telemetryLoadingRef = useRef(false);
   telemetryLoadingRef.current = telemetryLoading;
+  const telemetryReqSeqRef = useRef(0);
+  const lastTelemetryArgsRef = useRef<{
+    lat: number;
+    lng: number;
+    dataset: ETGDatasetId;
+    compareWith?: { lat: number; lng: number; dataset?: ETGDatasetId; nodeUuid?: string };
+    nodeUuid?: string;
+    datasetsList?: ETGDatasetId[];
+  } | null>(null);
 
-  // Close Right Inspector Sheet with Escape key
+  // Auto-expand mobile Spot Summary sheet whenever user selects a new spot/node/relation
   useEffect(() => {
-    if (!inspectorOpen) return;
+    setMobileSheetCollapsed(false);
+  }, [selectedNodeUuid, selectedEdgeUuid, probedCoord]);
+
+  // Close Right Inspector Sheet / Cancel Connect or Compare Mode with Escape key
+  // (after any open native popover or modal dialog handles Escape first)
+  useEffect(() => {
+    if (!inspectorOpen && !connectMode && !quickAddNodeOpen && !compareMode) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setInspectorOpen(false);
-        setSelectedNodeUuid(null);
-        setSelectedEdgeUuid(null);
-        setCompareMode(false);
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (document.querySelector('[popover]:popover-open, dialog[open], [role="dialog"]')) {
+        return;
       }
+      setInspectorOpen(false);
+      setSelectedNodeUuid(null);
+      setSelectedEdgeUuid(null);
+      setCompareMode(false);
+      setConnectMode(false);
+      setConnectSourceUuid(null);
+      setPendingConnectPair(null);
+      setQuickAddNodeOpen(false);
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [inspectorOpen]);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [inspectorOpen, connectMode, quickAddNodeOpen, compareMode]);
+
+  // Keep server-computed k-hop subgraph & causal roles synchronized when traversing
+  useEffect(() => {
+    if (viewMode !== "graph" || !selectedNodeUuid) {
+      setTraversalSubgraph(null);
+      return;
+    }
+    const needTraversal =
+      traversalFilter.maxHops !== null ||
+      traversalFilter.direction !== "both" ||
+      traversalFilter.layoutMode === "causal_flow";
+    if (!needTraversal) {
+      setTraversalSubgraph(null);
+      return;
+    }
+
+    const allowedEdgeTypes = getRelationshipTypesForFilter(
+      onlyOpposite,
+      enabledRelationCategories
+    );
+    if (allowedEdgeTypes.length === 0) {
+      const rootNode = snapshot.nodes.find((n) => n.uuid === selectedNodeUuid);
+      setTraversalSubgraph(
+        rootNode
+          ? {
+              rootUuid: rootNode.uuid,
+              maxHops: traversalFilter.maxHops ?? 3,
+              direction: traversalFilter.direction,
+              nodes: [rootNode],
+              edges: [],
+              hopByNode: { [rootNode.uuid]: 0 },
+              roleByNode: { [rootNode.uuid]: "root" },
+              causalPaths: [],
+            }
+          : null
+      );
+      return;
+    }
+
+    let cancelled = false;
+    const params = new URLSearchParams({
+      mode: "subgraph",
+      rootUuid: selectedNodeUuid,
+      maxHops: String(traversalFilter.maxHops ?? 3),
+      direction: traversalFilter.direction,
+      includeSuperseded: String(showSuperseded),
+    });
+    if (allowedEdgeTypes.length < ALL_ETG_RELATIONSHIP_TYPES.length) {
+      params.set("edgeTypes", allowedEdgeTypes.join(","));
+    }
+
+    fetch(`/api/graph/traverse?${params.toString()}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data && Array.isArray(data.nodes)) {
+          setTraversalSubgraph(data as SubgraphTraversalResult);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTraversalSubgraph(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    viewMode,
+    selectedNodeUuid,
+    traversalFilter.maxHops,
+    traversalFilter.direction,
+    traversalFilter.layoutMode,
+    showSuperseded,
+    onlyOpposite,
+    enabledRelationCategories,
+    snapshot.edges.length,
+    snapshot.nodes.length,
+  ]);
+
+  // Keep ETG Trend Microscope radar cues synchronized with live graph & selection
+  useEffect(() => {
+    if (snapshot.nodes.length === 0) {
+      setMicroscopeScan(null);
+      return;
+    }
+    let cancelled = false;
+    const focusParam = selectedNodeUuid
+      ? `&focusUuid=${encodeURIComponent(selectedNodeUuid)}`
+      : "";
+    fetch(`/api/graph/microscope?topK=8${focusParam}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data && Array.isArray(data.nodes)) {
+          setMicroscopeScan(data as TrendMicroscopeScanResult);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setMicroscopeScan(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot.nodes.length, snapshot.edges.length, selectedNodeUuid]);
+
+  const microscopeByNode = useMemo<Record<string, NodeTrendMicroscopeCue>>(() => {
+    const out: Record<string, NodeTrendMicroscopeCue> = {};
+    for (const cue of microscopeScan?.nodes ?? []) {
+      out[cue.uuid] = cue;
+    }
+    return out;
+  }, [microscopeScan]);
 
   const refreshGraph = useCallback(async () => {
     const res = await fetch("/api/graph", { cache: "no-store" });
@@ -225,6 +617,15 @@ export function DetectiveWorkspace({
       nodeUuid?: string,
       datasetsList?: ETGDatasetId[]
     ) => {
+      const reqId = ++telemetryReqSeqRef.current;
+      lastTelemetryArgsRef.current = {
+        lat,
+        lng,
+        dataset,
+        compareWith,
+        nodeUuid,
+        datasetsList,
+      };
       setTelemetryLoading(true);
       setTelemetryError(null);
       try {
@@ -250,31 +651,106 @@ export function DetectiveWorkspace({
         const res = await fetch(`/api/earth/timeseries?${params.toString()}`, {
           cache: "no-store",
         });
-        const data = await res.json();
-        if (res.ok) {
-          setTelemetryPrimary(data.primary ?? null);
-          setTelemetrySecondary(data.secondary ?? null);
-          setComparison(data.comparison ?? null);
-          setTelemetrySummaries(
-            Array.isArray(data.summaries)
-              ? data.summaries
-              : data.primary
-                ? [data.primary]
-                : []
+        const data = await res.json().catch(() => null);
+        if (reqId !== telemetryReqSeqRef.current) return;
+
+        if (res.ok && data) {
+          const incomingPrimary: TrendAnalysisSummary | null = data.primary ?? null;
+          const incomingSummaries: TrendAnalysisSummary[] = Array.isArray(data.summaries)
+            ? data.summaries
+            : incomingPrimary
+              ? [incomingPrimary]
+              : [];
+          const incomingDiagnostics: TelemetryQueryDiagnostics | null =
+            data.diagnostics ?? null;
+          const incomingCurrent: CurrentEarthConditions | null = data.current ?? null;
+
+          const sameSpotPrevSummaries = telemetrySummariesRef.current.filter((s) =>
+            isSameSpotCoord(s, lat, lng)
           );
+          const sameSpotPrevCurrent =
+            telemetryCurrentRef.current &&
+            isSameSpotCoord(telemetryCurrentRef.current, lat, lng)
+              ? telemetryCurrentRef.current
+              : null;
+
+          // If a transient partial retry failed for a topic we already loaded at this spot, preserve it
+          let mergedSummaries = incomingSummaries;
+          if (!compareWith && sameSpotPrevSummaries.length > 0) {
+            const incomingKeys = new Set(
+              incomingSummaries.map((s) => `${s.dataset}:${s.parameter}`)
+            );
+            const failedDatasets = new Set(
+              (incomingDiagnostics?.datasets ?? [])
+                .filter((d) => d.status === "failed_to_fetch")
+                .map((d) => d.dataset)
+            );
+            const preserved = sameSpotPrevSummaries.filter(
+              (s) =>
+                !incomingKeys.has(`${s.dataset}:${s.parameter}`) &&
+                failedDatasets.has(s.dataset)
+            );
+            if (preserved.length > 0) {
+              mergedSummaries = [...incomingSummaries, ...preserved];
+            }
+          }
+
+          const preservedCurrent =
+            incomingCurrent ??
+            (incomingDiagnostics?.current?.weatherStatus === "failed_to_fetch"
+              ? sameSpotPrevCurrent
+              : null);
+
+          setTelemetryPrimary(
+            incomingPrimary ?? mergedSummaries[0] ?? (sameSpotPrevSummaries[0] ?? null)
+          );
+          setTelemetrySecondary(data.secondary ?? null);
+          setTelemetryCurrent(preservedCurrent);
+          setTelemetrySecondaryCurrent(data.secondaryCurrent ?? null);
+          setComparison(data.comparison ?? null);
+          setTelemetrySummaries(mergedSummaries);
+          setTelemetryDiagnostics(incomingDiagnostics);
+          setTelemetryFailureKind(data.failureKind ?? null);
         } else {
-          setTelemetryError(data.error || "Live Earth data temporarily unavailable.");
+          setTelemetryDiagnostics(data?.diagnostics ?? null);
+          setTelemetryFailureKind(data?.failureKind ?? "failed_to_fetch");
+          setTelemetryError(
+            data?.error ||
+              `Failed to fetch telemetry from /api/earth/timeseries (HTTP ${res.status}).`
+          );
         }
       } catch (err) {
-        setTelemetryError(
-          err instanceof Error ? err.message : "Failed to fetch live Earth data."
-        );
+        if (reqId !== telemetryReqSeqRef.current) return;
+        const rawMsg =
+          err instanceof Error ? err.message : "Failed to fetch live Earth data.";
+        const friendlyMsg = /failed to fetch|networkerror|load failed|fetch failed/i.test(
+          rawMsg
+        )
+          ? "Failed to fetch telemetry from /api/earth/timeseries (local server or network unreachable)."
+          : rawMsg;
+        setTelemetryFailureKind("failed_to_fetch");
+        setTelemetryError(friendlyMsg);
       } finally {
-        setTelemetryLoading(false);
+        if (reqId === telemetryReqSeqRef.current) {
+          setTelemetryLoading(false);
+        }
       }
     },
     []
   );
+
+  const retryTelemetry = useCallback(() => {
+    const last = lastTelemetryArgsRef.current;
+    if (!last) return;
+    void queryTimeSeries(
+      last.lat,
+      last.lng,
+      last.dataset,
+      last.compareWith,
+      last.nodeUuid,
+      last.datasetsList
+    );
+  }, [queryTimeSeries]);
 
   const toggleTopic = useCallback((ds: ETGDatasetId) => {
     setActiveTopics((prev) =>
@@ -379,6 +855,75 @@ export function DetectiveWorkspace({
     };
   }, [snapshot.nodes, snapshot.edges, activeTopics, cutoffMs]);
 
+  const activeTraversal = useMemo(
+    () =>
+      traversalSubgraph && traversalSubgraph.rootUuid === selectedNodeUuid
+        ? traversalSubgraph
+        : null,
+    [traversalSubgraph, selectedNodeUuid]
+  );
+
+  const { graphNodes, graphEdges } = useMemo(() => {
+    const useSubgraphSubset =
+      traversalFilter.maxHops !== null && activeTraversal !== null;
+    if (!useSubgraphSubset || !activeTraversal) {
+      return { graphNodes: visibleNodes, graphEdges: visibleEdges };
+    }
+    const visibleIdSet = new Set(visibleNodes.map((n) => n.uuid));
+    const scopedNodes = activeTraversal.nodes.filter((n) => visibleIdSet.has(n.uuid));
+    const scopedSet = new Set(scopedNodes.map((n) => n.uuid));
+    const scopedEdges = activeTraversal.edges.filter(
+      (e) => scopedSet.has(e.source_uuid) && scopedSet.has(e.target_uuid)
+    );
+    return { graphNodes: scopedNodes, graphEdges: scopedEdges };
+  }, [visibleNodes, visibleEdges, traversalFilter.maxHops, activeTraversal]);
+
+  const filteredGraphSubset = useMemo(
+    () =>
+      filterEtgGraphData(
+        graphNodes,
+        graphEdges,
+        onlyOpposite,
+        showSuperseded,
+        enabledRelationCategories
+      ),
+    [graphNodes, graphEdges, onlyOpposite, showSuperseded, enabledRelationCategories]
+  );
+
+  const nodeRegionMap = useMemo(
+    () => assignNodeRegions(filteredGraphSubset.visibleNodes),
+    [filteredGraphSubset.visibleNodes]
+  );
+  const regionOptions = useMemo(
+    () => extractRegionOptions(filteredGraphSubset.visibleNodes),
+    [filteredGraphSubset.visibleNodes]
+  );
+
+  useEffect(() => {
+    if (
+      selectedRegionScope !== null &&
+      !regionOptions.some((o) => o.id === selectedRegionScope)
+    ) {
+      setSelectedRegionScope(null);
+    }
+  }, [selectedRegionScope, regionOptions]);
+
+  const prevSelectedNodeForRegionRef = useRef<string | null>(selectedNodeUuid);
+  useEffect(() => {
+    if (selectedNodeUuid === prevSelectedNodeForRegionRef.current) return;
+    prevSelectedNodeForRegionRef.current = selectedNodeUuid;
+    if (selectedNodeUuid && selectedRegionScope !== null) {
+      const nextReg = nodeRegionMap.get(selectedNodeUuid)?.id;
+      if (
+        nextReg &&
+        nextReg !== selectedRegionScope &&
+        regionOptions.some((o) => o.id === nextReg)
+      ) {
+        setSelectedRegionScope(nextReg);
+      }
+    }
+  }, [selectedNodeUuid, selectedRegionScope, nodeRegionMap, regionOptions]);
+
   const selectedNode = useMemo(
     () => snapshot.nodes.find((n) => n.uuid === selectedNodeUuid) || null,
     [snapshot.nodes, selectedNodeUuid]
@@ -398,6 +943,19 @@ export function DetectiveWorkspace({
     const id = selectedEdge?.target_uuid ?? relationNodePair?.targetUuid;
     return id ? snapshot.nodes.find((n) => n.uuid === id) || null : null;
   }, [snapshot.nodes, selectedEdge, relationNodePair]);
+
+  const probedAnchorUuid = useMemo(() => {
+    if (selectedNodeUuid) return selectedNodeUuid;
+    if (!probedCoord) return null;
+    const hit = findNearbyFilteredNodes(
+      probedCoord.lat,
+      probedCoord.lng,
+      globeNodes,
+      850,
+      1
+    )[0];
+    return hit?.node.uuid ?? null;
+  }, [selectedNodeUuid, probedCoord, globeNodes]);
 
   const cascades = useMemo(
     () =>
@@ -460,29 +1018,105 @@ export function DetectiveWorkspace({
       setCompareMode(false);
       setRelationNodePair(null);
       setFocusedSummaryDataset(null);
+      setQuickAddNodeOpen(false);
+      setPendingConnectPair(null);
+      setConnectSourceUuid(null);
+      setConnectMode(false);
+      setTraversalHistory((prev) => {
+        if (prev[prev.length - 1]?.uuid === node.uuid) return prev;
+        return [...prev.slice(-11), { uuid: node.uuid, name: node.properties.name }];
+      });
       setInspectorOpen(true);
+      const embedded = computeClientEmbeddedSummary(node);
       if (
         typeof node.properties.lat === "number" &&
         typeof node.properties.lng === "number"
       ) {
         const lat = node.properties.lat;
         const lng = node.properties.lng;
+        const prevAnchor =
+          telemetryPrimaryRef.current ??
+          telemetrySummariesRef.current[0] ??
+          telemetryCurrentRef.current;
+        const sameSpot = isSameSpotCoord(prevAnchor, lat, lng);
+
         setProbedCoord({ lat, lng });
+        setTelemetrySecondary(null);
+        setTelemetrySecondaryCurrent(null);
+        setComparison(null);
+        setTelemetryError(null);
+        setTelemetryFailureKind(null);
+        if (!sameSpot) {
+          setTelemetryCurrent(null);
+          setTelemetryDiagnostics(null);
+        }
+        const nextSeed = embedded
+          ? [embedded]
+          : sameSpot
+            ? telemetrySummariesRef.current.filter((s) => isSameSpotCoord(s, lat, lng))
+            : [];
+        setTelemetryPrimary(
+          embedded ?? (sameSpot ? telemetryPrimaryRef.current : null)
+        );
+        setTelemetrySummaries(nextSeed);
+
         const ds: ETGDatasetId =
           node.properties.dataset || activeTopics[0] || "nasa_power";
-        void queryTimeSeries(lat, lng, ds, undefined, node.uuid);
+        const multi = (
+          activeTopics.length > 0 ? activeTopics : DEFAULT_MULTI_TOPICS
+        ).filter((item) => GRIDDED_TOPIC_SET.has(item));
+        void queryTimeSeries(
+          lat,
+          lng,
+          ds,
+          undefined,
+          node.uuid,
+          multi.length >= 2 ? multi : undefined
+        );
       } else {
+        telemetryReqSeqRef.current += 1;
         setProbedCoord(null);
-        setTelemetryPrimary(null);
+        setTelemetryPrimary(embedded);
         setTelemetrySecondary(null);
-        setTelemetrySummaries([]);
+        setTelemetryCurrent(null);
+        setTelemetrySecondaryCurrent(null);
+        setTelemetrySummaries(embedded ? [embedded] : []);
         setComparison(null);
+        setTelemetryDiagnostics(null);
+        setTelemetryFailureKind(null);
+        setTelemetryError(null);
+        setTelemetryLoading(false);
       }
     },
     [queryTimeSeries, activeTopics]
   );
 
+  const handleLocateOnGlobe = useCallback(
+    (node: ETGNode) => {
+      handleSelectNode(node);
+      handleSwitchView("globe");
+      if (
+        typeof node.properties.lat === "number" &&
+        typeof node.properties.lng === "number"
+      ) {
+        requestRegionalFocus(node.properties.lat, node.properties.lng, 140);
+      }
+    },
+    [handleSelectNode, handleSwitchView, requestRegionalFocus]
+  );
+
+  const handleOpenInGraphWorkbench = useCallback(
+    (nodeUuid: string) => {
+      const node = snapshot.nodes.find((n) => n.uuid === nodeUuid);
+      if (!node) return;
+      handleSelectNode(node);
+      handleSwitchView("graph");
+    },
+    [snapshot.nodes, handleSelectNode, handleSwitchView]
+  );
+
   const handleClearSelection = useCallback(() => {
+    telemetryReqSeqRef.current += 1;
     setSelectedNodeUuid(null);
     setSelectedEdgeUuid(null);
     setActiveCascade(null);
@@ -490,8 +1124,163 @@ export function DetectiveWorkspace({
     setComparePinB(null);
     setRelationNodePair(null);
     setFocusedSummaryDataset(null);
+    setConnectMode(false);
+    setConnectSourceUuid(null);
+    setPendingConnectPair(null);
+    setQuickAddNodeOpen(false);
+    setTelemetryCurrent(null);
+    setTelemetrySecondaryCurrent(null);
+    setTelemetryDiagnostics(null);
+    setTelemetryFailureKind(null);
+    setTelemetryError(null);
+    setTelemetryLoading(false);
     setInspectorOpen(false);
   }, []);
+
+  const handleToggleConnectMode = useCallback(() => {
+    setConnectMode((prev) => {
+      const next = !prev;
+      if (!next) {
+        setConnectSourceUuid(null);
+      } else {
+        setStatusMessage("Connect Mode active: click any Source node, then a Target node.");
+      }
+      return next;
+    });
+  }, []);
+
+  const handleStartQuickConnect = useCallback(
+    (sourceNode: ETGNode, targetNode?: ETGNode) => {
+      if (targetNode && targetNode.uuid !== sourceNode.uuid) {
+        setPendingConnectPair({ sourceUuid: sourceNode.uuid, targetUuid: targetNode.uuid });
+        setSelectedEdgeUuid(null);
+        setQuickAddNodeOpen(false);
+        setConnectSourceUuid(null);
+        setConnectMode(false);
+        setInspectorOpen(true);
+        setStatusMessage(`Composing link: ${sourceNode.properties.name} → ${targetNode.properties.name}`);
+      } else {
+        setConnectMode(true);
+        setConnectSourceUuid(sourceNode.uuid);
+        setStatusMessage(`Selected source "${sourceNode.properties.name}" — now click a target node.`);
+      }
+    },
+    []
+  );
+
+  const handleDiscoverCandidateLinks = useCallback(
+    async (anchorUuid?: string) => {
+      setDiscoveringLinks(true);
+      try {
+        const params = new URLSearchParams({
+          mode: "discover_links",
+          minAbsR: "0.42",
+          limit: "10",
+        });
+        const effectiveAnchor = anchorUuid ?? selectedNodeUuid ?? undefined;
+        if (effectiveAnchor) {
+          params.set("anchorUuid", effectiveAnchor);
+        }
+        const res = await fetch(`/api/graph/traverse?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (res.ok && Array.isArray(data.suggestions)) {
+          setCandidateLinks(data.suggestions as CandidateLinkSuggestion[]);
+          setStatusMessage(
+            data.suggestions.length > 0
+              ? `Discovered ${data.suggestions.length} latent connection(s) — click any dashed violet edge to wire.`
+              : "No new latent connections found above significance threshold."
+          );
+        }
+      } finally {
+        setDiscoveringLinks(false);
+      }
+    },
+    [selectedNodeUuid]
+  );
+
+  const handleAcceptCandidateLink = useCallback(async (suggestion: CandidateLinkSuggestion) => {
+    const res = await fetch("/api/graph", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "connect",
+        source_uuid: suggestion.sourceUuid,
+        target_uuid: suggestion.targetUuid,
+        type: suggestion.suggestedType,
+        mechanism: suggestion.mechanism,
+        rationale: suggestion.rationale,
+        optimal_lag_steps: suggestion.optimalLagSteps ?? 0,
+        lag_unit: suggestion.lagUnit ?? "days",
+        authored_by: "ai",
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.snapshot) {
+      setSnapshot(data.snapshot as EtgGraphSnapshot);
+      setCandidateLinks((prev) => prev.filter((c) => c.id !== suggestion.id));
+      if (data.edge) {
+        setSelectedEdgeUuid((data.edge as ETGEdge).properties.uuid);
+        setSelectedNodeUuid(null);
+        setInspectorOpen(true);
+      }
+      setStatusMessage(`Wired "${suggestion.sourceName}" → "${suggestion.targetName}".`);
+    }
+  }, []);
+
+  const handleMaterializeSolarGraph = useCallback(async () => {
+    setDiscoverBusy(true);
+    setStatusMessage("Materializing 7-node Front Range Solar Predictive Graph from NASA POWER…");
+    try {
+      const res = await fetch("/api/graph", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "materialize_solar_graph" }),
+      });
+      const data = await res.json();
+      if (res.ok && data.snapshot) {
+        const snap = data.snapshot as EtgGraphSnapshot;
+        setSnapshot(snap);
+        if (snap.nodes.length > 0) {
+          const nextMax = Math.max(...snap.nodes.map(getNodeTimestampMs));
+          setCutoffMs(nextMax);
+        }
+        setViewMode("graph");
+        setQuickAddNodeOpen(false);
+        setPendingConnectPair(null);
+        if (typeof data.hubUuid === "string") {
+          setSelectedNodeUuid(data.hubUuid);
+          setSelectedEdgeUuid(null);
+          setTraversalFilter({
+            maxHops: 2,
+            direction: "both",
+            layoutMode: "causal_flow",
+          });
+          setInspectorOpen(true);
+        }
+        setStatusMessage(
+          `Loaded 7-node Solar Microgrid predictive graph (${data.createdNodesCount ?? 7} nodes, ${data.createdEdgesCount ?? 6} upwind edges).`
+        );
+      } else {
+        setStatusMessage(data.error || "Failed to load 7-node solar graph.");
+      }
+    } finally {
+      setDiscoverBusy(false);
+    }
+  }, []);
+
+  const handleSnapshotChange = useCallback(
+    (nextSnapshot: EtgGraphSnapshot, toast?: string) => {
+      setSnapshot(nextSnapshot);
+      if (nextSnapshot.nodes.length > 0) {
+        const nextMax = Math.max(...nextSnapshot.nodes.map(getNodeTimestampMs));
+        setCutoffMs((prev) => Math.max(prev, nextMax));
+      }
+      if (toast) setStatusMessage(toast);
+    },
+    []
+  );
 
   const handleSelectEdge = useCallback(
     (edge: ETGEdge) => {
@@ -507,12 +1296,22 @@ export function DetectiveWorkspace({
 
       const src = snapshot.nodes.find((n) => n.uuid === edge.source_uuid);
       const tgt = snapshot.nodes.find((n) => n.uuid === edge.target_uuid);
+      setTelemetryDiagnostics(null);
+      setTelemetryFailureKind(null);
+      setTelemetryError(null);
       if (
         src?.properties.lat !== undefined &&
         src?.properties.lng !== undefined &&
         tgt?.properties.lat !== undefined &&
         tgt?.properties.lng !== undefined
       ) {
+        const srcEmbedded = computeClientEmbeddedSummary(src);
+        const tgtEmbedded = computeClientEmbeddedSummary(tgt);
+        setTelemetryPrimary(srcEmbedded);
+        setTelemetrySecondary(tgtEmbedded);
+        setTelemetryCurrent(null);
+        setTelemetrySecondaryCurrent(null);
+        setTelemetrySummaries(srcEmbedded ? [srcEmbedded] : []);
         setProbedCoord({ lat: src.properties.lat, lng: src.properties.lng });
         setComparePinB({ lat: tgt.properties.lat, lng: tgt.properties.lng });
         void queryTimeSeries(
@@ -528,11 +1327,15 @@ export function DetectiveWorkspace({
           src.uuid
         );
       } else {
+        telemetryReqSeqRef.current += 1;
         setComparePinB(null);
         setComparison(null);
         setTelemetryPrimary(null);
         setTelemetrySecondary(null);
+        setTelemetryCurrent(null);
+        setTelemetrySecondaryCurrent(null);
         setTelemetrySummaries([]);
+        setTelemetryLoading(false);
       }
     },
     [snapshot.nodes, queryTimeSeries]
@@ -566,14 +1369,30 @@ export function DetectiveWorkspace({
         return;
       }
 
+      const prevAnchor =
+        telemetryPrimaryRef.current ??
+        telemetrySummariesRef.current[0] ??
+        telemetryCurrentRef.current;
+      const sameSpot = isSameSpotCoord(prevAnchor, lat, lng);
+
       setSelectedNodeUuid(null);
       setSelectedEdgeUuid(null);
       setProbedCoord({ lat, lng });
       setComparePinB(null);
       setComparison(null);
       setTelemetrySecondary(null);
+      setTelemetrySecondaryCurrent(null);
       setRelationNodePair(null);
       setFocusedSummaryDataset(null);
+
+      if (!sameSpot) {
+        setTelemetryPrimary(null);
+        setTelemetrySummaries([]);
+        setTelemetryCurrent(null);
+        setTelemetryDiagnostics(null);
+        setTelemetryFailureKind(null);
+        setTelemetryError(null);
+      }
 
       const requested = activeTopics.length > 0 ? activeTopics : DEFAULT_MULTI_TOPICS;
       const gridded = requested.filter((ds) => GRIDDED_TOPIC_SET.has(ds));
@@ -587,9 +1406,14 @@ export function DetectiveWorkspace({
           gridded
         );
       } else {
+        telemetryReqSeqRef.current += 1;
         setTelemetryPrimary(null);
+        setTelemetryCurrent(null);
         setTelemetrySummaries([]);
+        setTelemetryDiagnostics(null);
+        setTelemetryFailureKind(null);
         setTelemetryError(null);
+        setTelemetryLoading(false);
       }
       setInspectorOpen(true);
       if (compareMode) {
@@ -691,6 +1515,8 @@ export function DetectiveWorkspace({
 
   const buildNodePayloadFromSummary = (summary: TrendAnalysisSummary) => {
     const dsMeta = DATASET_BY_ID[summary.dataset];
+    const statisticallyAdjusted =
+      summary.mannKendall.significant && summary.mannKendall.significantAdjusted;
     const verdictShort =
       summary.verdict === "Normal Environmental Variability"
         ? "Baseline"
@@ -698,18 +1524,19 @@ export function DetectiveWorkspace({
     const name = `${dsMeta.shortLabel} ${verdictShort} (${summary.lat.toFixed(1)}°, ${summary.lng.toFixed(1)}°)`;
     return {
       label: "Signal",
-      is_provisional: !summary.mannKendall.significant,
+      // Single-source interactive globe queries remain provisional until corroborated by a second independent observation.
+      is_provisional: true,
       properties: {
         name,
-        description: `${summary.parameter} time-series analyzed via Mann-Kendall (p=${summary.mannKendall.pValue.toFixed(4)}) and Theil-Sen slope (${summary.theilSen.slope >= 0 ? "+" : ""}${summary.theilSen.slope.toFixed(3)} ${summary.slopeUnit}). Provenance: ${summary.provenance}.`,
-        status: summary.mannKendall.significant ? "Active" : "Provisional",
-        importance: summary.mannKendall.significant ? 0.85 : 0.62,
+        description: `${summary.parameter} time-series analyzed via Mann-Kendall (raw p=${summary.mannKendall.pValue.toFixed(4)}, Hamed-Rao adj p=${summary.mannKendall.pValueAdjusted.toFixed(4)}) and Theil-Sen slope (${summary.theilSen.slope >= 0 ? "+" : ""}${summary.theilSen.slope.toFixed(3)} ${summary.slopeUnit}). Provenance: ${summary.provenance}.`,
+        status: "Provisional",
+        importance: statisticallyAdjusted ? 0.82 : 0.62,
         lat: summary.lat,
         lng: summary.lng,
         region: `${summary.lat.toFixed(2)}°, ${summary.lng.toFixed(2)}°`,
         dataset: summary.dataset,
         producer_type: "nasa_satellite",
-        confidence: summary.mannKendall.significant ? 0.91 : 0.64,
+        confidence: statisticallyAdjusted ? 0.78 : 0.62,
         value: Number(summary.latestValue.toFixed(2)),
         unit: summary.unit,
         p_value: Number(summary.mannKendall.pValue.toFixed(5)),
@@ -726,17 +1553,25 @@ export function DetectiveWorkspace({
 
   const handleCommitTelemetryToGraph = useCallback(
     async (summary: TrendAnalysisSummary) => {
+      const hasMannKendallRule = snapshot.nodes.some((n) => n.uuid === "rule-mann-kendall");
+      const passesAdjustedTest =
+        summary.mannKendall.significant && summary.mannKendall.significantAdjusted;
+      const edge =
+        hasMannKendallRule && passesAdjustedTest
+          ? {
+              source_uuid: "$NEW_NODE",
+              target_uuid: "rule-mann-kendall",
+              type: "verified_by",
+              source_snippet: `Interactive globe probe passed Hamed-Rao Mann-Kendall (adj p=${summary.mannKendall.pValueAdjusted.toFixed(4)}).`,
+            }
+          : undefined;
+
       const res = await fetch("/api/graph", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           node: buildNodePayloadFromSummary(summary),
-          edge: {
-            source_uuid: "$NEW_NODE",
-            target_uuid: "rule-corroboration",
-            type: "verified_by",
-            source_snippet: `Interactive globe probe committed with p=${summary.mannKendall.pValue.toFixed(4)}.`,
-          },
+          edge,
         }),
       });
       if (res.ok) {
@@ -751,10 +1586,10 @@ export function DetectiveWorkspace({
           setSelectedNodeUuid(created.uuid);
           setInspectorOpen(true);
         }
-        setStatusMessage("Saved spot observation to the Earth Trend Graph.");
+        setStatusMessage("Saved provisional spot observation to the Earth Trend Graph.");
       }
     },
-    []
+    [snapshot.nodes]
   );
 
   const handleCommitRelation = useCallback(
@@ -854,6 +1689,58 @@ export function DetectiveWorkspace({
     }
   }, []);
 
+  const handleRunCaseStudy = useCallback(
+    (preset: GuidedDipoleCase) => {
+      hidePopoverById("etg-dipoles-popover");
+      setViewMode("globe");
+      setTelemetryPrimary(null);
+      setTelemetrySecondary(null);
+      setTelemetryCurrent(null);
+      setTelemetrySecondaryCurrent(null);
+      setTelemetrySummaries([]);
+      setComparison(null);
+      setTelemetryDiagnostics(null);
+      setTelemetryFailureKind(null);
+      setTelemetryError(null);
+      setProbedCoord({ lat: preset.spotA.lat, lng: preset.spotA.lng });
+      setComparePinB({ lat: preset.spotB.lat, lng: preset.spotB.lng });
+      setSelectedNodeUuid(null);
+      setSelectedEdgeUuid(null);
+      setRelationNodePair(null);
+      setCompareMode(false);
+      setFocusedSummaryDataset(null);
+      setInspectorOpen(true);
+      const frame = computeDipoleFramingTarget(preset.spotA, preset.spotB);
+      requestRegionalFocus(frame.lat, frame.lng, frame.radius);
+      void queryTimeSeries(preset.spotA.lat, preset.spotA.lng, preset.spotA.dataset, {
+        lat: preset.spotB.lat,
+        lng: preset.spotB.lng,
+        dataset: preset.spotB.dataset,
+      });
+      setStatusMessage(`Guided Case Study: ${preset.title}`);
+    },
+    [queryTimeSeries, requestRegionalFocus]
+  );
+
+  const demoBootedRef = useRef(false);
+  useEffect(() => {
+    if (demoBootedRef.current || !initialDemoMode) return;
+    demoBootedRef.current = true;
+    if (initialDemoMode === "veritas") {
+      setSolarGraphOpen(true);
+    } else if (initialDemoMode === "spaceapps") {
+      if (snapshot.nodes.length === 0) {
+        void handleDiscoverGlobalTrends();
+      }
+      handleRunCaseStudy(GUIDED_DIPOLE_CASES[0]);
+    }
+  }, [
+    initialDemoMode,
+    snapshot.nodes.length,
+    handleDiscoverGlobalTrends,
+    handleRunCaseStudy,
+  ]);
+
   const handleSyncEonet = useCallback(async () => {
     setEonetBusy(true);
     try {
@@ -887,7 +1774,15 @@ export function DetectiveWorkspace({
       const emptySnapshot = (await res.json()) as EtgGraphSnapshot;
       setSnapshot(emptySnapshot);
       setSelectedNodeUuid(null);
+      setSelectedEdgeUuid(null);
       setInspectorOpen(false);
+      setCandidateLinks([]);
+      setTraversalSubgraph(null);
+      setTraversalHistory([]);
+      setPendingConnectPair(null);
+      setQuickAddNodeOpen(false);
+      setConnectMode(false);
+      setConnectSourceUuid(null);
       setTelemetryPrimary(null);
       setTelemetrySecondary(null);
       setComparison(null);
@@ -896,33 +1791,58 @@ export function DetectiveWorkspace({
     }
   }, []);
 
-  const handleAskDetective = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      setDetectiveBusy(true);
+  const handleExportWorkspaceBundle = useCallback(async () => {
+    try {
+      const res = await fetch("/api/graph?format=bundle", { cache: "no-store" });
+      if (!res.ok) {
+        setStatusMessage("Failed to export ETG workspace bundle.");
+        return;
+      }
+      const bundle = await res.json();
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `etg-workspace-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      hidePopoverById("etg-more-popover");
+      setStatusMessage("Exported ETG workspace bundle (.json).");
+    } catch {
+      setStatusMessage("Failed to export ETG workspace bundle.");
+    }
+  }, []);
+
+  const handleImportWorkspaceBundle = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      if (!file) return;
       try {
-        const res = await fetch("/api/ai/detective", {
+        const text = await file.text();
+        const bundle = JSON.parse(text);
+        const res = await fetch("/api/graph", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            selectedNodeUuid: selectedNode?.uuid,
-            lat: probedCoord?.lat,
-            lng: probedCoord?.lng,
-            dataset:
-              selectedNode?.properties.dataset ||
-              (activeTopics[0] || "ocean_temp"),
-            question: question.trim() || undefined,
-          }),
+          body: JSON.stringify({ action: "import_bundle", bundle, merge: true }),
         });
-        if (res.ok) {
-          const data = (await res.json()) as DetectiveBriefing;
-          setBriefing(data);
+        const data = await res.json();
+        if (!res.ok) {
+          setStatusMessage(data.error || "Failed to import ETG workspace bundle.");
+          return;
         }
-      } finally {
-        setDetectiveBusy(false);
+        if (data.snapshot) {
+          setSnapshot(data.snapshot as EtgGraphSnapshot);
+        }
+        hidePopoverById("etg-more-popover");
+        setStatusMessage(
+          `Imported workspace bundle (${data.importedNodes ?? 0} nodes, ${data.importedEdges ?? 0} edges).`
+        );
+      } catch {
+        setStatusMessage("Invalid ETG workspace bundle JSON file.");
       }
     },
-    [selectedNode, probedCoord, activeTopics, question]
+    []
   );
 
   const stageTitle =
@@ -931,43 +1851,97 @@ export function DetectiveWorkspace({
       : "Interactive 3D Earth Globe";
 
   const activeFilterCount =
-    (activeTopics.length > 0 ? 1 : 0) + (onlyOpposite ? 1 : 0) + (!showSuperseded ? 1 : 0);
+    (activeTopics.length > 0 ? 1 : 0) +
+    (onlyOpposite ? 1 : 0) +
+    (!showSuperseded ? 1 : 0) +
+    (ALL_RELATION_CATEGORIES.length - enabledRelationCategories.length);
 
   const topicButtonLabel =
     activeTopics.length === 0
-      ? "Topics: All"
+      ? "Datasets: All"
       : activeTopics.length === 1
-        ? `Topics: ${DATASET_BY_ID[activeTopics[0]].shortLabel}`
-        : `Topics (${activeTopics.length})`;
+        ? `Datasets: ${DATASET_BY_ID[activeTopics[0]].shortLabel}`
+        : `Datasets (${activeTopics.length})`;
+
+  const formattedAllRelations = useMemo(() => {
+    const nodeById = new Map(snapshot.nodes.map((n) => [n.uuid, n]));
+    const allowedSet = new Set(enabledRelationCategories);
+    const items: Array<{
+      edge: ETGEdge;
+      src: ETGNode;
+      tgt: ETGNode;
+      formatted: ReturnType<typeof formatRelationForDisplay>;
+      isGeoPair: boolean;
+    }> = [];
+
+    for (const edge of snapshot.edges) {
+      const cat = classifyRelationCategory(edge.type);
+      if (!allowedSet.has(cat)) continue;
+      const src = nodeById.get(edge.source_uuid);
+      const tgt = nodeById.get(edge.target_uuid);
+      if (!src || !tgt) continue;
+      const isGeoPair =
+        src.properties.lat !== undefined &&
+        src.properties.lng !== undefined &&
+        tgt.properties.lat !== undefined &&
+        tgt.properties.lng !== undefined;
+      items.push({
+        edge,
+        src,
+        tgt,
+        formatted: formatRelationForDisplay(edge, src, tgt),
+        isGeoPair,
+      });
+    }
+
+    const catPrio: Record<RelationCategory, number> = {
+      opposite: 4,
+      causal: 3,
+      coupled: 2,
+      corroboration: 1,
+    };
+
+    return items.sort((a, b) => {
+      if (a.isGeoPair !== b.isGeoPair) return a.isGeoPair ? -1 : 1;
+      const cDiff = catPrio[b.formatted.category] - catPrio[a.formatted.category];
+      if (cDiff !== 0) return cDiff;
+      return (
+        Math.abs(b.edge.properties.correlation_r ?? 0) -
+        Math.abs(a.edge.properties.correlation_r ?? 0)
+      );
+    });
+  }, [snapshot.nodes, snapshot.edges, enabledRelationCategories]);
 
   return (
     <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-bg text-text-primary">
-      {/* Top Floating HUD Bar — spacious single row on desktop */}
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex flex-wrap lg:flex-nowrap items-center justify-between gap-2 px-4 py-3 sm:px-5 sm:py-4">
-        {/* Left Pill: Brand + Topic Filter + Linked Trends */}
-        <div className="etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-full px-3.5 py-1.5">
-          <div className="flex items-center gap-2 pr-0.5">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-accent-fg shadow-[0_0_8px_rgba(226,168,86,0.8)]" aria-hidden="true" />
+      {/* Top Structural Navigation Bar — strict single row (48px) */}
+      <header className="z-30 flex h-12 shrink-0 flex-nowrap items-center justify-between gap-1.5 border-b border-border bg-header px-2.5 sm:gap-2 sm:px-4">
+        {/* Left Group: Brand + Dataset Filter + Relations */}
+        <div className="flex min-w-0 shrink items-center gap-1 sm:gap-1.5">
+          <div className="flex items-center gap-2 pr-0.5 sm:pr-1" title="Earth Trend Detective">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-accent-fg" aria-hidden="true" />
             <h1 className="whitespace-nowrap font-outfit text-sm font-semibold tracking-tight text-text-primary">
-              Earth Trend Detective
+              <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
             </h1>
           </div>
 
-          <div className="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+          <div role="separator" aria-orientation="vertical" className="mx-1 hidden h-4 border-l border-border sm:block" />
 
           <button
             type="button"
             popoverTarget="etg-filter-popover"
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs sm:text-[13px] font-medium transition-colors cursor-pointer ${
+            title={topicButtonLabel}
+            aria-label={topicButtonLabel}
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-sm border px-2 py-1 text-xs font-medium transition-colors cursor-pointer sm:px-2.5 ${
               activeFilterCount > 0
-                ? "bg-accent/18 text-accent-fg"
-                : "text-text-muted hover:bg-surface-band hover:text-text-primary"
+                ? "border-accent-fg bg-amber-950 text-amber-300"
+                : "border-border bg-surface-elevated text-text-muted hover:border-border-strong hover:text-text-primary"
             }`}
           >
             <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>{topicButtonLabel}</span>
+            <span className="hidden lg:inline">{topicButtonLabel}</span>
             {activeFilterCount > 0 && (
-              <span className="ws-numeric rounded-full bg-accent px-1.5 text-[10px] font-semibold text-white">
+              <span className="ws-numeric rounded-xs bg-accent px-1.5 text-[10px] font-semibold text-white">
                 {activeFilterCount}
               </span>
             )}
@@ -976,12 +1950,13 @@ export function DetectiveWorkspace({
           <button
             type="button"
             popoverTarget="etg-dipoles-popover"
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs sm:text-[13px] font-medium text-rose-400 transition-colors hover:bg-rose-500/12 cursor-pointer"
+            title="View opposite trends, causal chains, teleconnections, and corroboration relations"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-border bg-rose-950 px-2 py-1 text-xs font-medium text-rose-300 transition-colors hover:border-rose-400 cursor-pointer sm:gap-1.5 sm:px-2.5"
           >
             <GitCompare className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="hidden xl:inline">Linked Trends</span>
-            <span className="ws-numeric font-mono text-[11px]">
-              {snapshot.oppositeTrendPairs.length}
+            <span className="hidden sm:inline">Relations</span>
+            <span className="ws-numeric font-mono text-[11px] font-semibold">
+              {formattedAllRelations.length}
             </span>
           </button>
         </div>
@@ -989,39 +1964,41 @@ export function DetectiveWorkspace({
         {/* Center Segmented Switcher: 3D Earth vs Knowledge Graph (3D/2D) */}
         <nav
           aria-label="Workspace View Switcher"
-          className="etg-hud-pill pointer-events-auto flex items-center gap-1 rounded-full p-1"
+          className="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-surface-inset p-0.5 sm:gap-1"
         >
           <button
             type="button"
             onClick={() => handleSwitchView("globe")}
             aria-pressed={viewMode === "globe"}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs sm:text-[13px] font-medium transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-2 py-1 text-xs font-medium transition-colors cursor-pointer sm:gap-1.5 sm:px-3 ${
               viewMode === "globe"
-                ? "bg-[var(--button-primary-bg)] text-[var(--button-primary-text)] font-semibold shadow-sm"
+                ? "bg-[var(--button-primary-bg)] text-[var(--button-primary-text)] font-semibold"
                 : "text-text-muted hover:text-text-primary"
             }`}
           >
             <Globe2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>3D Earth</span>
+            <span className="sm:hidden">Earth</span>
+            <span className="hidden sm:inline">3D Earth</span>
           </button>
 
           <button
             type="button"
             onClick={() => handleSwitchView("graph")}
             aria-pressed={viewMode === "graph"}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs sm:text-[13px] font-medium transition-colors cursor-pointer ${
+            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm px-2 py-1 text-xs font-medium transition-colors cursor-pointer sm:gap-1.5 sm:px-3 ${
               viewMode === "graph"
-                ? "bg-[var(--button-primary-bg)] text-[var(--button-primary-text)] font-semibold shadow-sm"
+                ? "bg-[var(--button-primary-bg)] text-[var(--button-primary-text)] font-semibold"
                 : "text-text-muted hover:text-text-primary"
             }`}
           >
             <Network className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>Knowledge Graph</span>
+            <span className="sm:hidden">Graph</span>
+            <span className="hidden sm:inline">Knowledge Graph</span>
           </button>
 
           {viewMode === "graph" && (
             <>
-              <div className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+              <div role="separator" aria-orientation="vertical" className="mx-0.5 h-4 border-l border-border" />
               {(["3d", "2d"] as const).map((mode) => {
                 const active = graphRenderMode === mode;
                 return (
@@ -1030,9 +2007,9 @@ export function DetectiveWorkspace({
                     type="button"
                     onClick={() => setGraphRenderMode(mode)}
                     aria-pressed={active}
-                    className={`rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold uppercase transition-colors cursor-pointer ${
+                    className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-semibold uppercase transition-colors cursor-pointer sm:px-2 ${
                       active
-                        ? "bg-surface-band text-text-primary ring-1 ring-border-strong"
+                        ? "border border-border-strong bg-surface-elevated text-text-primary"
                         : "text-text-subtle hover:text-text-primary"
                     }`}
                   >
@@ -1044,9 +2021,9 @@ export function DetectiveWorkspace({
           )}
         </nav>
 
-        {/* Right Pill: Search + Ask AI + Add Data + Utilities + Theme */}
-        <div className="etg-hud-pill pointer-events-auto flex items-center gap-1.5 rounded-full px-2.5 py-1">
-          <search className="relative hidden items-center lg:flex">
+        {/* Right Group: Search + Solar Graph + Ask AI + Add Data + Tools + Theme */}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          <search className="relative hidden items-center xl:flex">
             <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
             <label htmlFor="etg-search" className="sr-only">
               Search places or trends
@@ -1060,18 +2037,36 @@ export function DetectiveWorkspace({
               spellCheck={false}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search…"
-              className="h-8 w-24 xl:w-36 rounded-full border border-border bg-surface-inset pr-2.5 pl-7 text-xs text-text-primary placeholder:text-text-subtle transition-all focus:w-40 xl:focus:w-48 focus:border-accent-fg focus:outline-none"
+              placeholder="Search pins or trends…"
+              className="h-7 w-36 rounded-sm border border-border bg-surface-inset pr-2.5 pl-7 text-xs text-text-primary placeholder:text-text-subtle transition-all focus:w-48 focus:border-accent-fg focus:outline-none"
             />
           </search>
 
           <button
             type="button"
-            popoverTarget="etg-ai-popover"
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs sm:text-[13px] font-medium text-accent-fg transition-colors hover:bg-accent/14 cursor-pointer"
+            onClick={() => setSolarGraphOpen(true)}
+            title="Denver Solar Microgrid — 7-Node Local Climate Graph & 3-Way Forecast"
+            aria-label="Denver Solar Graph"
+            className="hidden items-center gap-1.5 whitespace-nowrap rounded-sm border border-amber-400 bg-amber-950 px-2 py-1 text-xs font-medium text-amber-300 transition-colors hover:border-accent-fg cursor-pointer md:inline-flex xl:px-2.5"
+          >
+            <Sun className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="hidden xl:inline">Solar Graph</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setAiStudioOpen((v) => !v)}
+            aria-expanded={aiStudioOpen}
+            title="Toggle AI Graph Chat Studio"
+            aria-label="Toggle AI Graph Chat Studio"
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-sm border px-2 py-1 text-xs font-medium transition-colors cursor-pointer xl:px-2.5 ${
+              aiStudioOpen
+                ? "border-accent-fg bg-accent/15 text-accent-fg"
+                : "border-border bg-surface-elevated text-accent-fg hover:border-accent-fg"
+            }`}
           >
             <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span className="hidden sm:inline">Ask AI</span>
+            <span className="hidden xl:inline">AI Studio</span>
           </button>
 
           <button
@@ -1080,20 +2075,23 @@ export function DetectiveWorkspace({
               setIngestTab("dataset");
               setIngestOpen(true);
             }}
-            className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-accent px-3 py-1.5 text-xs sm:text-[13px] font-semibold text-white transition-colors hover:bg-accent-hover cursor-pointer"
+            title="Add Data"
+            aria-label="Add Data"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm bg-accent px-2 py-1 text-xs font-semibold text-white transition-colors hover:bg-accent-hover cursor-pointer sm:px-2.5"
           >
             <Plus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            <span>Add Data</span>
+            <span className="hidden sm:inline">Add Data</span>
           </button>
 
           <button
             type="button"
             popoverTarget="etg-more-popover"
-            title="Live global discovery, NASA EONET sync & tools"
-            aria-label="More observatory tools"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
+            title="Live global discovery, NASA EONET sync & export tools"
+            aria-label="Observatory tools"
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm border border-border bg-surface-elevated px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
           >
-            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+            <MoreVertical className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="hidden xl:inline">Tools</span>
           </button>
 
           <ThemeToggle />
@@ -1115,6 +2113,7 @@ export function DetectiveWorkspace({
                 resetTopics();
                 setOnlyOpposite(false);
                 setShowSuperseded(true);
+                setEnabledRelationCategories([...ALL_RELATION_CATEGORIES]);
               }}
               className="text-xs font-medium text-accent-fg hover:underline cursor-pointer"
             >
@@ -1133,8 +2132,8 @@ export function DetectiveWorkspace({
           />
         </div>
 
-        {/* Mobile/Tablet Search Input */}
-        <div className="md:hidden">
+        {/* Tablet/Mobile Search Input (shown whenever header search is collapsed < xl) */}
+        <div className="xl:hidden">
           <input
             type="search"
             value={searchQuery}
@@ -1144,32 +2143,81 @@ export function DetectiveWorkspace({
           />
         </div>
 
-        {/* Graph Toggles */}
+        {/* Relation Categories Checkboxes */}
+        <div className="space-y-1 border-t border-border pt-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
+            Relation Categories
+          </div>
+          {ALL_RELATION_CATEGORIES.map((cat) => {
+            const dotColor =
+              cat === "opposite"
+                ? "#fb7185"
+                : cat === "causal"
+                  ? "#34d399"
+                  : cat === "coupled"
+                    ? "#38bdf8"
+                    : "#a78bfa";
+            return (
+              <label key={cat} className="etg-check-label text-xs text-text-primary">
+                <input
+                  type="checkbox"
+                  checked={enabledRelationCategories.includes(cat)}
+                  onChange={() => toggleRelationCategoryFilter(cat)}
+                  className="checkbox-native"
+                />
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: dotColor }}
+                  aria-hidden="true"
+                />
+                <span>{RELATION_CATEGORY_META[cat].label}</span>
+              </label>
+            );
+          })}
+        </div>
+
+        {/* Graph Toggles + Temperature Unit */}
         <div className="space-y-2 border-y border-border py-3">
-          <label className="flex cursor-pointer items-center gap-2.5 text-xs text-text-primary">
+          <label className="etg-check-label text-xs text-text-primary">
             <input
               type="checkbox"
               checked={onlyOpposite}
               onChange={(e) => setOnlyOpposite(e.target.checked)}
-              className="h-3.5 w-3.5 accent-accent"
+              className="checkbox-native"
             />
             <span>Only opposite trends</span>
           </label>
-          <label className="flex cursor-pointer items-center gap-2.5 text-xs text-text-primary">
+          <label className="etg-check-label text-xs text-text-primary">
             <input
               type="checkbox"
               checked={showSuperseded}
               onChange={(e) => setShowSuperseded(e.target.checked)}
-              className="h-3.5 w-3.5 accent-accent"
+              className="checkbox-native"
             />
             <span>Show updated findings</span>
           </label>
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-xs font-medium text-text-muted">Temperature unit</span>
+            <div className="inline-flex rounded-sm border border-border bg-surface-inset p-0.5">
+              {(["C", "F"] as const).map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  aria-pressed={tempUnit === u}
+                  onClick={() => setTempUnit(u)}
+                  className="rounded-xs px-2 py-0.5 text-[11px] font-semibold text-text-muted aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
+                >
+                  °{u}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* Graph Node Key */}
         <div className="space-y-1.5">
           <div className="text-[11px] font-medium text-text-subtle">Map &amp; Graph Key</div>
-          <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-surface-inset p-2.5">
+          <div className="grid grid-cols-2 gap-2 rounded-md border border-border bg-surface-inset p-2.5">
             {(["Concept", "Signal", "Insight", "Rule"] as ETGNodeLabel[]).map((label) => {
               const palette = ETG_LABEL_PALETTE[label];
               return (
@@ -1186,169 +2234,177 @@ export function DetectiveWorkspace({
         </div>
       </div>
 
-      {/* 2. Linked & Opposite Trends Popover */}
+      {/* 2. Earth Trend Relations & Causal Chains Popover */}
       <div id="etg-dipoles-popover" popover="auto" className="etg-popover space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-rose-400">
-            Linked &amp; Opposite Trends
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-text-primary">
+            Earth Relations &amp; Chains
           </h3>
           <span className="ws-numeric font-mono text-[11px] text-text-subtle">
-            {snapshot.oppositeTrendPairs.length} pairs
+            {formattedAllRelations.length} links · {cascades.length} chains
           </span>
         </div>
 
-        <div className="space-y-2">
-          {[...snapshot.oppositeTrendPairs]
-            .sort((a, b) => {
-              const interRegion = (p: typeof a) => {
-                const latA = p.source.properties.lat;
-                const lngA = p.source.properties.lng;
-                const latB = p.target.properties.lat;
-                const lngB = p.target.properties.lng;
-                if (
-                  latA === undefined ||
-                  lngA === undefined ||
-                  latB === undefined ||
-                  lngB === undefined
-                ) {
-                  return 0;
-                }
-                return Math.abs(latA - latB) >= 1 || Math.abs(lngA - lngB) >= 1 ? 1 : 0;
-              };
-              const regionDiff = interRegion(b) - interRegion(a);
-              if (regionDiff !== 0) return regionDiff;
-              return Math.abs(b.correlationR ?? 0) - Math.abs(a.correlationR ?? 0);
-            })
-            .map((pair) => {
-              const sameRegion =
-                Boolean(pair.source.properties.region) &&
-                pair.source.properties.region === pair.target.properties.region;
-              const srcTitle = humanizeNodeText(
-                sameRegion
-                  ? pair.source.properties.name
-                  : pair.source.properties.region || pair.source.properties.name
-              );
-              const tgtTitle = humanizeNodeText(
-                sameRegion
-                  ? pair.target.properties.name
-                  : pair.target.properties.region || pair.target.properties.name
-              );
-              return (
-                <button
-                  key={pair.edgeUuid}
-                  type="button"
-                  onClick={() => handleCompareOpposite(pair.source, pair.target)}
-                  className="w-full space-y-1 rounded-xl border border-rose-500/25 bg-rose-500/8 p-3 text-left transition-colors hover:border-rose-400/60 hover:bg-rose-500/14 cursor-pointer"
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs font-semibold text-text-primary">
-                    <span className="truncate">{srcTitle}</span>
-                    <span className="shrink-0 rounded-full border border-rose-500/35 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
-                      Opposite
-                    </span>
-                  </div>
-                  <div className="truncate text-xs text-text-muted">↔ {tgtTitle}</div>
-                  {pair.mechanism && (
-                    <div className="truncate pt-0.5 text-[10px] text-text-subtle">
-                      {pair.mechanism}
+        {/* Guided Opposite-Trend Case Studies */}
+        <div className="space-y-1.5 rounded-sm border border-border bg-surface-inset p-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-text-subtle">
+            Guided Opposite-Trend Case Studies (Live NASA/NOAA)
+          </div>
+          <div className="grid gap-1">
+            {GUIDED_DIPOLE_CASES.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => handleRunCaseStudy(preset)}
+                className="flex flex-col items-start rounded-sm border border-border bg-surface px-2.5 py-1.5 text-left transition-colors hover:border-rose-400 cursor-pointer"
+              >
+                <span className="text-[11px] font-semibold text-text-primary">
+                  {preset.title}
+                </span>
+                <span className="text-[10px] text-text-muted leading-snug">
+                  {preset.spotA.name} vs. {preset.spotB.name} — {preset.subtitle}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex flex-wrap items-center gap-1">
+          {(
+            [
+              { id: "all", label: `All (${formattedAllRelations.length})` },
+              {
+                id: "opposite",
+                label: `Opposite (${formattedAllRelations.filter((i) => i.formatted.category === "opposite").length})`,
+              },
+              {
+                id: "causal",
+                label: `Causal → (${formattedAllRelations.filter((i) => i.formatted.category === "causal").length})`,
+              },
+              {
+                id: "coupled",
+                label: `Coupled (${formattedAllRelations.filter((i) => i.formatted.category === "coupled").length})`,
+              },
+              { id: "chains", label: `Chains (${cascades.length})` },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              aria-pressed={relationPopoverFilter === tab.id}
+              onClick={() => setRelationPopoverFilter(tab.id)}
+              className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[11px] font-medium text-text-muted transition-colors hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {relationPopoverFilter !== "chains" && (
+          <div className="space-y-2">
+            {formattedAllRelations
+              .filter(
+                (item) =>
+                  relationPopoverFilter === "all" ||
+                  item.formatted.category === relationPopoverFilter
+              )
+              .slice(0, 14)
+              .map(({ edge, src, tgt, formatted }) => {
+                const srcLabel = humanizeNodeText(src.properties.region || src.properties.name);
+                const tgtLabel = humanizeNodeText(tgt.properties.region || tgt.properties.name);
+                const badgeClass =
+                  formatted.category === "opposite"
+                    ? "border-rose-400 bg-rose-950 text-rose-300"
+                    : formatted.category === "causal"
+                      ? "border-emerald-400 bg-emerald-950 text-emerald-300"
+                      : formatted.category === "coupled"
+                        ? "border-sky-400 bg-sky-950 text-sky-300"
+                        : "border-violet-400 bg-violet-950 text-violet-300";
+                const sep = formatted.direction === "undirected" ? "↔" : "→";
+                return (
+                  <button
+                    key={edge.properties.uuid}
+                    type="button"
+                    onClick={() => {
+                      handleSelectEdge(edge);
+                      hidePopoverById("etg-dipoles-popover");
+                    }}
+                    className="w-full space-y-1 rounded-md border border-border bg-surface-inset p-2.5 text-left transition-colors hover:border-accent-fg cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs font-semibold text-text-primary">
+                      <span className="truncate">
+                        {srcLabel} {sep} {tgtLabel}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${badgeClass}`}
+                      >
+                        {formatted.badgeText}
+                      </span>
                     </div>
-                  )}
-                </button>
-              );
-            })}
-        </div>
-
-        {cascades.length > 0 && (
-          <div className="space-y-2 border-t border-border pt-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-                Connected Earth Chains
-              </h3>
-              <span className="ws-numeric font-mono text-[11px] text-text-subtle">
-                {cascades.length} chains
-              </span>
-            </div>
-
-            <div className="space-y-1.5">
-              {cascades.slice(0, 3).map((chain) => (
-                <button
-                  key={chain.id}
-                  type="button"
-                  onClick={() => handleSelectCascade(chain)}
-                  className="w-full space-y-1 rounded-xl border border-amber-400/25 bg-amber-400/8 p-2.5 text-left transition-colors hover:border-amber-400/60 hover:bg-amber-400/14 cursor-pointer"
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs font-semibold text-text-primary">
-                    <span className="truncate">{chain.title}</span>
-                    <span className="ws-numeric shrink-0 font-mono text-amber-300">
-                      {chain.spheres.length} steps
-                    </span>
-                  </div>
-                  <div className="truncate text-[11px] text-text-muted">{chain.summary}</div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 3. AI Trend Detective Popover */}
-      <div id="etg-ai-popover" popover="auto" className="etg-popover etg-popover-end space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-accent-fg">
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>AI Trend Detective</span>
-          </div>
-          <span className="font-mono text-[10px] text-text-faint">Live NASA + Trends</span>
-        </div>
-
-        <form onSubmit={(e) => void handleAskDetective(e)} className="space-y-2.5">
-          <input
-            type="text"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask why two regions show opposite trends…"
-            className="form-input"
-          />
-          <button
-            type="submit"
-            disabled={detectiveBusy}
-            className="w-full rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
-          >
-            {detectiveBusy ? "Summarizing Trends…" : "Explain Selected Area"}
-          </button>
-        </form>
-
-        {briefing && (
-          <div className="space-y-2.5 rounded-xl border border-border bg-surface-inset p-3 text-xs leading-relaxed text-text-secondary">
-            <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-text-faint">
-              <span className="truncate">{briefing.engine}</span>
-              {briefing.telemetrySummary && (
-                <span className="shrink-0">{briefing.telemetrySummary.verdict}</span>
-              )}
-            </div>
-            <p className="whitespace-pre-wrap text-text-primary">{briefing.briefing}</p>
-            {briefing.citedNodes.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {briefing.citedNodes.slice(0, 4).map((uuid) => {
-                  const target = snapshot.nodes.find((n) => n.uuid === uuid);
-                  if (!target) return null;
-                  return (
-                    <button
-                      key={uuid}
-                      type="button"
-                      onClick={() => {
-                        hidePopoverById("etg-ai-popover");
-                        handleSelectNode(target);
-                      }}
-                      className="rounded-full border border-border bg-surface px-2.5 py-0.5 font-mono text-[10px] text-accent-fg hover:border-accent-fg cursor-pointer"
-                    >
-                      {humanizeNodeText(target.properties.name).slice(0, 24)}
-                    </button>
-                  );
-                })}
+                    <div className="ws-numeric flex flex-wrap items-center gap-x-2 text-[10px] text-text-subtle">
+                      {formatted.correlationText && (
+                        <span className="font-mono text-text-muted">
+                          {formatted.correlationText}
+                        </span>
+                      )}
+                      {formatted.lagText && (
+                        <span className="font-mono text-text-muted">{formatted.lagText}</span>
+                      )}
+                      {formatted.distanceKm !== null && (
+                        <span className="font-mono">{formatted.distanceKm} km</span>
+                      )}
+                    </div>
+                    <div className="line-clamp-2 text-[11px] text-text-muted">
+                      {formatted.summaryLine}
+                    </div>
+                  </button>
+                );
+              })}
+            {formattedAllRelations.filter(
+              (item) =>
+                relationPopoverFilter === "all" ||
+                item.formatted.category === relationPopoverFilter
+            ).length === 0 && (
+              <div className="rounded-sm border border-border-subtle bg-surface-inset p-3 text-xs text-text-subtle">
+                No relations match this category yet.
               </div>
             )}
           </div>
         )}
+
+        {(relationPopoverFilter === "all" || relationPopoverFilter === "chains") &&
+          cascades.length > 0 && (
+            <div className="space-y-2 border-t border-border pt-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-300">
+                  Connected Earth Chains
+                </h3>
+                <span className="ws-numeric font-mono text-[11px] text-text-subtle">
+                  {cascades.length} chains
+                </span>
+              </div>
+
+              <div className="space-y-1.5">
+                {cascades.slice(0, 5).map((chain) => (
+                  <button
+                    key={chain.id}
+                    type="button"
+                    onClick={() => handleSelectCascade(chain)}
+                    className="w-full space-y-1 rounded-md border border-border bg-amber-950 p-2.5 text-left transition-colors hover:border-amber-400 cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs font-semibold text-text-primary">
+                      <span className="truncate">{chain.title}</span>
+                      <span className="ws-numeric shrink-0 font-mono text-amber-300">
+                        {chain.spheres.length} steps
+                      </span>
+                    </div>
+                    <div className="truncate text-[11px] text-text-muted">{chain.summary}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
       </div>
 
       {/* 4. More Observatory Tools Popover */}
@@ -1360,9 +2416,21 @@ export function DetectiveWorkspace({
         <div className="space-y-2">
           <button
             type="button"
+            onClick={() => {
+              hidePopoverById("etg-more-popover");
+              setSolarGraphOpen(true);
+            }}
+            className="flex w-full items-center justify-between rounded-sm border border-amber-400 bg-amber-950 px-3 py-2 text-xs font-semibold text-amber-300 hover:border-amber-300 cursor-pointer md:hidden"
+          >
+            <span>Denver Solar Microgrid Graph</span>
+            <Sun className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
             onClick={() => void handleDiscoverGlobalTrends()}
             disabled={discoverBusy}
-            className="flex w-full items-center justify-between rounded-xl border border-teal-500/35 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-400 hover:border-teal-400 disabled:opacity-50 cursor-pointer"
+            className="flex w-full items-center justify-between rounded-sm border border-teal-400 bg-teal-950 px-3 py-2 text-xs font-semibold text-teal-300 hover:border-teal-300 disabled:opacity-50 cursor-pointer"
           >
             <span>{discoverBusy ? "Discovering Trends…" : "Re-run Live Global Discovery"}</span>
             <RefreshCw className={`h-3.5 w-3.5 ${discoverBusy ? "animate-spin" : ""}`} />
@@ -1372,7 +2440,7 @@ export function DetectiveWorkspace({
             type="button"
             onClick={() => void handleSyncEonet()}
             disabled={eonetBusy}
-            className="flex w-full items-center justify-between rounded-xl border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-border-strong disabled:opacity-50 cursor-pointer"
+            className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-border-strong disabled:opacity-50 cursor-pointer"
           >
             <span>{eonetBusy ? "Syncing NASA EONET…" : "Sync NASA EONET Live Events"}</span>
             <RefreshCw className={`h-3.5 w-3.5 ${eonetBusy ? "animate-spin" : ""}`} />
@@ -1385,19 +2453,46 @@ export function DetectiveWorkspace({
               setIngestTab("agencies");
               setIngestOpen(true);
             }}
-            className="flex w-full items-center justify-between rounded-xl border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+            className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
           >
             <span>Challenge Space-Agency Hub (12)</span>
-            <Globe2 className="h-3.5 w-3.5 text-sky-400" />
+            <Globe2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
           </button>
 
           <button
             type="button"
+            onClick={() => void handleExportWorkspaceBundle()}
+            className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+          >
+            <span>Export Workspace Bundle (.json)</span>
+            <Download className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+          </button>
+
+          <div className="relative">
+            <input
+              id={`${bundleInputId}-import`}
+              name="etg_workspace_bundle"
+              type="file"
+              accept=".json,application/json"
+              onChange={(e) => void handleImportWorkspaceBundle(e)}
+              className="visually-hidden"
+            />
+            <label
+              htmlFor={`${bundleInputId}-import`}
+              className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+            >
+              <span>Import / Merge Bundle (.json)</span>
+              <Upload className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+            </label>
+          </div>
+
+          <button
+            type="button"
             onClick={() => void handleClearGraph()}
-            className="flex w-full items-center justify-between rounded-xl border border-rose-500/25 bg-rose-500/8 px-3 py-2 text-xs font-medium text-rose-400 hover:border-rose-400 cursor-pointer"
+            className="flex w-full items-center justify-between rounded-sm border border-border bg-rose-950 px-3 py-2 text-xs font-medium text-rose-300 hover:border-rose-400 cursor-pointer"
           >
             <span>Clear Graph (0 Nodes)</span>
-            <RotateCcw className="h-3.5 w-3.5 text-rose-400" />
+            <RotateCcw className="h-3.5 w-3.5 text-rose-300" />
           </button>
         </div>
 
@@ -1415,14 +2510,14 @@ export function DetectiveWorkspace({
         </div>
       </div>
 
-      {/* Transient Feedback Toast */}
+      {/* Transient Feedback Toast (always positioned cleanly below the 48px header) */}
       {statusMessage && (
         <div
           role="status"
-          className={`etg-hud-pill pointer-events-auto absolute top-20 z-30 flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-medium text-text-primary shadow-lg ${
+          className={`etg-hud-pill pointer-events-auto absolute top-14 z-30 flex items-center gap-2 rounded-md bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg ${
             inspectorOpen
-              ? "left-6 max-w-[min(560px,calc(100dvw-410px))]"
-              : "left-1/2 max-w-[min(680px,calc(100dvw-2rem))] -translate-x-1/2"
+              ? "left-2.5 max-w-[min(560px,calc(100dvw-1.25rem))] sm:left-4 sm:max-w-[min(560px,calc(100dvw-430px))]"
+              : "left-1/2 max-w-[min(680px,calc(100dvw-1.5rem))] -translate-x-1/2"
           }`}
         >
           <span className="truncate">{statusMessage}</span>
@@ -1437,54 +2532,124 @@ export function DetectiveWorkspace({
         </div>
       )}
 
-      {/* Full-Bleed Center Canvas */}
-      <main
-        className="relative flex-1 overflow-hidden"
-        style={{ viewTransitionName: "etg-stage" }}
-      >
+      {/* Active Compare Mode Banner (immediate feedback before second globe click) */}
+      {compareMode && !statusMessage && viewMode === "globe" && (
+        <div
+          role="status"
+          className={`etg-hud-pill pointer-events-auto absolute top-14 z-30 flex items-center gap-2 rounded-md border border-amber-400 bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg ${
+            inspectorOpen
+              ? "left-2.5 max-w-[calc(100dvw-1.25rem)] sm:left-4 sm:max-w-[min(520px,calc(100dvw-430px))]"
+              : "left-1/2 max-w-[calc(100dvw-1.5rem)] -translate-x-1/2"
+          }`}
+        >
+          <GitCompare className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+          <span className="truncate">
+            Compare mode active — click a second point or pin on the 3D Earth
+          </span>
+          <button
+            type="button"
+            onClick={() => setCompareMode(false)}
+            className="shrink-0 rounded-xs border border-border bg-surface-elevated px-1.5 py-0.5 text-[11px] font-semibold text-text-muted hover:text-text-primary cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Full-Bleed Center Canvas + Docked AI Graph Studio */}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <AiGraphChatPanel
+          open={aiStudioOpen}
+          onClose={() => setAiStudioOpen(false)}
+          snapshot={snapshot}
+          selectedNode={selectedNode}
+          probedCoord={probedCoord}
+          activeTopics={activeTopics}
+          onSelectNode={handleSelectNode}
+          onSnapshotChange={handleSnapshotChange}
+          onBlockedNotice={(msg) => setStatusMessage(msg)}
+        />
+
+        <main
+          className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+          style={{ viewTransitionName: "etg-stage" }}
+        >
         <h2 ref={viewHeadingRef} tabIndex={-1} className="sr-only">
           {stageTitle}
         </h2>
 
         {viewMode === "graph" ? (
           <EarthTrendGraphView
-            nodes={visibleNodes}
-            edges={visibleEdges}
+            nodes={graphNodes}
+            edges={graphEdges}
             selectedNodeUuid={selectedNodeUuid}
             selectedEdgeUuid={selectedEdgeUuid}
-            cascadeEdgeUuids={activeCascade?.edgeUuids ?? []}
+            cascadeEdgeUuids={activeCascade?.edgeUuids ?? EMPTY_CASCADE_EDGE_UUIDS}
             searchQuery={searchQuery}
             renderMode={graphRenderMode}
             onlyOpposite={onlyOpposite}
             showSuperseded={showSuperseded}
+            enabledRelationCategories={enabledRelationCategories}
             inspectorOpen={inspectorOpen}
+            candidateLinks={candidateLinks}
+            traversalFilter={traversalFilter}
+            roleByNode={activeTraversal?.roleByNode ?? EMPTY_ROLE_BY_NODE}
+            hopByNode={activeTraversal?.hopByNode ?? EMPTY_HOP_BY_NODE}
+            connectMode={connectMode}
+            connectSourceUuid={connectSourceUuid}
+            discoveringLinks={discoveringLinks}
+            regionOptions={regionOptions}
+            selectedRegionScope={selectedRegionScope}
             onSelectNode={handleSelectNode}
-            onSelectEdge={handleSelectEdge}
+            onSelectEdge={(edge) => {
+              setPendingConnectPair(null);
+              setQuickAddNodeOpen(false);
+              handleSelectEdge(edge);
+            }}
             onClearSelection={handleClearSelection}
+            onToggleConnectMode={handleToggleConnectMode}
+            onStartQuickConnect={handleStartQuickConnect}
+            onOpenQuickAddNode={() => {
+              setQuickAddNodeOpen(true);
+              setPendingConnectPair(null);
+              setSelectedEdgeUuid(null);
+              setInspectorOpen(true);
+            }}
+            onDiscoverLinks={() => void handleDiscoverCandidateLinks()}
+            onAcceptCandidateLink={(s) => void handleAcceptCandidateLink(s)}
+            onClearCandidateLinks={() => setCandidateLinks([])}
+            onChangeTraversalFilter={(next) => setTraversalFilter(next)}
+            onChangeRegionScope={(nextRegion) => setSelectedRegionScope(nextRegion)}
+            onResetOppositeFilter={() => setOnlyOpposite(false)}
           />
         ) : (
-          <>
-            <EarthGlobe3D
-              nodes={globeNodes}
-              edges={globeEdges}
-              selectedNodeUuid={selectedNodeUuid}
-              selectedEdgeUuid={selectedEdgeUuid}
-              cascadeEdgeUuids={activeCascade?.edgeUuids ?? []}
-              probedCoord={probedCoord}
-              comparePinB={comparePinB}
-              compareMode={compareMode}
-              inspectorOpen={inspectorOpen}
-              onSelectNode={handleSelectNode}
-              onSelectEdge={handleSelectEdge}
-              onProbeCoordinate={handleProbeCoordinate}
-              onToggleCompareMode={() => {
-                setCompareMode((v) => !v);
-                setInspectorOpen(true);
-              }}
-            />
-
-            {/* Floating Bottom Timeline Scrubber on 3D Earth view */}
-            <div className="pointer-events-auto z-20 absolute inset-x-4 bottom-20 md:inset-x-auto md:bottom-6 md:left-[29.5rem] md:w-[min(420px,calc(100dvw-31.5rem))] min-[1400px]:left-1/2 min-[1400px]:w-[440px] min-[1400px]:-translate-x-1/2">
+          <EarthGlobe3D
+            nodes={globeNodes}
+            edges={globeEdges}
+            selectedNodeUuid={selectedNodeUuid}
+            probedAnchorUuid={probedAnchorUuid}
+            selectedEdgeUuid={selectedEdgeUuid}
+            cascadeEdgeUuids={activeCascade?.edgeUuids ?? []}
+            microscopeScan={microscopeScan}
+            microscopeByNode={microscopeByNode}
+            probedCoord={probedCoord}
+            comparePinB={comparePinB}
+            compareMode={compareMode}
+            inspectorOpen={inspectorOpen}
+            enabledCategories={enabledRelationCategories}
+            onChangeEnabledCategories={setEnabledRelationCategories}
+            tempUnit={tempUnit}
+            onChangeTempUnit={setTempUnit}
+            activeTopics={activeTopics}
+            cutoffMs={cutoffMs}
+            regionalFocusRequest={regionalFocusRequest}
+            initialSatelliteMode={
+              initialDemoMode === "spaceapps" ? "sst_anomaly" : undefined
+            }
+            initialSunPreset={
+              initialDemoMode === "spaceapps" ? "daylight" : undefined
+            }
+            timelineSlot={
               <TimelineScrubber
                 nodes={snapshot.nodes}
                 cutoffMs={cutoffMs}
@@ -1493,50 +2658,88 @@ export function DetectiveWorkspace({
                 onChangeCutoff={(ms) => setCutoffMs(ms)}
                 visibleCount={globeNodes.length}
               />
-            </div>
-          </>
+            }
+            onSelectNode={handleSelectNode}
+            onSelectEdge={handleSelectEdge}
+            onProbeCoordinate={handleProbeCoordinate}
+            onToggleCompareMode={() => {
+              setCompareMode((v) => !v);
+              setInspectorOpen(true);
+            }}
+          />
         )}
 
         {snapshot.nodes.length === 0 && viewMode === "globe" && !inspectorOpen && (
-          <div className="pointer-events-none absolute top-20 inset-x-0 z-20 flex justify-center px-4">
-            <div className="etg-hud-pill pointer-events-auto flex flex-wrap items-center gap-3 rounded-full px-4 py-1.5 text-xs shadow-lg">
-              <span className="text-text-muted">Click anywhere on Earth to see what&apos;s happening there, or</span>
+          <div className="pointer-events-none absolute top-3 inset-x-0 z-20 flex justify-center px-4">
+            <div className="etg-hud-pill pointer-events-auto flex max-w-4xl flex-wrap items-center justify-center gap-2 rounded-md bg-surface px-4 py-1.5 text-xs shadow-lg">
+              <span className="text-text-muted">Click Earth to probe, or try:</span>
               <button
                 type="button"
                 onClick={() => void handleDiscoverGlobalTrends()}
                 disabled={discoverBusy}
-                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1 font-semibold text-white transition-colors hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
               >
                 <RefreshCw className={`h-3 w-3 ${discoverBusy ? "animate-spin" : ""}`} aria-hidden="true" />
                 <span>{discoverBusy ? "Loading Live Data…" : "Load Live Global Pins"}</span>
               </button>
+              {GUIDED_DIPOLE_CASES.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  title={preset.subtitle}
+                  onClick={() => handleRunCaseStudy(preset)}
+                  className="rounded-sm border border-border bg-surface-inset px-2.5 py-1 text-[11px] font-medium text-text-primary transition-colors hover:border-rose-400 cursor-pointer"
+                >
+                  {preset.shortLabel}
+                </button>
+              ))}
             </div>
           </div>
         )}
 
-        {snapshot.nodes.length === 0 && viewMode === "graph" && (
+        {snapshot.nodes.length === 0 && viewMode === "graph" && !quickAddNodeOpen && (
           <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-6">
-            <div className="etg-hud-pill pointer-events-auto max-w-md space-y-4 rounded-2xl p-6 text-center shadow-2xl">
-              <div className="mx-auto inline-flex items-center gap-2 rounded-full border border-teal-500/35 bg-teal-500/12 px-3 py-1 font-mono text-[11px] font-semibold text-teal-400">
+            <div className="etg-hud-pill pointer-events-auto max-w-lg space-y-4 rounded-md bg-surface p-6 text-center shadow-2xl">
+              <div className="mx-auto inline-flex items-center gap-2 rounded-sm border border-teal-400 bg-teal-950 px-3 py-1 font-mono text-[11px] font-semibold text-teal-300">
                 Zero Seeded Data · Live Scientific Observatory
               </div>
               <h3 className="font-outfit text-lg font-semibold text-text-primary">
-                Build the Earth Trend Knowledge Graph from Live Data
+                Build &amp; Connect the Earth Trend Knowledge Graph
               </h3>
               <p className="text-xs leading-relaxed text-text-muted">
-                Ingest live NASA GISTEMP v4, NOAA GML/CDO stations, KNMI climate modes, CSA RCM /
-                Geo.ca hydrology, SWOT passes, EONET events, and POWER MERRA-2 series to detect
-                significant trends and wire linked opposite trends.
+                Ingest live NASA/NOAA/CSA streams, load the 7-node Front Range solar microgrid graph
+                to benchmark graph-aware prediction, or create your own phenomenon nodes and link
+                causes across the world.
               </p>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => void handleDiscoverGlobalTrends()}
                   disabled={discoverBusy}
-                  className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
+                  className="inline-flex items-center gap-2 rounded-sm bg-accent px-4 py-2 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${discoverBusy ? "animate-spin" : ""}`} />
                   {discoverBusy ? "Loading Live Data…" : "Load Live NASA / NOAA / CSA Trends"}
+                </button>
+                <button
+                  type="button"
+                  disabled={discoverBusy}
+                  onClick={() => void handleMaterializeSolarGraph()}
+                  className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400 bg-amber-950 px-4 py-2 text-xs font-semibold text-amber-300 hover:border-accent-fg disabled:opacity-50 cursor-pointer"
+                >
+                  <Sun className="h-3.5 w-3.5" />
+                  Load 7-Node Solar Predictive Graph
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickAddNodeOpen(true);
+                    setInspectorOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-4 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Create Phenomenon Node
                 </button>
                 <button
                   type="button"
@@ -1544,7 +2747,7 @@ export function DetectiveWorkspace({
                     setIngestTab("agencies");
                     setIngestOpen(true);
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border-strong bg-surface-elevated px-4 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-4 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
                 >
                   Space Agency Hub (12)
                 </button>
@@ -1553,66 +2756,120 @@ export function DetectiveWorkspace({
           </div>
         )}
 
-        {/* Compact Auto-Height Floating Spot Card (closed on initial load) */}
-        {inspectorOpen && (
-          <aside
-            aria-label="Spot summary"
-            className="absolute top-20 right-5 z-30 w-[min(368px,calc(100dvw-2rem))]"
-          >
-            <CompactSpotCard
-              selectedNode={selectedNode}
-              selectedEdge={selectedEdge}
-              sourceNode={relationSourceNode}
-              targetNode={relationTargetNode}
-              allNodes={snapshot.nodes}
-              allEdges={snapshot.edges}
-              visibleNodes={globeNodes}
-              probedCoord={probedCoord}
-              primary={telemetryPrimary}
-              secondary={telemetrySecondary}
-              summaries={telemetrySummaries}
-              focusedSummaryDataset={focusedSummaryDataset}
-              comparison={comparison}
-              compareMode={compareMode}
-              activeTopics={activeTopics}
-              loading={telemetryLoading}
-              error={telemetryError}
-              onToggleTopic={toggleTopic}
-              onResetTopics={resetTopics}
-              onFocusSummaryDataset={(ds) => setFocusedSummaryDataset(ds)}
-              onSelectNode={handleSelectNode}
-              onCompareOpposite={handleCompareOpposite}
-              onToggleCompareMode={() => setCompareMode((v) => !v)}
-              onSwapPins={handleSwapPins}
-              onClearComparison={() => {
-                setComparison(null);
-                setTelemetrySecondary(null);
-                setComparePinB(null);
-                setSelectedEdgeUuid(null);
-                setRelationNodePair(null);
-                if (probedCoord && !selectedNodeUuid) {
-                  const requested = activeTopics.length > 0 ? activeTopics : DEFAULT_MULTI_TOPICS;
-                  const gridded = requested.filter((ds) => GRIDDED_TOPIC_SET.has(ds));
-                  if (gridded.length > 0) {
-                    void queryTimeSeries(
-                      probedCoord.lat,
-                      probedCoord.lng,
-                      gridded[0],
-                      undefined,
-                      undefined,
-                      gridded
-                    );
+        {/* Compact Auto-Height Floating Spot Card or Flexible Graph Workbench */}
+        {inspectorOpen &&
+          (viewMode === "graph" &&
+          (selectedNode || selectedEdge || pendingConnectPair || quickAddNodeOpen) ? (
+            <aside
+              aria-label="Graph workbench"
+              className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto max-sm:max-h-[54dvh] max-sm:overflow-y-auto sm:top-3 sm:right-4 sm:w-[min(410px,calc(100dvw-2rem))]"
+            >
+              <GraphNodeWorkbenchPanel
+                allNodes={snapshot.nodes}
+                allEdges={snapshot.edges}
+                selectedNode={selectedNode}
+                selectedEdge={selectedEdge}
+                pendingConnectPair={pendingConnectPair}
+                quickAddOpen={quickAddNodeOpen}
+                candidateLinks={candidateLinks}
+                microscopeScan={microscopeScan}
+                microscopeByNode={microscopeByNode}
+                traversalHistory={traversalHistory}
+                maxHops={traversalFilter.maxHops ?? 2}
+                onSelectNode={handleSelectNode}
+                onSelectEdge={(edge) => {
+                  setPendingConnectPair(null);
+                  setQuickAddNodeOpen(false);
+                  handleSelectEdge(edge);
+                }}
+                onClearPendingConnect={() => setPendingConnectPair(null)}
+                onCloseQuickAdd={() => setQuickAddNodeOpen(false)}
+                onStartQuickConnect={handleStartQuickConnect}
+                onDiscoverLinksForNode={(anchor) => handleDiscoverCandidateLinks(anchor)}
+                onAcceptCandidateLink={handleAcceptCandidateLink}
+                onMaterializeSolarGraph={handleMaterializeSolarGraph}
+                onLocateOnGlobe={handleLocateOnGlobe}
+                onSnapshotChange={handleSnapshotChange}
+                onClose={handleClearSelection}
+              />
+            </aside>
+          ) : viewMode === "globe" ? (
+            <aside
+              aria-label="Spot summary"
+              className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto sm:top-3 sm:right-4 sm:w-[min(396px,calc(100dvw-2rem))]"
+            >
+              <CompactSpotCard
+                selectedNode={selectedNode}
+                selectedEdge={selectedEdge}
+                sourceNode={relationSourceNode}
+                targetNode={relationTargetNode}
+                allNodes={snapshot.nodes}
+                allEdges={snapshot.edges}
+                visibleNodes={globeNodes}
+                microscopeScan={microscopeScan}
+                microscopeByNode={microscopeByNode}
+                probedCoord={probedCoord}
+                primary={telemetryPrimary}
+                secondary={telemetrySecondary}
+                summaries={telemetrySummaries}
+                focusedSummaryDataset={focusedSummaryDataset}
+                comparison={comparison}
+                current={telemetryCurrent}
+                secondaryCurrent={telemetrySecondaryCurrent}
+                tempUnit={tempUnit}
+                onChangeTempUnit={setTempUnit}
+                mobileCollapsed={mobileSheetCollapsed}
+                onToggleMobileCollapse={() => setMobileSheetCollapsed((v) => !v)}
+                enabledRelationCategories={enabledRelationCategories}
+                compareMode={compareMode}
+                activeTopics={activeTopics}
+                loading={telemetryLoading}
+                error={telemetryError}
+                diagnostics={telemetryDiagnostics}
+                failureKind={telemetryFailureKind}
+                onRetry={retryTelemetry}
+                discoverBusy={discoverBusy}
+                onToggleTopic={toggleTopic}
+                onResetTopics={resetTopics}
+                onFocusSummaryDataset={(ds) => setFocusedSummaryDataset(ds)}
+                onSelectNode={handleSelectNode}
+                onSelectEdge={handleSelectEdge}
+                onCompareOpposite={handleCompareOpposite}
+                onToggleCompareMode={() => setCompareMode((v) => !v)}
+                onSwapPins={handleSwapPins}
+                onClearComparison={() => {
+                  setComparison(null);
+                  setTelemetrySecondary(null);
+                  setTelemetrySecondaryCurrent(null);
+                  setComparePinB(null);
+                  setSelectedEdgeUuid(null);
+                  setRelationNodePair(null);
+                  if (probedCoord && !selectedNodeUuid) {
+                    const requested = activeTopics.length > 0 ? activeTopics : DEFAULT_MULTI_TOPICS;
+                    const gridded = requested.filter((ds) => GRIDDED_TOPIC_SET.has(ds));
+                    if (gridded.length > 0) {
+                      void queryTimeSeries(
+                        probedCoord.lat,
+                        probedCoord.lng,
+                        gridded[0],
+                        undefined,
+                        undefined,
+                        gridded
+                      );
+                    }
                   }
-                }
-              }}
-              onCommitToGraph={handleCommitTelemetryToGraph}
-              onCommitRelation={handleCommitRelation}
-              onGraphUpdated={refreshGraph}
+                }}
+                onDiscoverGlobalTrends={() => void handleDiscoverGlobalTrends()}
+                onCommitToGraph={handleCommitTelemetryToGraph}
+                onCommitRelation={handleCommitRelation}
+                onOpenInGraphWorkbench={handleOpenInGraphWorkbench}
+                onGraphUpdated={refreshGraph}
               onClose={handleClearSelection}
-            />
-          </aside>
-        )}
-      </main>
+              />
+            </aside>
+          ) : null)}
+        </main>
+      </div>
 
       <IngestionModal
         open={ingestOpen}
@@ -1620,6 +2877,18 @@ export function DetectiveWorkspace({
         onClose={() => setIngestOpen(false)}
         nodes={snapshot.nodes}
         onIngested={refreshGraph}
+      />
+
+      <SolarMicrogridPanel
+        open={solarGraphOpen}
+        onClose={() => setSolarGraphOpen(false)}
+        onFocusDenver={() => {
+          setSolarGraphOpen(false);
+          setViewMode("globe");
+          void handleProbeCoordinate(39.74, -104.99);
+          requestRegionalFocus(39.74, -104.99, 128);
+        }}
+        onMaterializeInGraph={handleMaterializeSolarGraph}
       />
     </div>
   );

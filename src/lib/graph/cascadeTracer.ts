@@ -14,9 +14,25 @@ const ALLOWED_CASCADE_EDGES = new Set<ETGRelationshipType>([
   "corroborates",
   "supports",
   "relates_to",
+  "leads",
+  "amplifies",
+  "dampens",
+  "advects_to",
+  "triggers",
+  "impacts",
+  "hypothesized_link",
 ]);
 
-const DIRECTED_SUPPORT_EDGES = new Set<ETGRelationshipType>(["supports", "corroborates"]);
+const DIRECTED_SUPPORT_EDGES = new Set<ETGRelationshipType>([
+  "supports",
+  "corroborates",
+  "leads",
+  "amplifies",
+  "dampens",
+  "advects_to",
+  "triggers",
+  "impacts",
+]);
 
 /**
  * Classifies an Earth Trend Graph node into one of five primary Earth-system spheres

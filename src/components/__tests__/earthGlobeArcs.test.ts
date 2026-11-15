@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import * as THREE from "three";
 import {
   buildElevatedGreatCircleCurve,
   selectVisibleGlobeArcs,
 } from "@/components/EarthGlobe3D";
+import { computeDipoleFramingTarget } from "@/components/DetectiveWorkspace";
 import type { ETGEdge, ETGNode, ETGRelationshipType } from "@/types/etg";
 
 function makeGeoNode(uuid: string, lat: number, lng: number): ETGNode {
@@ -172,5 +174,159 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
       expect(Number.isFinite(pt.y)).toBe(true);
       expect(Number.isFinite(pt.z)).toBe(true);
     }
+  });
+
+  it("supports all, opposite, causal, probedAnchorUuid focus, and enabledCategories filtering", () => {
+    const extraEdges: ETGEdge[] = [
+      ...edges,
+      makeEdge("e-leads-1", "hub", "sahel", "leads", 0.72),
+      makeEdge("e-triggers-1", "sierra", "med", "triggers", 0.65),
+    ];
+
+    const allArcs = selectVisibleGlobeArcs({
+      nodes,
+      edges: extraEdges,
+      mode: "all",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(allArcs.length).toBeGreaterThan(0);
+
+    const oppArcs = selectVisibleGlobeArcs({
+      nodes,
+      edges: extraEdges,
+      mode: "opposite",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(oppArcs.length).toBeGreaterThan(0);
+    expect(oppArcs.every((e) => e.type === "drives_opposite")).toBe(true);
+
+    const causalArcs = selectVisibleGlobeArcs({
+      nodes,
+      edges: extraEdges,
+      mode: "causal",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(causalArcs.map((e) => e.properties.uuid)).toEqual(
+      expect.arrayContaining(["e-leads-1", "e-triggers-1"])
+    );
+    expect(causalArcs.every((e) => e.type === "leads" || e.type === "triggers")).toBe(true);
+
+    const probedFocus = selectVisibleGlobeArcs({
+      nodes,
+      edges: extraEdges,
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedAnchorUuid: "hub",
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(probedFocus.length).toBeGreaterThan(0);
+    expect(probedFocus.every((e) => e.source_uuid === "hub" || e.target_uuid === "hub")).toBe(
+      true
+    );
+
+    const evidenceOnly = selectVisibleGlobeArcs({
+      nodes,
+      edges: extraEdges,
+      mode: "all",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+      enabledCategories: ["corroboration"],
+    });
+    expect(evidenceOnly.length).toBeGreaterThan(0);
+    expect(
+      evidenceOnly.every((e) => e.type === "supports" || e.type === "corroborates")
+    ).toBe(true);
+  });
+
+  it("reveals short-range regional Front Range corridors only in regional zoom", () => {
+    const frontRangeNodes: ETGNode[] = [
+      makeGeoNode("denver", 39.74, -104.99),
+      makeGeoNode("boulder", 40.015, -105.27),
+      makeGeoNode("golden", 39.755, -105.221),
+    ];
+    const frontRangeEdges: ETGEdge[] = [
+      makeEdge("fr-boulder", "boulder", "denver", "leads", 0.78),
+      makeEdge("fr-golden", "golden", "denver", "triggers", 0.74),
+    ];
+
+    const globalView = selectVisibleGlobeArcs({
+      nodes: frontRangeNodes,
+      edges: frontRangeEdges,
+      mode: "all",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+      isRegionalZoom: false,
+      regionalCenter: null,
+    });
+    expect(globalView).toHaveLength(0);
+
+    const regionalView = selectVisibleGlobeArcs({
+      nodes: frontRangeNodes,
+      edges: frontRangeEdges,
+      mode: "all",
+      selectedNodeUuid: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+      isRegionalZoom: true,
+      regionalCenter: { lat: 39.74, lng: -104.99 },
+    });
+    expect(regionalView.map((e) => e.properties.uuid)).toEqual(
+      expect.arrayContaining(["fr-boulder", "fr-golden"])
+    );
+  });
+
+  it("builds low-altitude corridor curves for short-range regional arcs", () => {
+    const pts = buildElevatedGreatCircleCurve(40.015, -105.27, 39.74, -104.99, 64, {
+      lowAltitudeCorridor: true,
+    });
+    expect(pts).toHaveLength(65);
+    let peakRadius = 0;
+    for (const pt of pts) {
+      const len = pt.length();
+      expect(len).toBeGreaterThan(100);
+      expect(len).toBeLessThanOrEqual(102.2);
+      if (len > peakRadius) peakRadius = len;
+    }
+    expect(peakRadius).toBeGreaterThan(100.25);
+  });
+
+  it("produces non-NaN TubeGeometry bounding spheres for coincident and near-coincident coordinates", () => {
+    for (const opts of [{ lowAltitudeCorridor: false }, { lowAltitudeCorridor: true }] as const) {
+      const pts = buildElevatedGreatCircleCurve(
+        39.7392,
+        -104.9903,
+        39.7392,
+        -104.9903,
+        64,
+        opts
+      );
+      const curve = new THREE.CatmullRomCurve3(pts);
+      const tubeGeo = new THREE.TubeGeometry(curve, 56, 0.28, 6, false);
+      tubeGeo.computeBoundingSphere();
+      expect(tubeGeo.boundingSphere).not.toBeNull();
+      expect(Number.isFinite(tubeGeo.boundingSphere!.radius)).toBe(true);
+      expect(tubeGeo.boundingSphere!.radius).toBeGreaterThan(0);
+      tubeGeo.dispose();
+    }
+  });
+
+  it("frames the ENSO Lima ↔ Darwin dipole over the Tropical Pacific without polar pull", () => {
+    const target = computeDipoleFramingTarget(
+      { lat: -12.05, lng: -77.04 },
+      { lat: -12.46, lng: 130.84 }
+    );
+    expect(target.lat).toBeCloseTo(-12.255, 2);
+    expect(target.lng < -130 || target.lng > 160).toBe(true);
+    expect(target.radius).toBeGreaterThanOrEqual(248);
+    expect(target.radius).toBeLessThanOrEqual(295);
   });
 });
