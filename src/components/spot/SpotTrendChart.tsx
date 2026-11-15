@@ -128,7 +128,47 @@ export function SpotTrendChart({
     ) : null;
 
   if (hasOverlay && comparison && effectiveFocus === "both") {
-    const pts = comparison.alignedPoints;
+    const rawPts = comparison.alignedPoints;
+    const canCompareDeseasonalized = Boolean(
+      summary?.seasonalPoints &&
+        summary.seasonalPoints.length >= 18 &&
+        secondarySummary?.seasonalPoints &&
+        secondarySummary.seasonalPoints.length >= 18
+    );
+    const effectiveCompareMode =
+      canCompareDeseasonalized && chartMode === "anomaly" ? "anomaly" : "raw";
+
+    const pts: Array<{ date: string; zA: number; zB: number }> = (() => {
+      if (effectiveCompareMode !== "anomaly" || !summary?.seasonalPoints || !secondarySummary?.seasonalPoints) {
+        return rawPts;
+      }
+      const mapB = new Map<string, number>();
+      for (const p of secondarySummary.seasonalPoints) {
+        if (typeof p.anomalyValue === "number") {
+          mapB.set(p.date, p.anomalyValue);
+        }
+      }
+      const paired: Array<{ date: string; a: number; b: number }> = [];
+      for (const p of summary.seasonalPoints) {
+        const bVal = mapB.get(p.date);
+        if (typeof p.anomalyValue === "number" && bVal !== undefined) {
+          paired.push({ date: p.date, a: p.anomalyValue, b: bVal });
+        }
+      }
+      if (paired.length < 6) return rawPts;
+      const zScore = (vals: number[]) => {
+        const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+        const std = Math.sqrt(
+          vals.reduce((s, v) => s + (v - mean) ** 2, 0) / Math.max(1, vals.length)
+        );
+        const denom = std > 1e-9 ? std : 1;
+        return vals.map((v) => (v - mean) / denom);
+      };
+      const zAs = zScore(paired.map((p) => p.a));
+      const zBs = zScore(paired.map((p) => p.b));
+      return paired.map((p, idx) => ({ date: p.date, zA: zAs[idx], zB: zBs[idx] }));
+    })();
+
     const allZ = pts.flatMap((p) => [p.zA, p.zB]);
     const minY = Math.min(-2, ...allZ);
     const maxY = Math.max(2, ...allZ);
@@ -143,6 +183,9 @@ export function SpotTrendChart({
       .map((p, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(p.zB).toFixed(1)}`)
       .join(" ");
 
+    const saA = summary?.seasonalAnalysis;
+    const saB = secondarySummary?.seasonalAnalysis;
+
     return (
       <div className="ws-inset space-y-2 rounded-md p-3">
         <div className="flex items-center justify-between text-[11px] text-text-subtle">
@@ -152,6 +195,43 @@ export function SpotTrendChart({
           </span>
         </div>
         {focusSwitcher}
+        {canCompareDeseasonalized && (
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1" role="group" aria-label="Time series display mode">
+              <button
+                type="button"
+                aria-pressed={effectiveCompareMode === "raw"}
+                onClick={() => setChartMode("raw")}
+                className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                  effectiveCompareMode === "raw"
+                    ? "border-accent-fg bg-amber-950 text-amber-300"
+                    : "border-border bg-surface text-text-muted hover:text-text-primary"
+                }`}
+              >
+                Raw Values
+              </button>
+              <button
+                type="button"
+                aria-pressed={effectiveCompareMode === "anomaly"}
+                onClick={() => setChartMode("anomaly")}
+                className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                  effectiveCompareMode === "anomaly"
+                    ? "border-accent-fg bg-amber-950 text-amber-300"
+                    : "border-border bg-surface text-text-muted hover:text-text-primary"
+                }`}
+              >
+                Seasonal Cycle Removed
+              </button>
+            </div>
+            {(saA || saB) && (
+              <span className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+                {saA ? `A p_s=${saA.pValue < 0.0001 ? "<0.0001" : saA.pValue.toFixed(4)}` : ""}
+                {saA && saB ? " · " : ""}
+                {saB ? `B p_s=${saB.pValue < 0.0001 ? "<0.0001" : saB.pValue.toFixed(4)}` : ""}
+              </span>
+            )}
+          </div>
+        )}
         <svg viewBox={`0 0 ${w} ${h}`} className="h-[118px] w-full" aria-describedby={chartDescId}>
           <line
             x1={padX}
@@ -161,11 +241,11 @@ export function SpotTrendChart({
             stroke="var(--border-strong)"
             strokeDasharray="3 3"
           />
-          <path d={pathA} fill="none" stroke="#facc15" strokeWidth={2} strokeLinecap="round" />
-          <path d={pathB} fill="none" stroke="#38bdf8" strokeWidth={2} strokeLinecap="round" />
+          <path d={pathA} fill="none" stroke="#facc15" strokeWidth={effectiveCompareMode === "anomaly" ? 1.5 : 2} strokeLinecap="round" />
+          <path d={pathB} fill="none" stroke="#38bdf8" strokeWidth={effectiveCompareMode === "anomaly" ? 1.5 : 2} strokeLinecap="round" />
         </svg>
         <p id={chartDescId} className="sr-only">
-          Comparison chart showing normalized changes over time for {labelA} and {labelB}.
+          Comparison chart showing normalized {effectiveCompareMode === "anomaly" ? "deseasonalized anomalies" : "changes"} over time for {labelA} and {labelB}.
         </p>
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
           <div className="flex flex-wrap items-center gap-3">
@@ -178,7 +258,7 @@ export function SpotTrendChart({
               <span className="max-w-[130px] truncate">{labelB}</span>
             </span>
           </div>
-          {(summary?.seasonalAnalysis || secondarySummary?.seasonalAnalysis) && (
+          {(saA || saB) && !canCompareDeseasonalized && (
             <span className="font-mono text-[10px] text-text-subtle">
               Select A or B for Seasonal MK (p_s)
             </span>

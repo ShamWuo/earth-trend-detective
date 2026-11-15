@@ -694,7 +694,7 @@ export function WorkspacePopovers({
             }}
             className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-3 py-2 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
           >
-            <span>Challenge Space-Agency Hub (12)</span>
+            <span>Agency Hub (12), Citations &amp; AI Disclosure</span>
             <Globe2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
           </button>
 

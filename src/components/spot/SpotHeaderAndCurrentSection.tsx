@@ -107,7 +107,7 @@ export function SpotCardHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          <VariableGuidePopoverButton compact label="Guide" />
+          <VariableGuidePopoverButton compact label="? Variable Guide" />
           {onChangeTempUnit && (
             <div
               className="inline-flex rounded-sm border border-border bg-surface-inset p-0.5"

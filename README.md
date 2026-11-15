@@ -8,7 +8,7 @@
 
 ## Judge Zero-Click Deep-Links
 
-- **NASA Space Apps Mode:** Open `/?demo=spaceapps` to auto-activate **5K NASA GIBS `Ocean Anomaly`** in Full Daylight, frame & analyze the **`ENSO Pacific Rainfall Seesaw`** dipole, trigger live NASA/NOAA/CSA Earth discovery, and expose the **Guided Opposite-Trend Case Studies** and student `? Variable Guide`.
+- **NASA Space Apps Mode:** Open `/?demo=spaceapps` to auto-activate **5K NASA GIBS `Ocean Anomaly`** in Full Daylight, frame & analyze the **`Walker / ENSO Warm Pool vs. Madagascar Drying`** dipole (`r = -0.65`, `p = 0.000034`), trigger live NASA/NOAA/CSA Earth discovery, and expose the **Guided Opposite-Trend Case Studies** and student `? Variable Guide`.
 - **Veritas AI Climate Mode:** Open `/?demo=veritas` to auto-launch the **Denver 7-Node Solar Microgrid & Evening Advection** evaluation (`4-way` ablation, calibrated K-12 tariff savings, and failure audit).
 
 ## Key Capabilities

@@ -733,6 +733,26 @@ export function IngestionModal({
                 </div>
               </section>
             ))}
+
+            <section
+              aria-label="Open Data Citations and AI Usage Disclosure"
+              className="space-y-2 rounded-md border border-border-strong bg-surface-inset p-3.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="ws-eyebrow text-text-primary">
+                  Open Data Citations, License &amp; AI Usage Disclosure
+                </h3>
+                <span className="rounded-xs border border-emerald-400 bg-emerald-950 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-300">
+                  MIT Open Source
+                </span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-text-muted">
+                <strong className="text-text-primary">Official Datasets Cited:</strong> NASA EOSDIS GIBS / Worldview (WMTS/WMS — GHRSST L4 MUR SST &amp; Anomaly, GPM IMERG, MODIS Terra LST/NDVI/True Color, MERRA-2 Winds/T2M/AOD, Suomi NPP VIIRS), NASA POWER (CERES SYN1deg &amp; MERRA-2), NASA EONET v3, NASA GISTEMP v4, NOAA GML/NSIDC/CDO, USGS NWIS, Copernicus GloFAS v4 &amp; CAMS (via Open-Meteo), CSA (RCM / GEO.ca / SWOT), and KNMI Climate Explorer.
+              </p>
+              <p className="text-[11px] leading-relaxed text-text-muted">
+                <strong className="text-text-primary">AI Usage Disclosure:</strong> AI coding assistants (Google Gemini / Antigravity and Claude) assisted with UI scaffolding, accessibility markup, test boilerplate, and documentation formatting. All challenge framing, ETG ontology, Mann-Kendall / Hamed-Rao / Hirsch-Slack Seasonal MK statistical engines, ETG Trend Microscope &amp; Inductive GNN models, upwind cosine + evening advection modeling, and leak-free verification were independently designed and validated on live agency data.
+              </p>
+            </section>
           </div>
         </div>
 

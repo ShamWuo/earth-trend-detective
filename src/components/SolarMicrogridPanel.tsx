@@ -594,7 +594,7 @@ export function SolarMicrogridPanel({
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <h3 id={comparisonTableHeadingId} className="text-sm font-semibold text-text-primary">
-                    4-Way Ablation Comparison on Unseen Test Dates (<span className="ws-numeric">{data.testRange}, n={data.testDays}</span> days)
+                    4-Way Ablation &amp; Bayes Dispatch on Unseen Test Dates (<span className="ws-numeric">{data.testRange}, n={data.testDays}</span> days)
                   </h3>
                   <span className="text-[11px] ws-numeric text-text-subtle">
                     Train: {data.trainRange} ({data.trainDays} days)
@@ -608,45 +608,119 @@ export function SolarMicrogridPanel({
                 >
                   <table className="w-full text-left text-xs">
                     <caption className="sr-only">
-                      4-way forecasting, calibrated storm risk Brier score, and overnight charge threshold evaluation on unseen test dates
+                      4-way forecasting, calibrated storm risk Brier score, storm capture recall, and K-12 microgrid tariff savings on unseen test dates
                     </caption>
                     <thead className="bg-surface-band text-text-muted">
                       <tr>
-                        <th scope="col" className="px-3 py-2.5">Model</th>
-                        <th scope="col" className="px-3 py-2.5">RMSE (kWh/m²/d)</th>
-                        <th scope="col" className="px-3 py-2.5">MAE</th>
-                        <th scope="col" className="px-3 py-2.5">R²</th>
-                        <th scope="col" className="px-3 py-2.5">Skill vs Persist</th>
-                        <th scope="col" className="px-3 py-2.5">Low-Solar F1 (&lt;3.5)</th>
-                        <th scope="col" className="px-3 py-2.5">Storm Brier</th>
-                        <th scope="col" className="px-3 py-2.5">Calibrated τ</th>
+                        <th scope="col" className="px-3 py-2.5">Model / Policy</th>
+                        <th scope="col" className="px-2.5 py-2.5">RMSE</th>
+                        <th scope="col" className="px-2.5 py-2.5">MAE</th>
+                        <th scope="col" className="px-2.5 py-2.5">R²</th>
+                        <th scope="col" className="px-2.5 py-2.5">Skill</th>
+                        <th scope="col" className="px-2.5 py-2.5">F1 (&lt;3.5)</th>
+                        <th scope="col" className="px-2.5 py-2.5">Recall</th>
+                        <th scope="col" className="px-2.5 py-2.5">Brier</th>
+                        <th scope="col" className="px-2.5 py-2.5">τ / Rule</th>
+                        <th scope="col" className="px-2.5 py-2.5">Net Savings</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {[
-                        data.metrics.persistence,
-                        data.metrics.localDailyOnly,
-                        data.metrics.localOnly,
-                        data.metrics.graphAware,
-                      ].map((m, idx) => (
-                        <tr
-                          key={m.name}
-                          className={idx === 3 ? "bg-sky-950 text-sky-100" : "text-text-primary"}
-                        >
-                          <th scope="row" className="px-3 py-2.5 font-medium">{m.name}</th>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">{m.rmse.toFixed(3)}</td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">{m.mae.toFixed(3)}</td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">{m.r2.toFixed(3)}</td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">
-                            {(m.skillVsPersistence * 100).toFixed(1)}%
-                          </td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">{m.lowSolarF1.toFixed(3)}</td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">{m.stormBrierScore.toFixed(3)}</td>
-                          <td className="px-3 py-2.5 font-mono ws-numeric">
-                            {(m.calibratedThreshold ?? 3.5).toFixed(2)}
-                          </td>
-                        </tr>
-                      ))}
+                      {(() => {
+                        const persistPenalty = data.economics?.persistencePolicy.annualizedPenaltyUsd ?? 0;
+                        const rows = [
+                          {
+                            metric: data.metrics.persistence,
+                            policy: data.economics?.persistencePolicy,
+                            highlight: false,
+                            ruleLabel: (data.metrics.persistence.calibratedThreshold ?? 3.5).toFixed(2),
+                          },
+                          {
+                            metric: data.metrics.localDailyOnly,
+                            policy: data.economics?.localDailyPolicy,
+                            highlight: false,
+                            ruleLabel: (data.metrics.localDailyOnly.calibratedThreshold ?? 3.5).toFixed(2),
+                          },
+                          {
+                            metric: data.metrics.localOnly,
+                            policy: data.economics?.localPolicy,
+                            highlight: false,
+                            ruleLabel: (data.metrics.localOnly.calibratedThreshold ?? 3.5).toFixed(2),
+                          },
+                          {
+                            metric: data.metrics.graphAware,
+                            policy: data.economics?.graphPolicy,
+                            highlight: true,
+                            ruleLabel: (data.metrics.graphAware.calibratedThreshold ?? 3.5).toFixed(2),
+                          },
+                        ];
+                        return (
+                          <>
+                            {rows.map(({ metric: m, policy, highlight, ruleLabel }) => {
+                              const netSave = policy ? persistPenalty - policy.annualizedPenaltyUsd : null;
+                              const recallPct = policy ? policy.stormCaptureRecallPct : m.lowSolarRecall * 100;
+                              return (
+                                <tr
+                                  key={m.name}
+                                  className={highlight ? "bg-sky-950 text-sky-100" : "text-text-primary"}
+                                >
+                                  <th scope="row" className="px-3 py-2.5 font-medium">{m.name}</th>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.rmse.toFixed(3)}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.mae.toFixed(3)}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.r2.toFixed(3)}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                    {(m.skillVsPersistence * 100).toFixed(1)}%
+                                  </td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.lowSolarF1.toFixed(3)}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{recallPct.toFixed(1)}%</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{m.stormBrierScore.toFixed(3)}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">{ruleLabel}</td>
+                                  <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                    {netSave === null
+                                      ? "—"
+                                      : Math.abs(netSave) < 0.5
+                                        ? "$0/yr"
+                                        : `${netSave >= 0 ? "+" : "-"}$${Math.abs(netSave).toFixed(0)}/yr`}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {data.economics?.probabilisticGraphPolicy && (
+                              <tr className="bg-emerald-950/60 text-emerald-100">
+                                <th scope="row" className="px-3 py-2.5 font-medium">
+                                  {data.economics.probabilisticGraphPolicy.policyName}
+                                </th>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.metrics.graphAware.rmse.toFixed(3)}
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.metrics.graphAware.mae.toFixed(3)}
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.metrics.graphAware.r2.toFixed(3)}
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {(data.metrics.graphAware.skillVsPersistence * 100).toFixed(1)}%
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.metrics.graphAware.lowSolarF1.toFixed(3)}
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.economics.probabilisticGraphPolicy.stormCaptureRecallPct.toFixed(1)}%
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  {data.metrics.graphAware.stormBrierScore.toFixed(3)}
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric">
+                                  P(&lt;3.5) Bayes
+                                </td>
+                                <td className="px-2.5 py-2.5 font-mono ws-numeric font-semibold text-emerald-300">
+                                  +${data.economics.bayesAnnualSavingsVsPersistenceUsd.toFixed(0)}/yr
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        );
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -654,8 +728,12 @@ export function SolarMicrogridPanel({
                   Clear-Sky-Adjusted Persistence RMSE:{" "}
                   <span className="font-mono ws-numeric text-text-primary">{data.metrics.clearSkyPersistenceRmse.toFixed(3)}</span> ·{" "}
                   Paired Error Significance (Graph vs. Persistence:{" "}
-                  <span className="font-mono ws-numeric text-emerald-300">p={data.metrics.graphVsPersistPValue}</span>, Graph vs. Local-Only:{" "}
-                  <span className="font-mono ws-numeric text-sky-300">p={data.metrics.graphVsLocalPValue}</span>)
+                  <span className="font-mono ws-numeric text-emerald-300">
+                    p{data.metrics.graphVsPersistPValue < 0.0001 ? " < 0.0001" : `=${data.metrics.graphVsPersistPValue.toFixed(4)}`}
+                  </span>, Graph vs. Local-Only:{" "}
+                  <span className="font-mono ws-numeric text-sky-300">
+                    p{data.metrics.graphVsLocalPValue < 0.0001 ? " < 0.0001" : `=${data.metrics.graphVsLocalPValue.toFixed(4)}`}
+                  </span>)
                 </p>
               </div>
 

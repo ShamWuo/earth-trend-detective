@@ -11,17 +11,17 @@
 > **Checklist:** Keep total runtime **≤ 0:29** so platform rounding never hits `0:31`. Add **English subtitles/captions** and share via a public link (no login required).
 
 - **0:00–0:07 | Hook & 5K NASA GIBS Hero + Opposite Dipole (`/?demo=spaceapps`)**
-  - **Screen:** Open `/?demo=spaceapps` (auto-activates **5K NASA GIBS `Ocean Anomaly`** in Full Daylight and frames & loads **ENSO Pacific Rainfall Seesaw** across Peru ↔ Australia; briefly cycle the **NASA SVS 4-Slice Split** toggle).
-  - **Say:** *"Earth's climate shifts differently across regions—some warm or flood while linked regions dry out. Meet **Earth Trend Detective**, streaming live 5K NASA GIBS satellite filters, NOAA, USGS, and Copernicus feeds."*
+  - **Screen:** Open `/?demo=spaceapps` (auto-activates **5K NASA GIBS `Ocean Anomaly`** in Full Daylight and frames & loads **Walker / ENSO Warm Pool vs. Madagascar Drying** across `Indo-Pacific Warm Pool ↔ SW Indian Ocean / Madagascar`; briefly cycle the **NASA SVS 4-Slice Split** toggle).
+  - **Say:** *"Climate shifts differently across regions—some warm while linked basins dry. Meet **Earth Trend Detective**, streaming live 5K NASA GIBS, NOAA, USGS, and Copernicus feeds."*
 - **0:07–0:15 | Seasonal Cycle Removed & Student Variable Guide**
-  - **Screen:** Toggle **Raw Values → Seasonal Cycle Removed** (`Seasonal MK p_s`) on the ENSO comparison card and flash `? Variable Guide`.
-  - **Say:** *"Any coordinate separates real trends from winter-summer noise using Mann-Kendall, Hirsch-Slack Seasonal MK, and plain-English student explanations."*
+  - **Screen:** Toggle **Raw Values → Seasonal Cycle Removed** (`p_s`) right on the ENSO dipole comparison card and flash `? Variable Guide`.
+  - **Say:** *"Any coordinate separates real trends from seasonal noise using Mann-Kendall, Hirsch-Slack Seasonal MK, and plain-English student guides."*
 - **0:15–0:23 | Coalesced Earth Trend Graph (`ETG`) & Trend Microscope**
-  - **Screen:** Switch smoothly to **View 2 (`ETG` 3D Graph)** highlighting `drives_opposite` arcs, **ETG Trend Microscope** early-onset/coupling cues, `supersedes` belief revision, and **Prospective Verification Ledger**.
-  - **Say:** *"Observations coalesce into an AI-native Earth Trend Graph whose Trend Microscope flags early shifts, opposite dipoles, and live forecast error."*
+  - **Screen:** Switch smoothly to **View 2 (`ETG` 3D Graph)** highlighting `drives_opposite` arcs, **ETG Trend Microscope** early-onset/coupling cues, and `supersedes` belief revision.
+  - **Say:** *"Observations coalesce into an Earth Trend Graph whose Trend Microscope flags early shifts, opposite dipoles, and belief updates."*
 - **0:23–0:29 | Local Microgrid Action & Close**
   - **Screen:** Flash **Solar Graph** (`7-Node Denver Front Range`, `Storm Risk P(ALLSKY < 3.5)`, `88.6%` storm recall, `+$418/yr` K-12 school savings).
-  - **Say:** *"From global teleconnections to a school's overnight battery decision—saving \$418 a year with open NASA science made actionable."*
+  - **Say:** *"From global teleconnections to a school's overnight battery decision—saving \$418 a year with open NASA science."*
 
 ---
 
@@ -31,13 +31,13 @@
 ### Slide 1 — Earth Trend Detective (`ETG`)
 - **Subtitle:** *Be An Earth System Trend Detective!* · NASA Space Apps Challenge 2026 (*"The Next Frontier"*)
 - **Tagline:** A communal, AI-native Knowledge Graph & 3D Earth-timeline observatory turning multi-agency satellite data into statistically verified local decisions.
-- **Visual:** Clean hero screenshot of **View 1 (3D Earth Globe)** running the **5K NASA GIBS `Ocean Anomaly` / 4-Slice Split**, `? Variable Guide`, timeline scrubber, and Pacific `ENSO Rainfall Seesaw` arc.
+- **Visual:** Clean hero screenshot of **View 1 (3D Earth Globe)** running the **5K NASA GIBS `Ocean Anomaly` / 4-Slice Split**, `? Variable Guide`, timeline scrubber, and `Walker / ENSO Warm Pool vs. Madagascar Drying` arc.
 
 ### Slide 2 — The Gap: Seasonal Noise & Opposite Regional Trends
 - **Problem:** Raw environmental time-series mix long-term shifts with strong annual seasons and random weather swings.
 - **Regional Discrepancies:** Single Earth processes (e.g., ENSO, Arctic Amplification) drive variables **up** in one region and **down** in another.
 - **Our Answer:** Quantify *what*, *where*, and *how much* is changing using deseasonalized non-parametric tests, 1-click guided dipole case studies, and an evolving knowledge graph.
-- **Visual:** Split screenshot showing `Raw Values` vs. `Seasonal Cycle Removed` toggle (`p_s`) and `ENSO Pacific Rainfall Seesaw` comparison.
+- **Visual:** Split screenshot showing `Raw Values` vs. `Seasonal Cycle Removed` toggle (`p_s`) on the `Walker / ENSO Warm Pool vs. Madagascar Drying` (`r = -0.65`, `p = 0.000034`) comparison card.
 
 ### Slide 3 — View 1: Interactive 3D Earth, 5K GIBS Filters & Statistical Engine
 - **5K Satellite & Multi-Agency Open Feeds:** Live **NASA EOSDIS GIBS** 5K/2.5K WMTS/WMS filters (`Ocean Anomaly` MUR SST, `Thermal`, `Water / Rain` IMERG, `Surface Winds`, `Air Temp`, `Aerosols` MERRA-2/MODIS AOD, `NDVI`, `True Color`, `VIIRS Night`) + astronomical solar terminator, plus click-anywhere coordinate probing across **NASA POWER**, **EONET v3**, **GISTEMP v4**, **NOAA GML/NSIDC/CDO**, **USGS NWIS**, **Copernicus GloFAS v4 & CAMS**, **KNMI**, and **CSA**.
@@ -47,7 +47,7 @@
 
 ### Slide 4 — View 2: Coalesced Earth Trend Graph (`ETG`) & Trend Microscope
 - **Scientific Ontology:** `Concept` (regions, satellites, IoT hardware), `Signal` (timestamped observations), `Insight` (verified trends & teleconnections), `Rule` (multi-source corroboration gates).
-- **Cross-Region Teleconnections:** Explicitly maps `drives_opposite` dipoles across continents + 3 1-click Guided Case Studies (`ENSO Rainfall Seesaw`, `Arctic vs. Subpolar Gyre`, `West VPD vs. Midwest Discharge`).
+- **Cross-Region Teleconnections:** Explicitly maps `drives_opposite` dipoles across continents + 4 1-click Guided Case Studies (`Walker / ENSO Warm Pool vs. Madagascar Drying`, `Arctic vs. Subpolar Gyre`, `West VPD vs. Northern Plains River`, `Boulder VPD vs. Divide Moisture`).
 - **ETG Trend Microscope & Belief Revision:** `etg-trend-microscope-v1` spots pre-Mann-Kendall trend onsets (`0.9706` AUROC), directional lead-lag (`0.9827` AUROC, `100%` illusion rejection), and cycle/glitch de-aliasing (`0.9442` false-trend F1), while `supersedes` edges preserve how scientific conclusions evolve.
 - **Visual:** Screenshot of View 2 3D/2D `ETG` graph showing `drives_opposite`, `supersedes`, and Trend Microscope radar cues.
 
