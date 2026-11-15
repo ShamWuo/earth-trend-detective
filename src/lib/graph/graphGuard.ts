@@ -115,6 +115,15 @@ export interface AppliedGraphActionResult {
 
 const VALID_ETG_LABELS = new Set<ETGNodeLabel>(["Concept", "Signal", "Insight", "Rule"]);
 
+export const MAX_NODE_NAME_LEN = 240;
+export const MAX_REGION_LEN = 200;
+export const MAX_DESCRIPTION_LEN = 4000;
+export const MAX_RATIONALE_LEN = 2000;
+export const MAX_UUID_LEN = 200;
+export const MAX_BATCH_ACTIONS = 25;
+
+const FORBIDDEN_UUID_TOKENS = new Set(["__proto__", "prototype", "constructor"]);
+
 const VALID_ETG_EDGE_TYPES = new Set<ETGRelationshipType>([
   "supports",
   "corroborates",
@@ -141,19 +150,26 @@ const EDGE_TYPE_SYNONYMS: Record<string, ETGRelationshipType> = {
   contradicts: "drives_opposite",
 };
 
-function normalizeEdgeType(raw: string | undefined): ETGRelationshipType | undefined {
-  const key = raw?.trim().toLowerCase();
+function normalizeEdgeType(raw: unknown): ETGRelationshipType | undefined {
+  if (typeof raw !== "string") return undefined;
+  const key = raw.trim().toLowerCase();
   if (!key) return undefined;
   return EDGE_TYPE_SYNONYMS[key] ?? (key as ETGRelationshipType);
 }
 
 const INJECTION_PATTERNS = [
-  /ignore\s+(all\s+)?(previous|prior)\s+instructions/i,
+  /ignore\s+(all\s+)?(previous|prior|above|system)\s+(instructions?|prompts?|rules?)/i,
+  /disregard\s+(all\s+)?(previous|prior|above|system)\s+(instructions?|prompts?|rules?)/i,
+  /forget\s+(all\s+)?(previous|prior|your)\s+(instructions?|prompts?|rules?)/i,
+  /\b(override|bypass)\s+(the\s+)?(system\s+prompt|integrity\s+guard|safety\s+rules?)\b/i,
   /system\s+prompt/i,
   /drop\s+table/i,
   /<script[\s>]/i,
   /javascript:/i,
-  /\b(hack|vandalize|corrupt|destroy|wipe)\s+(the\s+)?graph\b/i,
+  /<\|(?:im_start|im_end|system|endoftext)\|>/i,
+  /\b(hack|vandalize|corrupt|destroy|wipe|nuke|erase|purge)\s+(the\s+|all\s+)?(graph|nodes|edges|database|everything)\b/i,
+  /\bdelete\s+all\s+(nodes|edges|data|graph)\b/i,
+  /\breset\s+(the\s+)?(entire\s+)?graph\b/i,
 ];
 
 const AGENCY_SYSTEM_MARKERS = [
@@ -169,9 +185,50 @@ const AGENCY_SYSTEM_MARKERS = [
   "merra-2",
 ];
 
-function containsInjectionOrSpam(text: string | undefined): boolean {
-  if (!text) return false;
-  return INJECTION_PATTERNS.some((re) => re.test(text));
+export function containsInjectionOrSpam(text: unknown): boolean {
+  if (typeof text !== "string" || !text) return false;
+  // Cap regex scan slice to avoid ReDoS on huge hostile payloads
+  const bounded = text.length > 16_384 ? text.slice(0, 16_384) : text;
+  return INJECTION_PATTERNS.some((re) => re.test(bounded));
+}
+
+function exceedsLength(text: unknown, maxLen: number): boolean {
+  return typeof text === "string" && text.length > maxLen;
+}
+
+function isSafeStringId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= MAX_UUID_LEN &&
+    !FORBIDDEN_UUID_TOKENS.has(value.trim())
+  );
+}
+
+function wouldCreateSupersedesCycle(
+  store: Pick<EtgStore, "getSnapshot">,
+  sourceUuid: string,
+  targetUuid: string,
+  ignoreEdgeUuid?: string
+): boolean {
+  if (sourceUuid === targetUuid) return true;
+  const edges = store.getSnapshot().edges;
+  const visited = new Set<string>([targetUuid]);
+  const queue: string[] = [targetUuid];
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    for (const edge of edges) {
+      if (edge.type !== "supersedes") continue;
+      if (ignoreEdgeUuid && edge.properties.uuid === ignoreEdgeUuid) continue;
+      if (edge.source_uuid !== curr) continue;
+      if (edge.target_uuid === sourceUuid) return true;
+      if (!visited.has(edge.target_uuid)) {
+        visited.add(edge.target_uuid);
+        queue.push(edge.target_uuid);
+      }
+    }
+  }
+  return false;
 }
 
 function isProtectedAgencyNode(node: ETGNode): boolean {
@@ -187,21 +244,21 @@ function isCoordOnlyRegion(region: string | undefined): boolean {
 }
 
 function validateOptionalCoords(
-  lat: number | undefined,
-  lng: number | undefined
+  lat: unknown,
+  lng: unknown
 ): GraphGuardVerdict | null {
-  if (lat !== undefined && (!Number.isFinite(lat) || lat < -90 || lat > 90)) {
+  if (lat !== undefined && (typeof lat !== "number" || !Number.isFinite(lat) || lat < -90 || lat > 90)) {
     return {
       allowed: false,
       rule: "GEO_AND_STRUCT_VALIDITY",
-      reason: `Invalid latitude ${lat}; must be within [-90, 90].`,
+      reason: `Invalid latitude ${String(lat)}; must be a finite number within [-90, 90].`,
     };
   }
-  if (lng !== undefined && (!Number.isFinite(lng) || lng < -180 || lng > 180)) {
+  if (lng !== undefined && (typeof lng !== "number" || !Number.isFinite(lng) || lng < -180 || lng > 180)) {
     return {
       allowed: false,
       rule: "GEO_AND_STRUCT_VALIDITY",
-      reason: `Invalid longitude ${lng}; must be within [-180, 180].`,
+      reason: `Invalid longitude ${String(lng)}; must be a finite number within [-180, 180].`,
     };
   }
   return null;
@@ -247,10 +304,12 @@ function computeAlignedPearsonR(
 
 export function resolveNodeRef(
   store: Pick<EtgStore, "getNode" | "getSnapshot">,
-  ref: string,
+  ref: unknown,
   batchCreatedIds: readonly string[] = []
 ): string {
+  if (typeof ref !== "string") return "";
   const trimmed = ref.trim();
+  if (!trimmed || trimmed.length > MAX_UUID_LEN) return "";
   const idxMatch = trimmed.match(/^\$(\d+)$/);
   if (idxMatch) {
     const idx = Number(idxMatch[1]);
@@ -270,9 +329,13 @@ export function resolveNodeRef(
 
 function resolveBatchActionRefs(
   store: Pick<EtgStore, "getNode" | "getSnapshot">,
-  action: ProposedGraphAction,
+  rawAction: ProposedGraphAction,
   batchCreatedIds: readonly string[]
 ): ProposedGraphAction {
+  if (!rawAction || typeof rawAction !== "object") {
+    return rawAction;
+  }
+  const action = rawAction;
   if (action.type === "connect_nodes") {
     return {
       ...action,
@@ -284,15 +347,17 @@ function resolveBatchActionRefs(
   if (action.type === "create_insight" || action.type === "create_node") {
     return {
       ...action,
-      relatedNodeUuids: action.relatedNodeUuids?.map((ref) =>
-        resolveNodeRef(store, ref, batchCreatedIds)
-      ),
+      relatedNodeUuids: Array.isArray(action.relatedNodeUuids)
+        ? action.relatedNodeUuids
+            .filter((ref): ref is string => typeof ref === "string")
+            .map((ref) => resolveNodeRef(store, ref, batchCreatedIds))
+        : undefined,
     };
   }
   if (action.type === "ingest_live_signal") {
     return {
       ...action,
-      ...(action.connectToUuid
+      ...(typeof action.connectToUuid === "string" && action.connectToUuid.trim()
         ? { connectToUuid: resolveNodeRef(store, action.connectToUuid, batchCreatedIds) }
         : {}),
       ...(action.edgeType !== undefined
@@ -309,7 +374,7 @@ function resolveBatchActionRefs(
       priorNodeUuid: resolveNodeRef(store, action.priorNodeUuid, batchCreatedIds),
     };
   }
-  if (action.type === "discover_missing_links" && action.anchorUuid) {
+  if (action.type === "discover_missing_links" && typeof action.anchorUuid === "string" && action.anchorUuid.trim()) {
     return {
       ...action,
       anchorUuid: resolveNodeRef(store, action.anchorUuid, batchCreatedIds),
@@ -323,6 +388,14 @@ export function validateGraphAction(
   action: ProposedGraphAction,
   options?: { allowProtectedDelete?: boolean }
 ): GraphGuardVerdict {
+  if (!action || typeof action !== "object" || typeof (action as { type?: unknown }).type !== "string") {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason: "Invalid graph action object: missing string action.type.",
+    };
+  }
+
   if (action.type === "clear_graph") {
     return {
       allowed: false,
@@ -332,6 +405,20 @@ export function validateGraphAction(
   }
 
   if (action.type === "delete_node") {
+    if (!isSafeStringId(action.uuid)) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Invalid or unsafe node uuid for delete_node.",
+      };
+    }
+    if (exceedsLength(action.rationale, MAX_RATIONALE_LEN)) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: `Deletion rationale exceeds maximum length (${MAX_RATIONALE_LEN} chars).`,
+      };
+    }
     if (containsInjectionOrSpam(action.rationale)) {
       return {
         allowed: false,
@@ -362,6 +449,20 @@ export function validateGraphAction(
   }
 
   if (action.type === "delete_edge") {
+    if (!isSafeStringId(action.uuid)) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Invalid or unsafe edge uuid for delete_edge.",
+      };
+    }
+    if (exceedsLength(action.rationale, MAX_RATIONALE_LEN)) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: `Edge deletion rationale exceeds maximum length (${MAX_RATIONALE_LEN} chars).`,
+      };
+    }
     if (containsInjectionOrSpam(action.rationale)) {
       return {
         allowed: false,
@@ -397,8 +498,27 @@ export function validateGraphAction(
   }
 
   if (action.type === "create_insight") {
+    if (typeof action.name !== "string" || typeof action.description !== "string") {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Insight name and description must be strings.",
+      };
+    }
     const name = action.name.trim();
     const desc = action.description.trim();
+    if (
+      exceedsLength(name, MAX_NODE_NAME_LEN) ||
+      exceedsLength(desc, MAX_DESCRIPTION_LEN) ||
+      exceedsLength(action.region, MAX_REGION_LEN) ||
+      exceedsLength(action.rationale, MAX_RATIONALE_LEN)
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: `Insight field exceeds maximum length (name <= ${MAX_NODE_NAME_LEN}, description <= ${MAX_DESCRIPTION_LEN}).`,
+      };
+    }
     if (
       containsInjectionOrSpam(name) ||
       containsInjectionOrSpam(desc) ||
@@ -428,8 +548,27 @@ export function validateGraphAction(
   }
 
   if (action.type === "create_node") {
+    if (typeof action.name !== "string" || typeof action.description !== "string") {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Node name and description must be strings.",
+      };
+    }
     const name = action.name.trim();
     const desc = action.description.trim();
+    if (
+      exceedsLength(name, MAX_NODE_NAME_LEN) ||
+      exceedsLength(desc, MAX_DESCRIPTION_LEN) ||
+      exceedsLength(action.region, MAX_REGION_LEN) ||
+      exceedsLength(action.rationale, MAX_RATIONALE_LEN)
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: `Node field exceeds maximum length (name <= ${MAX_NODE_NAME_LEN}, description <= ${MAX_DESCRIPTION_LEN}).`,
+      };
+    }
     if (
       containsInjectionOrSpam(name) ||
       containsInjectionOrSpam(desc) ||
@@ -446,7 +585,7 @@ export function validateGraphAction(
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Invalid ETG node label "${action.label}"; must be Concept, Signal, Insight, or Rule.`,
+        reason: `Invalid ETG node label "${String(action.label)}"; must be Concept, Signal, Insight, or Rule.`,
       };
     }
     if (name.length < 3 || desc.length < 10) {
@@ -460,7 +599,7 @@ export function validateGraphAction(
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Unknown dataset "${action.dataset}".`,
+        reason: `Unknown dataset "${String(action.dataset)}".`,
       };
     }
     const coordErr = validateOptionalCoords(action.lat, action.lng);
@@ -473,6 +612,17 @@ export function validateGraphAction(
   }
 
   if (action.type === "ingest_live_signal") {
+    if (
+      exceedsLength(action.name, MAX_NODE_NAME_LEN) ||
+      exceedsLength(action.region, MAX_REGION_LEN) ||
+      exceedsLength(action.rationale, MAX_RATIONALE_LEN)
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Signal ingestion text field exceeds maximum allowed length.",
+      };
+    }
     if (
       containsInjectionOrSpam(action.name) ||
       containsInjectionOrSpam(action.region) ||
@@ -497,21 +647,21 @@ export function validateGraphAction(
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Invalid coordinates (${action.lat}, ${action.lng}); lat must be [-90, 90] and lng [-180, 180].`,
+        reason: `Invalid coordinates (${String(action.lat)}, ${String(action.lng)}); lat must be [-90, 90] and lng [-180, 180].`,
       };
     }
-    if (!(action.dataset in DATASET_BY_ID)) {
+    if (typeof action.dataset !== "string" || !(action.dataset in DATASET_BY_ID)) {
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Unknown dataset "${action.dataset}" for live signal ingestion.`,
+        reason: `Unknown dataset "${String(action.dataset)}" for live signal ingestion.`,
       };
     }
     if (action.edgeType !== undefined && !VALID_ETG_EDGE_TYPES.has(action.edgeType)) {
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Unknown edgeType "${action.edgeType}" for live signal connection.`,
+        reason: `Unknown edgeType "${String(action.edgeType)}" for live signal connection.`,
       };
     }
     return {
@@ -522,6 +672,25 @@ export function validateGraphAction(
   }
 
   if (action.type === "update_node") {
+    if (!isSafeStringId(action.uuid)) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Invalid or unsafe node uuid for update_node.",
+      };
+    }
+    if (
+      exceedsLength(action.name, MAX_NODE_NAME_LEN) ||
+      exceedsLength(action.description, MAX_DESCRIPTION_LEN) ||
+      exceedsLength(action.region, MAX_REGION_LEN) ||
+      exceedsLength(action.rationale, MAX_RATIONALE_LEN)
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "Node update field exceeds maximum allowed length.",
+      };
+    }
     if (
       containsInjectionOrSpam(action.name) ||
       containsInjectionOrSpam(action.description) ||
@@ -534,7 +703,7 @@ export function validateGraphAction(
         reason: "Blocked prompt-injection or non-scientific payload in node update.",
       };
     }
-    if (!action.rationale || action.rationale.trim().length < 6) {
+    if (typeof action.rationale !== "string" || action.rationale.trim().length < 6) {
       return {
         allowed: false,
         rule: "GEO_AND_STRUCT_VALIDITY",
@@ -578,9 +747,32 @@ export function validateGraphAction(
   }
 
   if (action.type === "revise_belief") {
+    if (
+      !isSafeStringId(action.priorNodeUuid) ||
+      typeof action.newName !== "string" ||
+      typeof action.newDescription !== "string" ||
+      typeof action.rationale !== "string"
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: "revise_belief requires valid string priorNodeUuid, newName, newDescription, and rationale.",
+      };
+    }
     const newName = action.newName.trim();
     const newDesc = action.newDescription.trim();
     const rationale = action.rationale.trim();
+    if (
+      exceedsLength(newName, MAX_NODE_NAME_LEN) ||
+      exceedsLength(newDesc, MAX_DESCRIPTION_LEN) ||
+      exceedsLength(rationale, MAX_RATIONALE_LEN)
+    ) {
+      return {
+        allowed: false,
+        rule: "GEO_AND_STRUCT_VALIDITY",
+        reason: `revise_belief field exceeds maximum length (newName <= ${MAX_NODE_NAME_LEN}, newDescription <= ${MAX_DESCRIPTION_LEN}, rationale <= ${MAX_RATIONALE_LEN}).`,
+      };
+    }
     if (
       containsInjectionOrSpam(newName) ||
       containsInjectionOrSpam(newDesc) ||
@@ -615,12 +807,14 @@ export function validateGraphAction(
   }
 
   if (action.type === "discover_missing_links") {
-    if (action.anchorUuid && !store.getNode(action.anchorUuid)) {
-      return {
-        allowed: false,
-        rule: "GEO_AND_STRUCT_VALIDITY",
-        reason: `Anchor node ${action.anchorUuid} does not exist.`,
-      };
+    if (action.anchorUuid !== undefined) {
+      if (!isSafeStringId(action.anchorUuid) || !store.getNode(action.anchorUuid)) {
+        return {
+          allowed: false,
+          rule: "GEO_AND_STRUCT_VALIDITY",
+          reason: `Anchor node ${String(action.anchorUuid)} does not exist.`,
+        };
+      }
     }
     return {
       allowed: true,
@@ -629,12 +823,38 @@ export function validateGraphAction(
     };
   }
 
+  if (action.type !== "connect_nodes") {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason: `Unsupported graph action type "${String((action as { type?: unknown }).type)}".`,
+    };
+  }
+
   // connect_nodes
+  if (!isSafeStringId(action.sourceUuid) || !isSafeStringId(action.targetUuid)) {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason: "Invalid or unsafe sourceUuid/targetUuid for edge connection.",
+    };
+  }
   if (!VALID_ETG_EDGE_TYPES.has(action.edgeType)) {
     return {
       allowed: false,
       rule: "GEO_AND_STRUCT_VALIDITY",
-      reason: `Unknown ETG relationship type "${action.edgeType}".`,
+      reason: `Unknown ETG relationship type "${String(action.edgeType)}".`,
+    };
+  }
+  if (
+    exceedsLength(action.rationale, MAX_RATIONALE_LEN) ||
+    exceedsLength(action.mechanism, MAX_DESCRIPTION_LEN) ||
+    exceedsLength(action.customLabel, MAX_NODE_NAME_LEN)
+  ) {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason: "Edge rationale, mechanism, or customLabel exceeds maximum allowed length.",
     };
   }
   if (
@@ -648,7 +868,7 @@ export function validateGraphAction(
       reason: "Blocked prompt-injection or non-scientific rationale in edge creation.",
     };
   }
-  if (!action.rationale || action.rationale.trim().length < 8) {
+  if (typeof action.rationale !== "string" || action.rationale.trim().length < 8) {
     return {
       allowed: false,
       rule: "GEO_AND_STRUCT_VALIDITY",
@@ -685,6 +905,17 @@ export function validateGraphAction(
       allowed: false,
       rule: "GEO_AND_STRUCT_VALIDITY",
       reason: `Edge ${action.sourceUuid} -[${action.edgeType}]-> ${action.targetUuid} already exists.`,
+    };
+  }
+
+  if (
+    action.edgeType === "supersedes" &&
+    wouldCreateSupersedesCycle(store, action.sourceUuid, action.targetUuid, action.ignoreEdgeUuid)
+  ) {
+    return {
+      allowed: false,
+      rule: "GEO_AND_STRUCT_VALIDITY",
+      reason: `Supersedes cycle blocked: linking ${action.sourceUuid} -[supersedes]-> ${action.targetUuid} would create a cyclic belief-revision loop.`,
     };
   }
 
@@ -922,10 +1153,11 @@ export function validateAndApplyGraphActions(
   const applied: AppliedGraphActionResult[] = [];
   const blocked: AppliedGraphActionResult[] = [];
   const batchCreatedIds: string[] = [];
+  const safeActions = Array.isArray(actions) ? actions.slice(0, MAX_BATCH_ACTIONS) : [];
 
-  for (const rawAction of actions) {
+  for (const rawAction of safeActions) {
     const action = resolveBatchActionRefs(store, rawAction, batchCreatedIds);
-    if (action.type === "ingest_live_signal") {
+    if (action && typeof action === "object" && action.type === "ingest_live_signal") {
       blocked.push({
         action,
         verdict: {
@@ -964,8 +1196,9 @@ export async function validateAndApplyGraphActionsAsync(
   const applied: AppliedGraphActionResult[] = [];
   const blocked: AppliedGraphActionResult[] = [];
   const batchCreatedIds: string[] = [];
+  const safeActions = Array.isArray(actions) ? actions.slice(0, MAX_BATCH_ACTIONS) : [];
 
-  for (const rawAction of actions) {
+  for (const rawAction of safeActions) {
     const action = resolveBatchActionRefs(store, rawAction, batchCreatedIds);
     const verdict = validateGraphAction(store, action);
     if (!verdict.allowed) {

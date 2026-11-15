@@ -1,4 +1,6 @@
+import { DATASET_BY_ID } from "@/lib/datasets";
 import { discoverGlobalEarthTrends } from "@/lib/discovery/globalTrendPipeline";
+import { validateGraphAction } from "@/lib/graph/graphGuard";
 import {
   GIBS_LAYERS,
   computeGlobalBordersProxyUrl,
@@ -606,19 +608,59 @@ export async function executeEtgMcpTool(
         rawSeries = [{ date: obsAt, t: parseDateToT(obsAt), value: args.value }];
       }
 
+      const sigLat = typeof args.lat === "number" ? args.lat : Number(args.lat);
+      const sigLng = typeof args.lng === "number" ? args.lng : Number(args.lng);
+      if (
+        !Number.isFinite(sigLat) ||
+        sigLat < -90 ||
+        sigLat > 90 ||
+        !Number.isFinite(sigLng) ||
+        sigLng < -180 ||
+        sigLng > 180
+      ) {
+        throw new Error(`Invalid signal coordinates (${String(args.lat)}, ${String(args.lng)}).`);
+      }
+      const sigDataset = typeof args.dataset === "string" ? args.dataset : "community";
+      if (!(sigDataset in DATASET_BY_ID)) {
+        throw new Error(`Invalid signal dataset "${String(args.dataset)}".`);
+      }
+      const sigName = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "AI Agent Observation";
+      const sigDesc =
+        typeof args.description === "string" && args.description.trim()
+          ? args.description.trim()
+          : "Ingested via MCP Earth Trend Detective";
+      const sigVerdict = validateGraphAction(store, {
+        type: "create_node",
+        label: "Signal",
+        name: sigName,
+        description: sigDesc,
+        lat: sigLat,
+        lng: sigLng,
+        dataset: sigDataset as ETGDatasetId,
+      });
+      if (!sigVerdict.allowed) {
+        throw new Error(`Blocked (${sigVerdict.rule}): ${sigVerdict.reason}`);
+      }
+
       const node = store.createNode({
         label: "Signal",
         is_provisional: false,
         properties: {
-          name: String(args.name || "AI Agent Observation"),
-          description: String(args.description || "Ingested via MCP"),
-          lat: Number(args.lat),
-          lng: Number(args.lng),
-          dataset: (args.dataset as ETGDatasetId) || "community",
+          name: sigName,
+          description: sigDesc,
+          lat: sigLat,
+          lng: sigLng,
+          dataset: sigDataset as ETGDatasetId,
           producer_type: "ai_synthesis",
-          value: typeof args.value === "number" ? args.value : undefined,
+          value: typeof args.value === "number" && Number.isFinite(args.value) ? args.value : undefined,
           unit: typeof args.unit === "string" ? args.unit : undefined,
-          confidence: typeof args.confidence === "number" ? args.confidence : 0.85,
+          confidence:
+            typeof args.confidence === "number" &&
+            Number.isFinite(args.confidence) &&
+            args.confidence >= 0 &&
+            args.confidence <= 1
+              ? args.confidence
+              : 0.85,
           observed_at: obsAt,
           series: rawSeries,
         },
@@ -642,21 +684,52 @@ export async function executeEtgMcpTool(
     }
 
     case "etg_propose_insight": {
-      if (typeof args.supersedes_node_uuid === "string" && args.supersedes_node_uuid) {
+      if (typeof args.name !== "string" || typeof args.description !== "string") {
+        throw new Error("etg_propose_insight requires string name and description.");
+      }
+      if (args.dataset !== undefined && (typeof args.dataset !== "string" || !(args.dataset in DATASET_BY_ID))) {
+        throw new Error(`Invalid dataset "${String(args.dataset)}".`);
+      }
+      if (typeof args.supersedes_node_uuid === "string" && args.supersedes_node_uuid.trim()) {
+        const revRationale =
+          typeof args.rationale === "string" && args.rationale.trim()
+            ? args.rationale.trim()
+            : "Revised based on new multi-source evidence";
+        const revVerdict = validateGraphAction(store, {
+          type: "revise_belief",
+          priorNodeUuid: args.supersedes_node_uuid.trim(),
+          newName: args.name,
+          newDescription: args.description,
+          rationale: revRationale,
+        });
+        if (!revVerdict.allowed) {
+          throw new Error(`Blocked (${revVerdict.rule}): ${revVerdict.reason}`);
+        }
         return store.reviseBelief({
-          priorNodeUuid: args.supersedes_node_uuid,
-          newName: String(args.name),
-          newDescription: String(args.description),
-          rationale: String(args.rationale || "Revised based on new multi-source evidence"),
+          priorNodeUuid: args.supersedes_node_uuid.trim(),
+          newName: args.name,
+          newDescription: args.description,
+          rationale: revRationale,
           dataset: (args.dataset as ETGDatasetId) || undefined,
         });
+      }
+      const insightVerdict = validateGraphAction(store, {
+        type: "create_insight",
+        name: args.name,
+        description: args.description,
+        lat: args.lat as number | undefined,
+        lng: args.lng as number | undefined,
+        rationale: typeof args.rationale === "string" ? args.rationale : undefined,
+      });
+      if (!insightVerdict.allowed) {
+        throw new Error(`Blocked (${insightVerdict.rule}): ${insightVerdict.reason}`);
       }
       const node = store.createNode({
         label: "Insight",
         is_provisional: true,
         properties: {
-          name: String(args.name),
-          description: String(args.description),
+          name: args.name,
+          description: args.description,
           lat: typeof args.lat === "number" ? args.lat : undefined,
           lng: typeof args.lng === "number" ? args.lng : undefined,
           dataset: (args.dataset as ETGDatasetId) || "nasa_power",
@@ -716,18 +789,45 @@ export async function executeEtgMcpTool(
     }
 
     case "etg_connect_nodes": {
+      const sourceUuid = typeof args.source_uuid === "string" ? args.source_uuid.trim() : "";
+      const targetUuid = typeof args.target_uuid === "string" ? args.target_uuid.trim() : "";
+      if (!sourceUuid || !targetUuid) {
+        throw new Error("Both source_uuid and target_uuid are required for etg_connect_nodes.");
+      }
+      const edgeType = (typeof args.relationship === "string"
+        ? args.relationship
+        : "relates_to") as ETGRelationshipType;
+      const mechanism = typeof args.mechanism === "string" ? args.mechanism : undefined;
+      const rationale = typeof args.rationale === "string" ? args.rationale : undefined;
+
+      const connectVerdict = validateGraphAction(store, {
+        type: "connect_nodes",
+        sourceUuid,
+        targetUuid,
+        edgeType,
+        mechanism,
+        rationale: rationale || "MCP relationship assertion",
+      });
+      if (!connectVerdict.allowed) {
+        throw new Error(`Blocked (${connectVerdict.rule}): ${connectVerdict.reason}`);
+      }
+
       const edge = store.createEdge({
-        source_uuid: String(args.source_uuid),
-        target_uuid: String(args.target_uuid),
-        type: (args.relationship as ETGRelationshipType) || "relates_to",
-        mechanism: typeof args.mechanism === "string" ? args.mechanism : undefined,
-        rationale: typeof args.rationale === "string" ? args.rationale : undefined,
-        optimal_lag_steps: typeof args.lag_steps === "number" ? args.lag_steps : undefined,
+        source_uuid: sourceUuid,
+        target_uuid: targetUuid,
+        type: edgeType,
+        mechanism,
+        rationale,
+        optimal_lag_steps:
+          typeof args.lag_steps === "number" && Number.isFinite(args.lag_steps)
+            ? args.lag_steps
+            : undefined,
         lag_unit:
           args.lag_unit === "days" || args.lag_unit === "months" || args.lag_unit === "years"
             ? args.lag_unit
             : undefined,
-        weight: typeof args.weight === "number" ? args.weight : undefined,
+        weight:
+          typeof args.weight === "number" && Number.isFinite(args.weight) ? args.weight : undefined,
         custom_label: typeof args.custom_label === "string" ? args.custom_label : undefined,
         authored_by: "ai",
         autoEnrichSeries: true,
@@ -737,11 +837,36 @@ export async function executeEtgMcpTool(
 
     case "etg_unlink_or_update": {
       const operation = String(args.operation || "update");
+      if (args.patch !== undefined && (!args.patch || typeof args.patch !== "object" || Array.isArray(args.patch))) {
+        throw new Error("patch must be a plain object for etg_unlink_or_update.");
+      }
       const patch = (args.patch && typeof args.patch === "object"
         ? args.patch
         : {}) as Record<string, unknown>;
 
+      if (typeof patch.label === "string") {
+        const validLabels = new Set(["Concept", "Signal", "Insight", "Rule"]);
+        if (!validLabels.has(patch.label)) {
+          throw new Error(`Invalid ETG node label "${patch.label}". Must be Concept, Signal, Insight, or Rule.`);
+        }
+      }
+      if (patch.lat !== undefined && (typeof patch.lat !== "number" || !Number.isFinite(patch.lat) || patch.lat < -90 || patch.lat > 90)) {
+        throw new Error("Invalid patch.lat: must be finite number between -90 and 90.");
+      }
+      if (patch.lng !== undefined && (typeof patch.lng !== "number" || !Number.isFinite(patch.lng) || patch.lng < -180 || patch.lng > 180)) {
+        throw new Error("Invalid patch.lng: must be finite number between -180 and 180.");
+      }
+      if (typeof patch.dataset === "string" && !(patch.dataset in DATASET_BY_ID)) {
+        throw new Error(`Invalid patch.dataset "${patch.dataset}".`);
+      }
+
       if (typeof args.edge_uuid === "string" && args.edge_uuid) {
+        const existingEdge = store
+          .getSnapshot()
+          .edges.find((item) => item.properties.uuid === args.edge_uuid);
+        if (!existingEdge) {
+          throw new Error(`Edge ${args.edge_uuid} not found.`);
+        }
         if (operation === "delete") {
           const deleted = store.deleteEdge(args.edge_uuid);
           return { deleted, edgeUuid: args.edge_uuid, stats: store.getSnapshot().stats };
@@ -754,7 +879,16 @@ export async function executeEtgMcpTool(
       }
 
       if (typeof args.node_uuid === "string" && args.node_uuid) {
+        const existingNode = store.getNode(args.node_uuid);
+        if (!existingNode) {
+          throw new Error(`Node ${args.node_uuid} not found.`);
+        }
         if (operation === "delete") {
+          if (existingNode.label === "Rule" || existingNode.properties.producer_type === "nasa_satellite") {
+            throw new Error(
+              `Blocked (rule-protect-agency-and-rules): Cannot delete protected ${existingNode.label} node "${existingNode.properties.name}".`
+            );
+          }
           const deleted = store.deleteNode(args.node_uuid);
           return { deleted, nodeUuid: args.node_uuid, stats: store.getSnapshot().stats };
         }
@@ -1103,7 +1237,7 @@ export async function handleEtgMcpRpc(body: unknown): Promise<{
   status: number;
   payload: Record<string, unknown>;
 }> {
-  if (!body || typeof body !== "object") {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {
       status: 400,
       payload: {
@@ -1159,8 +1293,33 @@ export async function handleEtgMcpRpc(body: unknown): Promise<{
       };
 
     case "tools/call": {
-      const name = String(rpc.params?.name || "");
-      const args = (rpc.params?.arguments as Record<string, unknown>) || {};
+      if (!rpc.params || typeof rpc.params !== "object" || Array.isArray(rpc.params)) {
+        return {
+          status: 400,
+          payload: {
+            jsonrpc: "2.0",
+            id: rpc.id ?? null,
+            error: { code: -32602, message: "Invalid params: object expected" },
+          },
+        };
+      }
+      const name = typeof rpc.params.name === "string" ? rpc.params.name : "";
+      if (
+        rpc.params.arguments !== undefined &&
+        (!rpc.params.arguments ||
+          typeof rpc.params.arguments !== "object" ||
+          Array.isArray(rpc.params.arguments))
+      ) {
+        return {
+          status: 400,
+          payload: {
+            jsonrpc: "2.0",
+            id: rpc.id ?? null,
+            error: { code: -32602, message: "Invalid tool arguments: plain object expected" },
+          },
+        };
+      }
+      const args = (rpc.params.arguments as Record<string, unknown>) || {};
       try {
         const data = await executeEtgMcpTool(name, args);
         return {

@@ -44,7 +44,7 @@ export async function POST(
     };
 
     const rawBody = (await req.json()) as Record<string, unknown>;
-    if (!rawBody || typeof rawBody !== "object") {
+    if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
       return NextResponse.json({ error: "JSON object payload required" }, { status: 400 });
     }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import {
+  containsInjectionOrSpam,
   validateAndApplyGraphActionsAsync,
   type AppliedGraphActionResult,
   type ProposedGraphAction,
@@ -149,24 +150,64 @@ function collectCitedNodes(
   return out;
 }
 
+const MAX_DETECTIVE_PROMPT_CHARS = 16_000;
+
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as {
+    let rawParsed: unknown;
+    try {
+      rawParsed = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    if (!rawParsed || typeof rawParsed !== "object" || Array.isArray(rawParsed)) {
+      return NextResponse.json({ error: "JSON object payload required" }, { status: 400 });
+    }
+
+    const body = rawParsed as {
       messages?: ChatTurn[];
-      selectedNodeUuid?: string;
-      lat?: number;
-      lng?: number;
-      dataset?: string;
-      question?: string;
-      applyEdits?: boolean;
+      selectedNodeUuid?: unknown;
+      lat?: unknown;
+      lng?: unknown;
+      dataset?: unknown;
+      question?: unknown;
+      applyEdits?: unknown;
       proposedActions?: ProposedGraphAction[];
     };
+
+    if (body.question !== undefined && typeof body.question !== "string") {
+      return NextResponse.json({ error: "question must be a string" }, { status: 400 });
+    }
+    if (body.selectedNodeUuid !== undefined && typeof body.selectedNodeUuid !== "string") {
+      return NextResponse.json({ error: "selectedNodeUuid must be a string" }, { status: 400 });
+    }
+    if (body.dataset !== undefined && typeof body.dataset !== "string") {
+      return NextResponse.json({ error: "dataset must be a string" }, { status: 400 });
+    }
+    if (body.lat !== undefined) {
+      if (typeof body.lat !== "number" || !Number.isFinite(body.lat) || body.lat < -90 || body.lat > 90) {
+        return NextResponse.json(
+          { error: `Invalid latitude ${String(body.lat)}; must be finite within [-90, 90].` },
+          { status: 400 }
+        );
+      }
+    }
+    if (body.lng !== undefined) {
+      if (typeof body.lng !== "number" || !Number.isFinite(body.lng) || body.lng < -180 || body.lng > 180) {
+        return NextResponse.json(
+          { error: `Invalid longitude ${String(body.lng)}; must be finite within [-180, 180].` },
+          { status: 400 }
+        );
+      }
+    }
 
     const incomingMessages: ChatTurn[] = Array.isArray(body.messages)
       ? body.messages
           .filter(
             (m): m is ChatTurn =>
               Boolean(m) &&
+              typeof m === "object" &&
               (m.role === "user" || m.role === "assistant") &&
               typeof m.content === "string" &&
               m.content.trim().length > 0
@@ -174,15 +215,28 @@ export async function POST(req: NextRequest) {
           .slice(-10)
       : [];
 
+    if (
+      (typeof body.question === "string" && body.question.length > MAX_DETECTIVE_PROMPT_CHARS) ||
+      incomingMessages.some((m) => m.content.length > MAX_DETECTIVE_PROMPT_CHARS)
+    ) {
+      return NextResponse.json(
+        {
+          error: `Prompt exceeds maximum allowed length (${MAX_DETECTIVE_PROMPT_CHARS} chars).`,
+        },
+        { status: 400 }
+      );
+    }
+
     const lastUserMessage = [...incomingMessages].reverse().find((m) => m.role === "user")?.content?.trim();
-    const userPrompt = body.question?.trim() || lastUserMessage || "";
+    const userPrompt = (typeof body.question === "string" ? body.question.trim() : "") || lastUserMessage || "";
     const casualPrompt = isShortOrCasualPrompt(userPrompt);
 
     const store = getEtgStore();
     const snapshot = store.getSnapshot();
-    const selectedNode = body.selectedNodeUuid
-      ? store.getNode(body.selectedNodeUuid)
-      : undefined;
+    const selectedNode =
+      typeof body.selectedNodeUuid === "string" && body.selectedNodeUuid.trim()
+        ? store.getNode(body.selectedNodeUuid.trim())
+        : undefined;
 
     const fallbackGeoInsight = snapshot.nodes.find(
       (n) =>
@@ -197,7 +251,8 @@ export async function POST(req: NextRequest) {
     const targetLng =
       targetNode?.properties.lng ?? (typeof body.lng === "number" ? body.lng : undefined);
     const dataset: ETGDatasetId =
-      targetNode?.properties.dataset || (body.dataset as ETGDatasetId) || "nasa_power";
+      targetNode?.properties.dataset ||
+      (typeof body.dataset === "string" && body.dataset.trim() ? (body.dataset.trim() as ETGDatasetId) : "nasa_power");
 
     const targetSeries = targetNode
       ? targetNode.properties.series ?? store.getNodeSeries(targetNode.uuid)
@@ -266,7 +321,7 @@ export async function POST(req: NextRequest) {
       [
         `Current Graph State: ${snapshot.stats.totalNodes} nodes, ${snapshot.stats.totalEdges} edges, ${snapshot.stats.corroboratedTrends} corroborated trends.`,
         `Focused Node: ${selectedNode ? `${selectedNode.properties.name} [${selectedNode.uuid}] (${selectedNode.label})` : "None (Global Workspace)"}`,
-        body.lat !== undefined && body.lng !== undefined
+        typeof body.lat === "number" && typeof body.lng === "number"
           ? `Active Map Probe Pin: (${body.lat.toFixed(3)}, ${body.lng.toFixed(3)}) [${dataset}]`
           : "",
         telemetry
@@ -330,18 +385,49 @@ export async function POST(req: NextRequest) {
       blocked: AppliedGraphActionResult[]
     ) => ({
       appliedActions: applied.map((a) => ({
-        type: a.action.type,
+        type: a.action?.type ?? "unknown",
         summary: a.summary,
         createdNodeUuid: a.createdNodeUuid,
         createdEdgeUuid: a.createdEdgeUuid,
       })),
       blockedActions: blocked.map((b) => ({
-        type: b.action.type,
+        type: b.action && typeof b.action === "object" && "type" in b.action ? b.action.type : "invalid_action",
         rule: b.verdict.rule,
         reason: b.verdict.reason,
       })),
       updatedSnapshot: applied.length > 0 ? store.getSnapshot() : undefined,
     });
+
+    // 0. Pre-LLM prompt-injection & mass-destruction guard (short-circuits before external LLM calls)
+    const hasPromptInjection =
+      containsInjectionOrSpam(userPrompt) ||
+      incomingMessages.some((m) => m.role === "user" && containsInjectionOrSpam(m.content));
+    const inferredPrecheck = inferDeterministicActionsFromQuestion(
+      userPrompt,
+      candidateLinks,
+      selectedNode?.uuid
+    );
+    const hasMassClearIntent = inferredPrecheck.some((a) => a.type === "clear_graph");
+    if (hasPromptInjection || hasMassClearIntent) {
+      const rule = hasPromptInjection ? "NO_OFFTOPIC_OR_INJECTION" : "NO_MASS_DESTRUCTION";
+      const reason = hasPromptInjection
+        ? "Blocked prompt-injection or hostile instruction override in AI Detective prompt."
+        : "Mass-clearing the Earth Trend Graph via AI or unverified requests is blocked to prevent vandalism.";
+      return NextResponse.json({
+        engine: "ETG Graph Integrity Guard",
+        briefing: `**Graph Integrity Guard Blocked Request (${rule}):** ${reason} Active graph nodes (${snapshot.stats.totalNodes}) and edges (${snapshot.stats.totalEdges}) remain intact.`,
+        citedNodes: selectedNode ? [selectedNode.uuid] : [],
+        microscopeSummary,
+        appliedActions: [],
+        blockedActions: [
+          {
+            type: hasMassClearIntent ? "clear_graph" : "prompt_injection",
+            rule,
+            reason,
+          },
+        ],
+      });
+    }
 
     // 1. Primary LLM: DeepSeek (deepseek-chat) when DEEPSEEK_API_KEY is set
     const deepseekKey = process.env.DEEPSEEK_API_KEY;

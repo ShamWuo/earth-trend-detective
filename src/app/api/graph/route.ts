@@ -64,7 +64,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as Record<string, unknown>;
+    const rawBody = await req.json();
+    if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+      return NextResponse.json({ error: "JSON object payload required" }, { status: 400 });
+    }
+    const body = rawBody as Record<string, unknown>;
     const store = getEtgStore();
 
     if (body.action === "clear" || body.action === "reset") {
@@ -171,14 +175,22 @@ export async function POST(req: NextRequest) {
       properties: { name: string; description: string; [key: string]: unknown };
     };
 
+    const parseNumericCoord = (raw: unknown): number | undefined => {
+      if (raw === undefined || raw === null || raw === "") return undefined;
+      if (typeof raw === "number") return raw;
+      if (typeof raw === "string") return Number(raw.trim());
+      return NaN;
+    };
+
     const parseNodeValidation = (nodeInput: RawNodeInput) => {
-      const props = nodeInput.properties ?? ({} as RawNodeInput["properties"]);
-      const rawLat = props.lat;
-      const rawLng = props.lng;
-      const parsedLat =
-        rawLat !== undefined && rawLat !== null && rawLat !== "" ? Number(rawLat) : undefined;
-      const parsedLng =
-        rawLng !== undefined && rawLng !== null && rawLng !== "" ? Number(rawLng) : undefined;
+      const props =
+        nodeInput.properties && typeof nodeInput.properties === "object" && !Array.isArray(nodeInput.properties)
+          ? nodeInput.properties
+          : ({} as RawNodeInput["properties"]);
+      const parsedLat = parseNumericCoord(props.lat);
+      const parsedLng = parseNumericCoord(props.lng);
+      if (parsedLat !== undefined) props.lat = parsedLat;
+      if (parsedLng !== undefined) props.lng = parsedLng;
       const rawDataset = typeof props.dataset === "string" ? props.dataset : undefined;
       const datasetForGuard =
         rawDataset === "co2" ? "air_quality" : (rawDataset as ETGDatasetId | undefined);
@@ -196,9 +208,12 @@ export async function POST(req: NextRequest) {
     };
 
     const primaryNodeInput: RawNodeInput | null =
-      body.node && typeof body.node === "object"
+      body.node && typeof body.node === "object" && !Array.isArray(body.node)
         ? (body.node as RawNodeInput)
-        : typeof body.label === "string" && body.properties && typeof body.properties === "object"
+        : typeof body.label === "string" &&
+            body.properties &&
+            typeof body.properties === "object" &&
+            !Array.isArray(body.properties)
           ? {
               uuid: typeof body.uuid === "string" ? body.uuid : undefined,
               label: body.label,
@@ -208,9 +223,18 @@ export async function POST(req: NextRequest) {
           : null;
 
     const secondaryNodeInput: RawNodeInput | null =
-      body.secondaryNode && typeof body.secondaryNode === "object"
+      body.secondaryNode && typeof body.secondaryNode === "object" && !Array.isArray(body.secondaryNode)
         ? (body.secondaryNode as RawNodeInput)
         : null;
+
+    const hasEdgeInput = Boolean(body.edge && typeof body.edge === "object" && !Array.isArray(body.edge));
+
+    if (!primaryNodeInput && !secondaryNodeInput && !hasEdgeInput) {
+      return NextResponse.json(
+        { error: "Provide a valid action, node (with label and properties), or edge payload." },
+        { status: 400 }
+      );
+    }
 
     if (primaryNodeInput) {
       const nodeVerdict = parseNodeValidation(primaryNodeInput);
@@ -242,7 +266,7 @@ export async function POST(req: NextRequest) {
     }
 
     let createdEdge = null;
-    if (body.edge && typeof body.edge === "object") {
+    if (hasEdgeInput) {
       const e = body.edge as {
         uuid?: string;
         source_uuid: string;

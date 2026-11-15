@@ -49,7 +49,15 @@ export async function POST(request: NextRequest) {
     let body: Record<string, unknown> = {};
     const text = await request.text();
     if (text.trim().length > 0) {
-      body = JSON.parse(text) as Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return NextResponse.json({ error: "JSON object payload required" }, { status: 400 });
+        }
+        body = parsed as Record<string, unknown>;
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      }
     }
 
     const focusNodeUuid =

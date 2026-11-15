@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { DATASET_BY_ID } from "@/lib/datasets";
 import { bearingDeg } from "@/lib/solar/denverClimateGraph";
 import { inferEarthSphere } from "@/lib/graph/cascadeTracer";
 import { scorePairWithTrendMicroscope } from "@/lib/graph/trendMicroscope";
@@ -1682,9 +1683,39 @@ export class EtgStore {
     silent?: boolean;
   }): ETGNode {
     const validLabel = assertValidEtgLabel(input.label);
+    const requestedUuid = input.uuid?.trim();
+    if (requestedUuid && (FORBIDDEN_PATH_SEGMENTS.has(requestedUuid) || requestedUuid.length > 200)) {
+      throw new Error(`Invalid node UUID "${requestedUuid}".`);
+    }
     const uuid =
-      input.uuid?.trim() ||
+      requestedUuid ||
       `${validLabel.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`;
+    const rawName = typeof input.properties?.name === "string" ? input.properties.name.trim() : "";
+    const rawDesc = typeof input.properties?.description === "string" ? input.properties.description.trim() : "";
+    if (!rawName || rawName.length > 240) {
+      throw new Error("Node name must be 1..240 characters.");
+    }
+    if (rawDesc.length > 4000) {
+      throw new Error("Node description must not exceed 4000 characters.");
+    }
+    if (
+      input.properties?.lat !== undefined &&
+      (typeof input.properties.lat !== "number" ||
+        !Number.isFinite(input.properties.lat) ||
+        input.properties.lat < -90 ||
+        input.properties.lat > 90)
+    ) {
+      throw new Error(`Invalid node latitude ${String(input.properties.lat)}.`);
+    }
+    if (
+      input.properties?.lng !== undefined &&
+      (typeof input.properties.lng !== "number" ||
+        !Number.isFinite(input.properties.lng) ||
+        input.properties.lng < -180 ||
+        input.properties.lng > 180)
+    ) {
+      throw new Error(`Invalid node longitude ${String(input.properties.lng)}.`);
+    }
     const now = new Date().toISOString();
     const isProvisional = input.is_provisional ?? (validLabel === "Signal" ? false : true);
 
@@ -1695,9 +1726,9 @@ export class EtgStore {
       is_provisional: isProvisional,
       properties: this.offloadNodeSeries(uuid, {
         ...input.properties,
-        name: input.properties.name.trim(),
-        concept_name: input.properties.concept_name || input.properties.name.trim(),
-        description: input.properties.description.trim(),
+        name: rawName,
+        concept_name: input.properties.concept_name || rawName,
+        description: rawDesc,
         authored_by: authoredBy,
         status:
           input.properties.status ??
@@ -1800,6 +1831,30 @@ export class EtgStore {
     return true;
   }
 
+  private wouldCreateSupersedesCycle(
+    sourceUuid: string,
+    targetUuid: string,
+    ignoreEdgeUuid?: string
+  ): boolean {
+    if (sourceUuid === targetUuid) return true;
+    const visited = new Set<string>([targetUuid]);
+    const queue: string[] = [targetUuid];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      for (const edge of this.edges.values()) {
+        if (edge.type !== "supersedes") continue;
+        if (ignoreEdgeUuid && edge.properties.uuid === ignoreEdgeUuid) continue;
+        if (edge.source_uuid !== curr) continue;
+        if (edge.target_uuid === sourceUuid) return true;
+        if (!visited.has(edge.target_uuid)) {
+          visited.add(edge.target_uuid);
+          queue.push(edge.target_uuid);
+        }
+      }
+    }
+    return false;
+  }
+
   createEdge(input: {
     uuid?: string;
     source_uuid: string;
@@ -1824,6 +1879,13 @@ export class EtgStore {
     autoEnrichSeries?: boolean;
     silent?: boolean;
   }): ETGEdge {
+    if (input.source_uuid === input.target_uuid) {
+      throw new Error("Self-loop connections (source === target) are disallowed.");
+    }
+    const requestedEdgeUuid = input.uuid?.trim();
+    if (requestedEdgeUuid && (FORBIDDEN_PATH_SEGMENTS.has(requestedEdgeUuid) || requestedEdgeUuid.length > 200)) {
+      throw new Error(`Invalid edge UUID "${requestedEdgeUuid}".`);
+    }
     const srcNode = this.nodes.get(input.source_uuid);
     if (!srcNode) {
       throw new Error(`Source ETG node "${input.source_uuid}" not found.`);
@@ -1831,6 +1893,14 @@ export class EtgStore {
     const dstNode = this.nodes.get(input.target_uuid);
     if (!dstNode) {
       throw new Error(`Target ETG node "${input.target_uuid}" not found.`);
+    }
+    if (
+      input.type === "supersedes" &&
+      this.wouldCreateSupersedesCycle(input.source_uuid, input.target_uuid)
+    ) {
+      throw new Error(
+        `Supersedes cycle rejected: ${input.source_uuid} -[supersedes]-> ${input.target_uuid} would create a cyclic belief-revision loop.`
+      );
     }
 
     let corrR = input.correlation_r;
@@ -1935,15 +2005,27 @@ export class EtgStore {
 
     const nextSource = patch.source_uuid ?? existing.source_uuid;
     const nextTarget = patch.target_uuid ?? existing.target_uuid;
+    if (nextSource === nextTarget) {
+      throw new Error("Self-loop connections (source === target) are disallowed.");
+    }
     if (!this.nodes.has(nextSource) || !this.nodes.has(nextTarget)) {
       throw new Error("Updated edge endpoint node not found.");
     }
 
     const { type: typePatch, source_uuid: _s, target_uuid: _t, ...propPatch } = patch;
+    const nextType = typePatch ?? existing.type;
+    if (
+      nextType === "supersedes" &&
+      this.wouldCreateSupersedesCycle(nextSource, nextTarget, edgeUuid)
+    ) {
+      throw new Error(
+        `Supersedes cycle rejected: ${nextSource} -[supersedes]-> ${nextTarget} would create a cyclic belief-revision loop.`
+      );
+    }
     const updated: ETGEdge = {
       source_uuid: nextSource,
       target_uuid: nextTarget,
-      type: typePatch ?? existing.type,
+      type: nextType,
       properties: {
         ...existing.properties,
         ...propPatch,
@@ -2597,7 +2679,35 @@ export class EtgStore {
     corroborationAudits: CorroborationAudit[];
     discoveredConnections: ETGEdge[];
   } {
-    const existingTarget = this.nodes.get(nodeId);
+    const cleanNodeId = typeof nodeId === "string" ? nodeId.trim() : "";
+    if (!cleanNodeId || cleanNodeId.length > 160 || FORBIDDEN_PATH_SEGMENTS.has(cleanNodeId)) {
+      throw new Error("Invalid webhook nodeId.");
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("Webhook JSON object payload required.");
+    }
+
+    const assertWebhookText = (raw: unknown, label: string, maxLen: number): string | undefined => {
+      if (raw === undefined || raw === null) return undefined;
+      if (typeof raw !== "string") {
+        throw new Error(`Invalid webhook ${label}: must be a string.`);
+      }
+      if (raw.length > maxLen) {
+        throw new Error(`Webhook ${label} exceeds maximum length (${maxLen} chars).`);
+      }
+      const trimmed = raw.trim();
+      if (
+        trimmed &&
+        /(?:ignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions?|<script[\s>]|javascript:|drop\s+table|\b(?:wipe|destroy|corrupt)\s+(?:all\s+|the\s+)?(?:graph|nodes)\b)/i.test(
+          trimmed
+        )
+      ) {
+        throw new Error(`Blocked suspicious or prompt-injection payload in webhook ${label}.`);
+      }
+      return trimmed || undefined;
+    };
+
+    const existingTarget = this.nodes.get(cleanNodeId);
     const now = new Date().toISOString();
 
     const valuePath = queryParams.value_path;
@@ -2607,6 +2717,18 @@ export class EtgStore {
       extractValueByPath(payload, "reading.value") ??
       extractValueByPath(payload, "metrics.pm25") ??
       extractValueByPath(payload, "data.value");
+
+    if (rawValue !== undefined && rawValue !== null && rawValue !== "") {
+      const candidateNum =
+        typeof rawValue === "number"
+          ? rawValue
+          : typeof rawValue === "string"
+            ? Number(rawValue.trim())
+            : NaN;
+      if (!Number.isFinite(candidateNum)) {
+        throw new Error("Invalid webhook reading value: must be a finite number.");
+      }
+    }
 
     const numericValue =
       typeof rawValue === "number" && Number.isFinite(rawValue)
@@ -2644,34 +2766,59 @@ export class EtgStore {
       lng >= -180 &&
       lng <= 180;
 
+    if (payload.dataset !== undefined && payload.dataset !== null) {
+      if (typeof payload.dataset !== "string" || !(payload.dataset in DATASET_BY_ID)) {
+        throw new Error(`Invalid webhook dataset "${String(payload.dataset)}".`);
+      }
+    }
+
     const dataset = (
       typeof payload.dataset === "string"
         ? payload.dataset
         : existingTarget?.properties.dataset || "community"
     ) as ETGDatasetId;
 
+    const checkedDeviceId = assertWebhookText(payload.device_id, "device_id", 160);
+    if (checkedDeviceId && FORBIDDEN_PATH_SEGMENTS.has(checkedDeviceId)) {
+      throw new Error("Invalid webhook device_id.");
+    }
     const deviceId =
-      (typeof payload.device_id === "string" && payload.device_id.trim()) ||
+      checkedDeviceId ||
       existingTarget?.properties.device_id ||
-      nodeId;
+      cleanNodeId;
 
     const producerType = (
       typeof payload.producer_type === "string"
         ? payload.producer_type
         : existingTarget?.properties.producer_type ||
-          (nodeId.includes("cam") ? "community_camera" : "iot_sensor")
+          (cleanNodeId.includes("cam") ? "community_camera" : "iot_sensor")
     ) as ETGProducerType;
 
     const unit =
-      (typeof payload.unit === "string" && payload.unit.trim()) ||
+      assertWebhookText(payload.unit, "unit", 64) ||
       existingTarget?.properties.unit ||
       "units";
 
+    if (payload.observed_at !== undefined && payload.observed_at !== null && typeof payload.observed_at !== "string") {
+      throw new Error("Invalid webhook observed_at: must be an ISO/date string.");
+    }
     const observedAt =
-      typeof payload.observed_at === "string" && !Number.isNaN(Date.parse(payload.observed_at))
+      typeof payload.observed_at === "string" &&
+      payload.observed_at.length <= 64 &&
+      !Number.isNaN(Date.parse(payload.observed_at))
         ? payload.observed_at
         : now;
 
+    if (
+      payload.confidence !== undefined &&
+      payload.confidence !== null &&
+      (typeof payload.confidence !== "number" ||
+        !Number.isFinite(payload.confidence) ||
+        payload.confidence < 0 ||
+        payload.confidence > 1)
+    ) {
+      throw new Error("Invalid webhook confidence: must be a finite number in [0, 1].");
+    }
     const confidence =
       typeof payload.confidence === "number" && payload.confidence >= 0 && payload.confidence <= 1
         ? payload.confidence
@@ -2682,16 +2829,16 @@ export class EtgStore {
     const isTargetingInsight = existingTarget?.label === "Insight";
 
     const hardwareUuid = isUpdatingExistingSignal
-      ? typeof payload.device_id === "string" && payload.device_id.trim()
-        ? `sensor-${payload.device_id.trim()}`
-        : `sensor-${nodeId.slice(0, 12)}`
+      ? checkedDeviceId
+        ? `sensor-${checkedDeviceId}`
+        : `sensor-${cleanNodeId.slice(0, 12)}`
       : isTargetingInsight
         ? `sensor-${deviceId}`
-        : nodeId;
+        : cleanNodeId;
 
     const existingHardware = this.nodes.get(hardwareUuid);
     const hardwareName =
-      (typeof payload.device_name === "string" && payload.device_name.trim()) ||
+      assertWebhookText(payload.device_name, "device_name", 240) ||
       existingHardware?.properties.name ||
       `Community Node (${deviceId})`;
 
@@ -2726,21 +2873,20 @@ export class EtgStore {
         ? `signal-wh-${crypto.randomUUID().slice(0, 8)}`
         : isTargetingInsight
           ? `signal-wh-${deviceId}`
-          : `signal-wh-${nodeId}`;
+          : `signal-wh-${cleanNodeId}`;
 
     const existingSignal = this.nodes.get(signalUuid);
     const defaultSignalTitle = `${hardwareNode.properties.name} Reading${numericValue !== undefined ? ` (${numericValue} ${unit})` : ""}`;
     const titleFromPayload =
-      (typeof payload.title === "string" && payload.title.trim()) ||
-      (typeof payload.summary === "string" && payload.summary.trim()) ||
+      assertWebhookText(payload.title, "title", 240) ||
+      assertWebhookText(payload.summary, "summary", 240) ||
       (isUpdatingExistingSignal ? existingSignal?.properties.name : undefined) ||
       defaultSignalTitle;
 
     const descriptionFromPayload =
-      typeof payload.description === "string" && payload.description.trim()
-        ? payload.description.trim()
-        : existingSignal?.properties.description ||
-          `Live webhook telemetry pushed from ${deviceId} (${producerType}).`;
+      assertWebhookText(payload.description, "description", 4000) ||
+      existingSignal?.properties.description ||
+      `Live webhook telemetry pushed from ${deviceId} (${producerType}).`;
 
     let signalNode: ETGNode = {
       uuid: signalUuid,
@@ -2769,7 +2915,7 @@ export class EtgStore {
     // Accumulate incoming series array + numeric point into rolling series for both nodes
     const incomingPoints: TimeSeriesPoint[] = [];
     if (Array.isArray(payload.series)) {
-      for (const item of payload.series) {
+      for (const item of payload.series.slice(0, 2000)) {
         if (!item || typeof item !== "object") continue;
         const rec = item as Record<string, unknown>;
         const val = typeof rec.value === "number" ? rec.value : Number(rec.value);
@@ -4244,14 +4390,43 @@ export class EtgStore {
       throw new Error("Invalid workspace bundle: expected nodes[] and edges[] arrays.");
     }
 
-    // Validate all labels before mutating store state
+    // Validate all labels, lengths, coords, and edge invariants before mutating store state
     for (const rawNode of rawBundle.nodes) {
       if (!rawNode || typeof rawNode !== "object" || typeof rawNode.uuid !== "string" || !rawNode.uuid.trim()) {
         throw new Error("Invalid node in workspace bundle: missing uuid.");
       }
+      if (FORBIDDEN_PATH_SEGMENTS.has(rawNode.uuid.trim()) || rawNode.uuid.trim().length > 200) {
+        throw new Error(`Invalid node UUID "${rawNode.uuid}" in workspace bundle.`);
+      }
       assertValidEtgLabel(String(rawNode.label ?? ""));
       if (!rawNode.properties || typeof rawNode.properties.name !== "string") {
         throw new Error(`Invalid node "${rawNode.uuid}" properties in workspace bundle.`);
+      }
+      if (rawNode.properties.name.length > 240 || (typeof rawNode.properties.description === "string" && rawNode.properties.description.length > 4000)) {
+        throw new Error(`Node "${rawNode.uuid}" exceeds maximum field length in workspace bundle.`);
+      }
+      if (
+        rawNode.properties.lat !== undefined &&
+        (typeof rawNode.properties.lat !== "number" ||
+          !Number.isFinite(rawNode.properties.lat) ||
+          rawNode.properties.lat < -90 ||
+          rawNode.properties.lat > 90)
+      ) {
+        throw new Error(`Invalid latitude on node "${rawNode.uuid}" in workspace bundle.`);
+      }
+      if (
+        rawNode.properties.lng !== undefined &&
+        (typeof rawNode.properties.lng !== "number" ||
+          !Number.isFinite(rawNode.properties.lng) ||
+          rawNode.properties.lng < -180 ||
+          rawNode.properties.lng > 180)
+      ) {
+        throw new Error(`Invalid longitude on node "${rawNode.uuid}" in workspace bundle.`);
+      }
+    }
+    for (const rawEdge of rawBundle.edges) {
+      if (rawEdge && typeof rawEdge === "object" && rawEdge.source_uuid === rawEdge.target_uuid) {
+        throw new Error("Workspace bundle contains a disallowed self-loop edge.");
       }
     }
 
@@ -4334,6 +4509,13 @@ export class EtgStore {
       }
       const edgeUuid = rawEdge.properties.uuid.trim();
       if (!edgeUuid || FORBIDDEN_PATH_SEGMENTS.has(edgeUuid)) continue;
+
+      if (
+        rawEdge.type === "supersedes" &&
+        this.wouldCreateSupersedesCycle(rawEdge.source_uuid, rawEdge.target_uuid)
+      ) {
+        continue;
+      }
 
       this.edges.set(edgeUuid, {
         source_uuid: rawEdge.source_uuid,
