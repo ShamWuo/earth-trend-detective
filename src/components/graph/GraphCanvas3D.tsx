@@ -975,7 +975,7 @@ export function GraphCanvas3D({
                 left: 0,
                 borderColor: isSelected ? color : undefined,
               }}
-              className={`absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shadow-md transition-opacity duration-150 cursor-pointer ${
+              className={`ws-numeric absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shadow-md transition-opacity duration-150 cursor-pointer ${
                 isSuperseded ? "border-dashed opacity-85" : ""
               } ${
                 isSelected

@@ -168,7 +168,7 @@ export function SpotRelationsSection({
                         >
                           {formatted.badgeText}
                         </span>
-                        <span className="text-[11px] font-medium text-text-primary truncate">
+                        <span className="ws-numeric text-[11px] font-medium text-text-primary truncate">
                           {arrow} {formatted.peerName}
                         </span>
                       </div>
@@ -269,7 +269,7 @@ export function SpotRelationsSection({
                     style={{ backgroundColor: dsColor }}
                     aria-hidden="true"
                   />
-                  <span className="truncate font-medium text-text-primary">
+                  <span className="ws-numeric truncate font-medium text-text-primary">
                     {humanizeNodeText(node.properties.name)}
                   </span>
                 </span>

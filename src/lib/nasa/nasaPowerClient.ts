@@ -1,7 +1,6 @@
 import { DATASET_BY_ID } from "@/lib/datasets";
 import {
   buildClimatologicalSeriesPoints,
-  createBoundedSignal,
   normalizeEarthCoordinates,
 } from "@/lib/earth/coordinates";
 import {
@@ -9,6 +8,13 @@ import {
   fetchGlofasDischargeSeries,
   fetchNearestUsgsGaugeAnnualSeries,
 } from "@/lib/earth/openFeedsClient";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamJson,
+  UpstreamTelemetryError,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import {
   analyzeTimeSeries,
   computeSeasonalMannKendall,
@@ -307,45 +313,75 @@ export function buildClimatologicalTrendSummary(
   );
 }
 
-async function fetchNasaPowerRaw(url: string): Promise<{
+async function fetchNasaPowerRaw(
+  url: string,
+  budget?: TelemetryBudget
+): Promise<{
   properties?: { parameter?: Record<string, Record<string, unknown>> };
 }> {
+  const activeBudget = budget ?? createTelemetryBudget(1350);
   let lastError: Error | null = null;
-  const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 350;
+  const retryDelayMs = process.env.NODE_ENV === "test" ? 10 : 40;
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (activeBudget.remainingMs() < 120) {
+      throw (
+        lastError ??
+        new UpstreamTelemetryError({
+          source: "NASA POWER MERRA-2",
+          kind: "timeout",
+          message: "NASA POWER telemetry deadline exceeded before attempt",
+          retryable: false,
+        })
+      );
+    }
+    const startedAttemptAt = Date.now();
     try {
       const res = await fetch(url, {
-        signal: createBoundedSignal(9000),
+        signal: activeBudget.signal(1150),
         headers: {
           Accept: "application/json",
           "User-Agent": USER_AGENT,
         },
       });
-      if (!res.ok) {
-        const msg = `NASA POWER MERRA-2 HTTP ${res.status} ${res.statusText}`;
-        if ((res.status === 429 || res.status >= 500) && attempt === 0) {
-          lastError = new Error(msg);
-          await new Promise((r) => setTimeout(r, retryDelayMs));
-          continue;
-        }
-        throw new Error(msg);
-      }
-      const parsed = (await res.json()) as unknown;
-      if (!parsed || typeof parsed !== "object") {
-        throw new Error("NASA POWER MERRA-2 returned malformed non-object JSON payload");
+      const parsed = await parseUpstreamJson<unknown>(res, "NASA POWER MERRA-2");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new UpstreamTelemetryError({
+          source: "NASA POWER MERRA-2",
+          kind: "malformed_payload",
+          httpStatus: res.status,
+          message: "NASA POWER MERRA-2 returned malformed non-object JSON payload",
+          retryable: false,
+        });
       }
       return parsed as {
         properties?: { parameter?: Record<string, Record<string, unknown>> };
       };
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error("NASA POWER request failed");
-      if (attempt === 0) {
+      const fault = classifyUpstreamFault(err, "NASA POWER MERRA-2");
+      activeBudget.recordFault(fault);
+      lastError = new UpstreamTelemetryError(fault);
+      const attemptElapsed = Date.now() - startedAttemptAt;
+      if (
+        attempt === 0 &&
+        fault.retryable &&
+        attemptElapsed < 250 &&
+        activeBudget.remainingMs() > 500
+      ) {
         await new Promise((r) => setTimeout(r, retryDelayMs));
         continue;
       }
+      throw lastError;
     }
   }
-  throw lastError ?? new Error("NASA POWER request failed");
+  throw (
+    lastError ??
+    new UpstreamTelemetryError({
+      source: "NASA POWER MERRA-2",
+      kind: "network_error",
+      message: "NASA POWER request failed",
+      retryable: true,
+    })
+  );
 }
 
 export async function fetchEarthTimeSeries(
@@ -353,8 +389,10 @@ export async function fetchEarthTimeSeries(
   lng: number,
   dataset: ETGDatasetId = "nasa_power",
   startYear = 1995,
-  endYear = 2025
+  endYear = 2025,
+  budget?: TelemetryBudget
 ): Promise<TrendAnalysisSummary> {
+  const activeBudget = budget ?? createTelemetryBudget(1350);
   const coord = normalizeEarthCoordinates(lat, lng);
   const clampedLat = coord.apiLat;
   const clampedLng = coord.apiLng;
@@ -370,7 +408,13 @@ export async function fetchEarthTimeSeries(
   // 1) Hydrology cascade: USGS NWIS stream gauge -> Copernicus GloFAS v4 (5km) -> NASA GWETROOT -> MERRA-2 PRECTOTCORR.
   if (dataset === "hydrology") {
     try {
-      const usgs = await fetchNearestUsgsGaugeAnnualSeries(clampedLat, clampedLng, startYear, endYear);
+      const usgs = await fetchNearestUsgsGaugeAnnualSeries(
+        clampedLat,
+        clampedLng,
+        startYear,
+        endYear,
+        activeBudget
+      );
       if (usgs && usgs.points.length >= 6) {
         const usgsSummary = attachMeasurementMetadata(
           "hydrology",
@@ -399,7 +443,8 @@ export async function fetchEarthTimeSeries(
         clampedLng,
         startYear,
         endYear,
-        "annual"
+        "annual",
+        activeBudget
       );
       if (glofas && glofas.points.length >= 6) {
         const glofasSummary = attachMeasurementMetadata(
@@ -428,7 +473,7 @@ export async function fetchEarthTimeSeries(
       `?parameters=GWETROOT&community=AG&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
       `&start=${startYear}&end=${endYear}&format=JSON`;
     try {
-      const hydroJson = await fetchNasaPowerRaw(hydroUrl);
+      const hydroJson = await fetchNasaPowerRaw(hydroUrl, activeBudget);
       const rawHydro = hydroJson?.properties?.parameter?.GWETROOT;
       const hydroPts =
         rawHydro && typeof rawHydro === "object"
@@ -476,8 +521,15 @@ export async function fetchEarthTimeSeries(
       `&start=${aodStart}&end=${endYear}&format=JSON`;
 
     const [aodResult, camsResult] = await Promise.allSettled([
-      fetchNasaPowerRaw(aodUrl),
-      fetchCamsSurfacePm25Series(clampedLat, clampedLng, Math.max(2022, endYear - 2), endYear, "monthly"),
+      fetchNasaPowerRaw(aodUrl, activeBudget),
+      fetchCamsSurfacePm25Series(
+        clampedLat,
+        clampedLng,
+        Math.max(2022, endYear - 2),
+        endYear,
+        "monthly",
+        activeBudget
+      ),
     ]);
 
     const camsSnapshot =
@@ -552,7 +604,7 @@ export async function fetchEarthTimeSeries(
       `?parameters=EVPTRNS&community=AG&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
       `&start=${startYear}&end=${endYear}&format=JSON`;
     try {
-      const evapJson = await fetchNasaPowerRaw(evapUrl);
+      const evapJson = await fetchNasaPowerRaw(evapUrl, activeBudget);
       const rawEvap = evapJson?.properties?.parameter?.EVPTRNS;
       const evapPts =
         rawEvap && typeof rawEvap === "object"
@@ -595,7 +647,7 @@ export async function fetchEarthTimeSeries(
     `&community=RE&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
     `&start=${startYear}&end=${endYear}&format=JSON`;
 
-  const json = await fetchNasaPowerRaw(url);
+  const json = await fetchNasaPowerRaw(url, activeBudget);
   const allParams = json?.properties?.parameter ?? {};
 
   if (dataset === "wildfire" && allParams.T2M_MAX && allParams.RH2M) {
@@ -761,11 +813,13 @@ export async function fetchMultiDatasetSummariesDetailed(
   lng: number,
   datasets: ETGDatasetId[],
   startYear = 1995,
-  endYear = 2025
+  endYear = 2025,
+  budget?: TelemetryBudget
 ): Promise<{
   summaries: TrendAnalysisSummary[];
   diagnostics: DatasetTelemetryDiagnostic[];
 }> {
+  const activeBudget = budget ?? createTelemetryBudget(1400);
   const coord = normalizeEarthCoordinates(lat, lng);
   const clampedLat = coord.apiLat;
   const clampedLng = coord.apiLng;
@@ -818,17 +872,22 @@ export async function fetchMultiDatasetSummariesDetailed(
         clampedLng,
         targetDs,
         startYear,
-        endYear
+        endYear,
+        activeBudget
       );
       resolved.set(targetDs, single);
     } catch (err) {
+      const fault = classifyUpstreamFault(
+        err,
+        DATASET_BY_ID[targetDs]?.shortLabel ?? targetDs
+      );
+      activeBudget.recordFault(fault);
       diagnostics.push({
         dataset: targetDs,
         status: isTelemetryUnavailableError(err) ? "unavailable" : "failed_to_fetch",
-        reason:
-          err instanceof Error
-            ? err.message
-            : `Failed to fetch ${DATASET_BY_ID[targetDs]?.shortLabel ?? targetDs} telemetry.`,
+        faultKind: fault.kind,
+        ...(fault.httpStatus !== undefined ? { httpStatus: fault.httpStatus } : {}),
+        reason: fault.message,
       });
     }
   } else if (missing.length >= 2) {
@@ -842,21 +901,34 @@ export async function fetchMultiDatasetSummariesDetailed(
 
     type SpecialOutcome =
       | { ok: true; ds: ETGDatasetId; summary: TrendAnalysisSummary }
-      | { ok: false; ds: ETGDatasetId; status: "unavailable" | "failed_to_fetch"; reason: string };
+      | {
+          ok: false;
+          ds: ETGDatasetId;
+          status: "unavailable" | "failed_to_fetch";
+          reason: string;
+          faultKind: DatasetTelemetryDiagnostic["faultKind"];
+          httpStatus?: number;
+        };
 
     const specialPromises: Array<Promise<SpecialOutcome>> = specialMissing.map((ds) =>
-      fetchEarthTimeSeries(clampedLat, clampedLng, ds, startYear, endYear)
+      fetchEarthTimeSeries(clampedLat, clampedLng, ds, startYear, endYear, activeBudget)
         .then((summary): SpecialOutcome => ({ ok: true, ds, summary }))
         .catch(
-          (err): SpecialOutcome => ({
-            ok: false,
-            ds,
-            status: isTelemetryUnavailableError(err) ? "unavailable" : "failed_to_fetch",
-            reason:
-              err instanceof Error
-                ? err.message
-                : `Failed to fetch ${DATASET_BY_ID[ds]?.shortLabel ?? ds} telemetry.`,
-          })
+          (err): SpecialOutcome => {
+            const fault = classifyUpstreamFault(
+              err,
+              DATASET_BY_ID[ds]?.shortLabel ?? ds
+            );
+            activeBudget.recordFault(fault);
+            return {
+              ok: false,
+              ds,
+              status: isTelemetryUnavailableError(err) ? "unavailable" : "failed_to_fetch",
+              faultKind: fault.kind,
+              ...(fault.httpStatus !== undefined ? { httpStatus: fault.httpStatus } : {}),
+              reason: fault.message,
+            };
+          }
         )
     );
 
@@ -867,7 +939,12 @@ export async function fetchMultiDatasetSummariesDetailed(
 
     type ReOutcome =
       | { ok: true; params: Record<string, Record<string, unknown>> }
-      | { ok: false; reason: string };
+      | {
+          ok: false;
+          reason: string;
+          faultKind: DatasetTelemetryDiagnostic["faultKind"];
+          httpStatus?: number;
+        };
 
     const rePromise: Promise<ReOutcome> =
       reMissing.length > 0
@@ -878,15 +955,16 @@ export async function fetchMultiDatasetSummariesDetailed(
                 `?parameters=${encodeURIComponent(Array.from(paramSet).join(","))}` +
                 `&community=RE&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
                 `&start=${startYear}&end=${endYear}&format=JSON`;
-              const json = await fetchNasaPowerRaw(url);
+              const json = await fetchNasaPowerRaw(url, activeBudget);
               return { ok: true, params: json?.properties?.parameter ?? {} };
             } catch (err) {
+              const fault = classifyUpstreamFault(err, "NASA POWER MERRA-2");
+              activeBudget.recordFault(fault);
               return {
                 ok: false,
-                reason:
-                  err instanceof Error
-                    ? err.message
-                    : "NASA POWER MERRA-2 request failed.",
+                faultKind: fault.kind,
+                ...(fault.httpStatus !== undefined ? { httpStatus: fault.httpStatus } : {}),
+                reason: fault.message,
               };
             }
           })()
@@ -904,6 +982,8 @@ export async function fetchMultiDatasetSummariesDetailed(
         diagnostics.push({
           dataset: outcome.ds,
           status: outcome.status,
+          ...(outcome.faultKind ? { faultKind: outcome.faultKind } : {}),
+          ...(outcome.httpStatus !== undefined ? { httpStatus: outcome.httpStatus } : {}),
           reason: outcome.reason,
         });
       }
@@ -914,6 +994,8 @@ export async function fetchMultiDatasetSummariesDetailed(
         diagnostics.push({
           dataset: ds,
           status: "failed_to_fetch",
+          ...(reOutcome.faultKind ? { faultKind: reOutcome.faultKind } : {}),
+          ...(reOutcome.httpStatus !== undefined ? { httpStatus: reOutcome.httpStatus } : {}),
           reason: reOutcome.reason,
         });
       }
@@ -1172,20 +1254,36 @@ export async function fetchRegionalMultiScaleSeries(
     `&community=RE&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
     `&start=${startYear}&end=${endYear}&format=JSON`;
 
+  const activeBudget = createTelemetryBudget(1400);
   const [summaryRes, monthlyRawRes, extraFeedRes, dailyRawRes] = await Promise.allSettled([
-    fetchEarthTimeSeries(clampedLat, clampedLng, dataset, startYear, endYear),
-    fetchNasaPowerRaw(monthlyUrl),
+    fetchEarthTimeSeries(clampedLat, clampedLng, dataset, startYear, endYear, activeBudget),
+    fetchNasaPowerRaw(monthlyUrl, activeBudget),
     dataset === "hydrology"
-      ? fetchGlofasDischargeSeries(clampedLat, clampedLng, startYear, endYear, "monthly")
+      ? fetchGlofasDischargeSeries(
+          clampedLat,
+          clampedLng,
+          startYear,
+          endYear,
+          "monthly",
+          activeBudget
+        )
       : dataset === "air_quality"
-        ? fetchCamsSurfacePm25Series(clampedLat, clampedLng, Math.max(2022, endYear - 2), endYear, "monthly")
+        ? fetchCamsSurfacePm25Series(
+            clampedLat,
+            clampedLng,
+            Math.max(2022, endYear - 2),
+            endYear,
+            "monthly",
+            activeBudget
+          )
         : Promise.resolve(null),
     includeDailyRecent
       ? fetchNasaPowerRaw(
           `https://power.larc.nasa.gov/api/temporal/daily/point` +
             `?parameters=ALLSKY_SFC_SW_DWN,CLRSKY_SFC_SW_DWN,T2M,RH2M,PRECTOTCORR,WS10M,WD10M` +
             `&community=RE&longitude=${clampedLng.toFixed(3)}&latitude=${clampedLat.toFixed(3)}` +
-            `&start=${Math.max(startYear, endYear - 1)}0101&end=${endYear}1231&format=JSON`
+            `&start=${Math.max(startYear, endYear - 1)}0101&end=${endYear}1231&format=JSON`,
+          activeBudget
         )
       : Promise.resolve(null),
   ]);

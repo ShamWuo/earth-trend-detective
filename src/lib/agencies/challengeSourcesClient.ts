@@ -145,7 +145,7 @@ export async function fetchNoaaCdoGlobalStations(
 
   try {
     const res = await fetch(NOAA_CDO_ENDPOINT, {
-      signal: createBoundedSignal(8000),
+      signal: createBoundedSignal(1100),
       headers,
     });
     if (!res.ok) {
@@ -306,7 +306,7 @@ export async function fetchKnmiClimateIndices(
   const settled = await Promise.allSettled(
     KNMI_INDICES.map(async (spec) => {
       const res = await fetch(spec.url, {
-        signal: createBoundedSignal(8000),
+        signal: createBoundedSignal(1100),
         headers: { "User-Agent": USER_AGENT },
       });
       if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
@@ -347,7 +347,7 @@ export async function fetchKnmiMonthlyClimateIndices(
   const settled = await Promise.allSettled(
     KNMI_INDICES.map(async (spec) => {
       const res = await fetch(spec.url, {
-        signal: createBoundedSignal(8000),
+        signal: createBoundedSignal(1100),
         headers: { "User-Agent": USER_AGENT },
       });
       if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
@@ -541,7 +541,7 @@ export async function fetchGeocaCanadianSeries(
     "https://api.weather.gc.ca/collections/ahccd-annual/items?f=json&station_id__id_station=2400573&limit=80";
 
   const results = await Promise.allSettled([
-    fetch(mackenzieUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
+    fetch(mackenzieUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaHydrometricJson(
@@ -558,7 +558,7 @@ export async function fetchGeocaCanadianSeries(
           endYear
         )
       ),
-    fetch(stLawrenceUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
+    fetch(stLawrenceUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaHydrometricJson(
@@ -575,7 +575,7 @@ export async function fetchGeocaCanadianSeries(
           endYear
         )
       ),
-    fetch(clydeRiverUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
+    fetch(clydeRiverUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaAhccdJson(
@@ -668,7 +668,7 @@ export async function fetchUsgsCoastalPlumeDischarge(
 ): Promise<AgencyTimeSeriesRecord | null> {
   try {
     const res = await fetch(USGS_MISSISSIPPI_URL, {
-      signal: createBoundedSignal(8000),
+      signal: createBoundedSignal(1100),
       headers: { "User-Agent": USER_AGENT },
     });
     if (!res.ok) {
@@ -729,16 +729,16 @@ export async function fetchCsaSwotAndRcmMetadata(): Promise<{
   const appeearsUrl = "https://appeears.earthdatacloud.nasa.gov/api/product?limit=8";
 
   const [swotRes, rcmRes, seawifsRes, appeearsRes] = await Promise.allSettled([
-    fetch(swotUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(swotUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(rcmUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(rcmUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(seawifsUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(seawifsUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(appeearsUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(appeearsUrl, { signal: createBoundedSignal(1100), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
   ]);

@@ -83,10 +83,10 @@ function NeighborLinkList({
                 onClick={() => onSelectNode(node)}
                 className="min-w-0 flex-1 text-left cursor-pointer group"
               >
-                <div className="truncate font-medium text-text-primary group-hover:text-accent-fg">
+                <div className="ws-numeric truncate font-medium text-text-primary group-hover:text-accent-fg">
                   {isIncoming ? node.properties.name : `→ ${node.properties.name}`}
                 </div>
-                <div className="flex items-center gap-2 text-[10px] text-text-muted">
+                <div className="ws-numeric flex items-center gap-2 text-[10px] text-text-muted">
                   <span style={{ color: resolveEtgEdgeColor(edge.type) }}>
                     {formatEdgeRelationLabel(edge.type, edge.properties.custom_label)}
                   </span>

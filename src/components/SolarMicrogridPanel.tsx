@@ -16,6 +16,7 @@ import {
 import type { SolarGraphAnalysisResult } from "@/lib/solar/denverClimateGraph";
 import { useIsLightTheme } from "@/components/graph/graphViewShared";
 import { attachDialogLightDismissFallback } from "@/lib/a11y/dialogLightDismiss";
+import { restoreOpenerFocus, trapDialogTabKey } from "@/lib/a11y/dialogFocusTrap";
 
 interface SolarMicrogridPanelProps {
   open: boolean;
@@ -35,6 +36,7 @@ export function SolarMicrogridPanel({
   const comparisonTableHeadingId = useId();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const [data, setData] = useState<SolarGraphAnalysisResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [materializing, setMaterializing] = useState(false);
@@ -44,6 +46,8 @@ export function SolarMicrogridPanel({
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open && !dialog.open) {
+      openerRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       dialog.showModal();
     } else if (!open && dialog.open) {
       dialog.close();
@@ -65,7 +69,10 @@ export function SolarMicrogridPanel({
   const handleNativeClose = () => {
     const dialog = dialogRef.current;
     if (dialog) dialog.returnValue = "";
+    const opener = openerRef.current;
+    openerRef.current = null;
     onClose();
+    restoreOpenerFocus(opener);
   };
 
   const loadAnalysis = async (forceRefresh = false) => {
@@ -305,6 +312,7 @@ export function SolarMicrogridPanel({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={handleNativeClose}
+      onKeyDown={(e) => trapDialogTabKey(dialogRef.current, e)}
       style={{ maxInlineSize: "min(94vw, 900px)", maxBlockSize: "90dvh" }}
       className="etg-dialog bg-surface text-text-primary"
       {...({ closedby: "any" } as Record<string, unknown>)}

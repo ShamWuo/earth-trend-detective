@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { classifyUpstreamFault, createTelemetryBudget } from "@/lib/earth/upstreamResilience";
 import {
   buildDenverSolarClimatologicalFallback,
   fetchDenverSolarClimateGraph,
@@ -7,6 +8,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const budget = createTelemetryBudget(1550);
   let startYear = 2019;
   let endYear = new Date().getUTCFullYear();
   try {
@@ -17,10 +19,29 @@ export async function GET(request: Request) {
     const forceRefresh =
       searchParams.get("refresh") === "1" || searchParams.get("refresh") === "true";
 
-    const result = await fetchDenverSolarClimateGraph(startYear, endYear, { forceRefresh });
+    const result = await budget.raceWithFallback(
+      fetchDenverSolarClimateGraph(startYear, endYear, { forceRefresh }),
+      () => {
+        const fb = buildDenverSolarClimatologicalFallback(startYear, endYear);
+        return {
+          ...fb,
+          upstreamFault: {
+            source: "Solar Microgrid Telemetry",
+            kind: "timeout" as const,
+            message: "Solar graph upstream deadline exceeded; using climatological fallback",
+            retryable: false,
+          },
+          elapsedMs: budget.elapsedMs(),
+        };
+      }
+    );
     return NextResponse.json(result, { status: 200 });
-  } catch {
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "Solar Microgrid Telemetry");
     const fallback = buildDenverSolarClimatologicalFallback(startYear, endYear);
-    return NextResponse.json(fallback, { status: 200 });
+    return NextResponse.json(
+      { ...fallback, upstreamFault: fault, upstreamFaults: [fault], elapsedMs: budget.elapsedMs() },
+      { status: 200 }
+    );
   }
 }

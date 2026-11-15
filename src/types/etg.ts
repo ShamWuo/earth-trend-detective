@@ -344,11 +344,31 @@ export type TelemetryFeedStatus = "ok" | "unavailable" | "failed_to_fetch";
 
 export type TelemetryFailureKind = "failed_to_fetch" | "unavailable";
 
+export type UpstreamFaultKind =
+  | "rate_limited"
+  | "upstream_http_error"
+  | "malformed_payload"
+  | "timeout"
+  | "network_error"
+  | "unavailable";
+
+export interface UpstreamFaultDetail {
+  source: string;
+  kind: UpstreamFaultKind;
+  httpStatus?: number;
+  message: string;
+  retryable: boolean;
+}
+
 export interface CurrentFeedDiagnostics {
   weatherStatus: TelemetryFeedStatus;
   weatherReason?: string;
+  weatherFaultKind?: UpstreamFaultKind;
+  weatherHttpStatus?: number;
   airQualityStatus: TelemetryFeedStatus;
   airQualityReason?: string;
+  airQualityFaultKind?: UpstreamFaultKind;
+  airQualityHttpStatus?: number;
 }
 
 export interface DatasetTelemetryDiagnostic {
@@ -356,11 +376,16 @@ export interface DatasetTelemetryDiagnostic {
   status: TelemetryFailureKind | "climatological_fallback";
   reason: string;
   provenanceMode?: ProvenanceMode;
+  faultKind?: UpstreamFaultKind;
+  httpStatus?: number;
 }
 
 export interface TelemetryQueryDiagnostics {
   current?: CurrentFeedDiagnostics;
   datasets?: DatasetTelemetryDiagnostic[];
+  faults?: UpstreamFaultDetail[];
+  elapsedMs?: number;
+  provenanceMode?: ProvenanceMode;
 }
 
 export type EarthSphere =

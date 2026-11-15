@@ -729,9 +729,21 @@ export async function POST(req: NextRequest) {
         : undefined,
     });
   } catch (err) {
+    const msg = err instanceof Error ? err.message : "Detective synthesis failed";
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Detective synthesis failed" },
-      { status: 500 }
+      {
+        answer: `Fell back to local deterministic analysis because upstream synthesis encountered an issue (${msg}).`,
+        degraded: true,
+        provenanceMode: "climatological_fallback",
+        upstreamFault: {
+          source: "AI Detective Synthesis",
+          kind: "unavailable",
+          message: msg,
+          retryable: false,
+        },
+        citedNodes: [],
+      },
+      { status: 200 }
     );
   }
 }

@@ -7,6 +7,7 @@ import {
   EARTH_TREND_DATASETS,
 } from "@/lib/datasets";
 import { attachDialogLightDismissFallback } from "@/lib/a11y/dialogLightDismiss";
+import { restoreOpenerFocus, trapDialogTabKey } from "@/lib/a11y/dialogFocusTrap";
 import type { ETGDatasetId, ETGNode } from "@/types/etg";
 
 export type IngestionTabId = "dataset" | "agencies" | "mcp" | "webhook" | "community";
@@ -37,6 +38,7 @@ export function IngestionModal({
   const baseId = useId();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const tabButtonRefs = useRef<Partial<Record<IngestionTabId, HTMLButtonElement | null>>>({});
   const [tab, setTab] = useState<IngestionTabId>(initialTab);
 
@@ -81,6 +83,8 @@ export function IngestionModal({
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (open && !dialog.open) {
+      openerRef.current =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
       dialog.showModal();
     } else if (!open && dialog.open) {
       dialog.close();
@@ -104,7 +108,10 @@ export function IngestionModal({
     if (dialog) {
       dialog.returnValue = "";
     }
+    const opener = openerRef.current;
+    openerRef.current = null;
     onClose();
+    restoreOpenerFocus(opener);
   };
 
   const handleDatasetFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -361,6 +368,7 @@ export function IngestionModal({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={handleNativeClose}
+      onKeyDown={(e) => trapDialogTabKey(dialogRef.current, e)}
       className="etg-dialog"
       {...({ closedby: "any" } as Record<string, unknown>)}
     >

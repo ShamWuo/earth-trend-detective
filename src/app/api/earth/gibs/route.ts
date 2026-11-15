@@ -1,16 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  classifyHttpStatusFault,
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  UpstreamTelemetryError,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
+import {
   GIBS_LAYERS,
   GIBS_WMS_ENDPOINT,
   type ActiveGibsLayerId,
 } from "@/lib/earth/nasaGibsRegional";
+import type { UpstreamFaultDetail } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
 
 const MAX_CACHE_ENTRIES = 64;
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const MIN_VALID_TILE_BYTES = 2400;
-const UPSTREAM_TIMEOUT_MS = 8000;
+const UPSTREAM_TIMEOUT_MS = 950;
 
 interface GibsCacheEntry {
   buffer: ArrayBuffer;
@@ -59,8 +67,9 @@ async function fetchGibsUpstream(
   width: number,
   height: number,
   dateIso: string,
-  format: "image/jpeg" | "image/png" = "image/jpeg"
-): Promise<{ buffer: ArrayBuffer; contentType: string } | null> {
+  format: "image/jpeg" | "image/png" = "image/jpeg",
+  budget?: TelemetryBudget
+): Promise<{ ok: true; buffer: ArrayBuffer; contentType: string } | { ok: false; fault: UpstreamFaultDetail }> {
   const transparentPart = format === "image/png" ? "&TRANSPARENT=TRUE" : "";
   const upstreamUrl =
     `${GIBS_WMS_ENDPOINT}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap` +
@@ -72,21 +81,52 @@ async function fetchGibsUpstream(
       headers: {
         "User-Agent": "EarthTrendDetective/1.0 (NASA Space Apps; GIBS Swath Proxy)",
       },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: budget ? budget.signal(UPSTREAM_TIMEOUT_MS) : AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       cache: "no-store",
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const snippet = await res.text().catch(() => "");
+      const fault = classifyHttpStatusFault("NASA GIBS WMS", res.status, snippet);
+      budget?.recordFault(fault);
+      return { ok: false, fault };
+    }
     const contentType = res.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().startsWith("image/")) return null;
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      const fault: UpstreamFaultDetail = {
+        source: "NASA GIBS WMS",
+        kind: "malformed_payload",
+        httpStatus: res.status,
+        message: `NASA GIBS WMS returned non-image content-type "${contentType || "unknown"}"`,
+        retryable: false,
+      };
+      budget?.recordFault(fault);
+      return { ok: false, fault };
+    }
     const buffer = await res.arrayBuffer();
-    if (buffer.byteLength < MIN_VALID_TILE_BYTES) return null;
-    return { buffer, contentType };
-  } catch {
-    return null;
+    if (buffer.byteLength < MIN_VALID_TILE_BYTES) {
+      const fault: UpstreamFaultDetail = {
+        source: "NASA GIBS WMS",
+        kind: "unavailable",
+        httpStatus: res.status,
+        message: `NASA GIBS imagery blank or truncated (${buffer.byteLength} bytes < ${MIN_VALID_TILE_BYTES})`,
+        retryable: false,
+      };
+      budget?.recordFault(fault);
+      return { ok: false, fault };
+    }
+    return { ok: true, buffer, contentType };
+  } catch (err) {
+    const fault =
+      err instanceof UpstreamTelemetryError
+        ? err.toDetail()
+        : classifyUpstreamFault(err, "NASA GIBS WMS");
+    budget?.recordFault(fault);
+    return { ok: false, fault };
   }
 }
 
 export async function GET(req: NextRequest) {
+  const budget = createTelemetryBudget(1550);
   const sp = req.nextUrl.searchParams;
   const layerParam = sp.get("layer");
   const scopeParam = sp.get("scope");
@@ -124,6 +164,7 @@ export async function GET(req: NextRequest) {
         "Content-Type": cached.contentType,
         "Cache-Control": "public, max-age=900",
         "X-ETG-GIBS-Date": cached.resolvedDate,
+        "X-ETG-Provenance": "cached",
       },
     });
   }
@@ -149,37 +190,48 @@ export async function GET(req: NextRequest) {
       : Boolean(layer!.monthly);
 
   let resolvedDate = timeParam;
-  let fetched = await fetchGibsUpstream(
+  let primaryOutcome = await fetchGibsUpstream(
     wmsLayers,
     bboxParam,
     widthParam,
     heightParam,
     timeParam,
-    format
+    format,
+    budget
   );
 
-  if (!fetched && !isBorders) {
+  if (!primaryOutcome.ok && !isBorders && budget.remainingMs() > 150) {
     const fallbackDate = isMonthly ? "2025-07-01" : "2025-07-15";
     if (timeParam !== fallbackDate) {
       resolvedDate = fallbackDate;
-      fetched = await fetchGibsUpstream(
+      primaryOutcome = await fetchGibsUpstream(
         wmsLayers,
         bboxParam,
         widthParam,
         heightParam,
         fallbackDate,
-        format
+        format,
+        budget
       );
     }
   }
 
-  if (!fetched) {
+  if (!primaryOutcome.ok) {
+    const primaryFault = primaryOutcome.fault;
     return NextResponse.json(
-      { error: "NASA GIBS imagery unavailable" },
+      {
+        error: "NASA GIBS imagery unavailable",
+        failureKind: primaryFault.kind === "unavailable" ? "unavailable" : "failed_to_fetch",
+        provenanceMode: "unavailable",
+        upstreamFault: primaryFault,
+        upstreamFaults: budget.faults.length > 0 ? budget.faults : [primaryFault],
+        elapsedMs: budget.elapsedMs(),
+      },
       { status: 502 }
     );
   }
 
+  const fetched = primaryOutcome;
   gibsTileCache.set(cacheKey, {
     buffer: fetched.buffer,
     contentType: fetched.contentType,
@@ -198,6 +250,7 @@ export async function GET(req: NextRequest) {
       "Content-Type": fetched.contentType,
       "Cache-Control": "public, max-age=900",
       "X-ETG-GIBS-Date": resolvedDate,
+      "X-ETG-Provenance": "live",
     },
   });
 }

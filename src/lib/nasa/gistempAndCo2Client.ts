@@ -1,5 +1,11 @@
-import { createBoundedSignal, type DataProvenanceMode } from "@/lib/earth/coordinates";
-import type { ETGDatasetId, TimeSeriesPoint } from "@/types/etg";
+import { type DataProvenanceMode } from "@/lib/earth/coordinates";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamText,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
+import type { ETGDatasetId, TimeSeriesPoint, UpstreamFaultDetail } from "@/types/etg";
 
 const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observatory)";
 const CACHE_TTL_MS = 1000 * 60 * 15;
@@ -17,38 +23,41 @@ export function clearGistempAndCo2Caches(): void {
 async function fetchTextWithRetry(
   url: string,
   accept: string,
-  label: string
+  label: string,
+  budget?: TelemetryBudget
 ): Promise<string> {
-  let lastError: Error | null = null;
-  const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 300;
+  const activeBudget = budget ?? createTelemetryBudget(1350);
+  let lastError: unknown = null;
+  const retryDelayMs = process.env.NODE_ENV === "test" ? 10 : 40;
   for (let attempt = 0; attempt < 2; attempt++) {
+    const startedAttemptAt = Date.now();
     try {
       const res = await fetch(url, {
-        signal: createBoundedSignal(8000),
+        signal: activeBudget.signal(1150),
         headers: {
           Accept: accept,
           "User-Agent": USER_AGENT,
         },
       });
-      if (!res.ok) {
-        const err = new Error(`${label} HTTP ${res.status} ${res.statusText}`);
-        if ((res.status === 429 || res.status >= 500) && attempt === 0) {
-          lastError = err;
-          await new Promise((r) => setTimeout(r, retryDelayMs));
-          continue;
-        }
-        throw err;
-      }
-      return await res.text();
+      return await parseUpstreamText(res, label);
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(`${label} request failed`);
-      if (attempt === 0) {
+      const fault = classifyUpstreamFault(err, label);
+      activeBudget.recordFault(fault);
+      lastError = err;
+      const attemptElapsed = Date.now() - startedAttemptAt;
+      if (
+        attempt === 0 &&
+        fault.retryable &&
+        attemptElapsed < 250 &&
+        activeBudget.remainingMs() > 500
+      ) {
         await new Promise((r) => setTimeout(r, retryDelayMs));
         continue;
       }
+      throw err instanceof Error ? err : new Error(fault.message);
     }
   }
-  throw lastError ?? new Error(`${label} request failed`);
+  throw lastError instanceof Error ? lastError : new Error(`${label} request failed`);
 }
 
 export interface GistempZoneMeta {
@@ -208,31 +217,55 @@ export function buildGistempClimatologicalFallback(
 
 export async function fetchNasaGistempZonalSeriesWithFallback(
   startYear = 1995,
-  endYear = 2025
-): Promise<ParsedGistempData & { provenanceMode: DataProvenanceMode }> {
+  endYear = 2025,
+  budget?: TelemetryBudget
+): Promise<ParsedGistempData & { provenanceMode: DataProvenanceMode; upstreamFault?: UpstreamFaultDetail }> {
   const hadFreshCache = Boolean(gistempCsvCache && gistempCsvCache.expiresAt > Date.now());
   try {
-    const csvText = await fetchNasaGistempZonalCsvText();
+    const csvText = gistempCsvCache && gistempCsvCache.expiresAt > Date.now()
+      ? gistempCsvCache.csvText
+      : await fetchTextWithRetry(
+          "https://data.giss.nasa.gov/gistemp/tabledata_v4/ZonAnn.Ts+dSST.csv",
+          "text/csv,text/plain,*/*",
+          "NASA GISTEMP v4",
+          budget
+        ).then((text) => {
+          gistempCsvCache = { expiresAt: Date.now() + CACHE_TTL_MS, csvText: text };
+          return text;
+        });
     const parsed = parseGistempZonalCsv(csvText, startYear, endYear);
     if (parsed.zones.length > 0) {
       return { ...parsed, provenanceMode: hadFreshCache ? "cached" : "live" };
     }
-  } catch {
+    const fault = classifyUpstreamFault(
+      new Error("NASA GISTEMP v4 returned malformed or empty CSV zones"),
+      "NASA GISTEMP v4"
+    );
+    budget?.recordFault(fault);
+    return {
+      ...buildGistempClimatologicalFallback(startYear, endYear),
+      provenanceMode: "climatological_fallback",
+      upstreamFault: fault,
+    };
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "NASA GISTEMP v4");
+    budget?.recordFault(fault);
     if (gistempCsvCache) {
       try {
         const parsed = parseGistempZonalCsv(gistempCsvCache.csvText, startYear, endYear);
         if (parsed.zones.length > 0) {
-          return { ...parsed, provenanceMode: "cached" };
+          return { ...parsed, provenanceMode: "cached", upstreamFault: fault };
         }
       } catch {
         // Fall through to climatological baseline
       }
     }
+    return {
+      ...buildGistempClimatologicalFallback(startYear, endYear),
+      provenanceMode: "climatological_fallback",
+      upstreamFault: fault,
+    };
   }
-  return {
-    ...buildGistempClimatologicalFallback(startYear, endYear),
-    provenanceMode: "climatological_fallback",
-  };
 }
 
 /**
@@ -309,19 +342,46 @@ export function buildNoaaCo2ClimatologicalFallback(
 
 export async function fetchNoaaGlobalCo2SeriesWithFallback(
   startYear = 1995,
-  endYear = 2025
-): Promise<{ sourceUrl: string; points: TimeSeriesPoint[]; provenanceMode: DataProvenanceMode }> {
+  endYear = 2025,
+  budget?: TelemetryBudget
+): Promise<{
+  sourceUrl: string;
+  points: TimeSeriesPoint[];
+  provenanceMode: DataProvenanceMode;
+  upstreamFault?: UpstreamFaultDetail;
+}> {
   const hadFreshCache = Boolean(co2Cache && co2Cache.expiresAt > Date.now());
   try {
-    const res = await fetchNoaaGlobalCo2Series(startYear, endYear);
-    return { ...res, provenanceMode: hadFreshCache ? "cached" : "live" };
-  } catch {
+    if (co2Cache && co2Cache.expiresAt > Date.now()) {
+      return {
+        sourceUrl: co2Cache.sourceUrl,
+        points: co2Cache.points.filter((p) => p.t >= startYear && p.t <= endYear),
+        provenanceMode: "cached",
+      };
+    }
+    const sourceUrl = "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_gl.txt";
+    const text = await fetchTextWithRetry(sourceUrl, "text/plain,*/*", "NOAA GML CO2", budget);
+    const parsed = parseNoaaCo2AnnMean(text, startYear, endYear);
+    if (parsed.length < 3) {
+      throw new Error("NOAA GML CO2 returned malformed or empty rows");
+    }
+    co2Cache = { expiresAt: Date.now() + CACHE_TTL_MS, sourceUrl, points: parsed };
+    return { sourceUrl, points: parsed, provenanceMode: hadFreshCache ? "cached" : "live" };
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "NOAA GML CO2");
+    budget?.recordFault(fault);
     if (co2Cache) {
-      return { sourceUrl: co2Cache.sourceUrl, points: co2Cache.points, provenanceMode: "cached" };
+      return {
+        sourceUrl: co2Cache.sourceUrl,
+        points: co2Cache.points,
+        provenanceMode: "cached",
+        upstreamFault: fault,
+      };
     }
     return {
       ...buildNoaaCo2ClimatologicalFallback(startYear, endYear),
       provenanceMode: "climatological_fallback",
+      upstreamFault: fault,
     };
   }
 }
@@ -411,23 +471,52 @@ export function buildNsidcSeaIceClimatologicalFallback(
 
 export async function fetchNsidcArcticSeaIceSeriesWithFallback(
   startYear = 1995,
-  endYear = 2025
-): Promise<{ sourceUrl: string; points: TimeSeriesPoint[]; provenanceMode: DataProvenanceMode }> {
+  endYear = 2025,
+  budget?: TelemetryBudget
+): Promise<{
+  sourceUrl: string;
+  points: TimeSeriesPoint[];
+  provenanceMode: DataProvenanceMode;
+  upstreamFault?: UpstreamFaultDetail;
+}> {
   const hadFreshCache = Boolean(nsidcCache && nsidcCache.expiresAt > Date.now());
   try {
-    const res = await fetchNsidcArcticSeaIceSeries(startYear, endYear);
-    return { ...res, provenanceMode: hadFreshCache ? "cached" : "live" };
-  } catch {
+    if (nsidcCache && nsidcCache.expiresAt > Date.now()) {
+      return {
+        sourceUrl: nsidcCache.sourceUrl,
+        points: nsidcCache.points.filter((p) => p.t >= startYear && p.t <= endYear),
+        provenanceMode: "cached",
+      };
+    }
+    const sourceUrl =
+      "https://noaadata.apps.nsidc.org/NOAA/G02135/north/monthly/data/N_09_extent_v4.0.csv";
+    const csvText = await fetchTextWithRetry(
+      sourceUrl,
+      "text/csv,text/plain,*/*",
+      "NSIDC Sea Ice Index v4",
+      budget
+    );
+    const parsed = parseNsidcSeaIceCsv(csvText, startYear, endYear);
+    if (parsed.length < 3) {
+      throw new Error("NSIDC Sea Ice Index returned malformed or empty CSV");
+    }
+    nsidcCache = { expiresAt: Date.now() + CACHE_TTL_MS, sourceUrl, points: parsed };
+    return { sourceUrl, points: parsed, provenanceMode: hadFreshCache ? "cached" : "live" };
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "NSIDC Sea Ice Index v4");
+    budget?.recordFault(fault);
     if (nsidcCache) {
       return {
         sourceUrl: nsidcCache.sourceUrl,
         points: nsidcCache.points,
         provenanceMode: "cached",
+        upstreamFault: fault,
       };
     }
     return {
       ...buildNsidcSeaIceClimatologicalFallback(startYear, endYear),
       provenanceMode: "climatological_fallback",
+      upstreamFault: fault,
     };
   }
 }

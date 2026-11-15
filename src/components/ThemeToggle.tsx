@@ -19,14 +19,32 @@ function getStoredOverride(): "light" | "dark" | null {
   }
 }
 
-function applySchemeToDocument(override: "light" | "dark" | null) {
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
-  if (meta) {
-    meta.content = override ?? "light dark";
+function disableTransitionsForThemeSwap(apply: () => void) {
+  const style = document.createElement("style");
+  style.textContent = "*, *::before, *::after { transition: none !important; }";
+  document.head.appendChild(style);
+  try {
+    apply();
+    // Commit computed theme colors synchronously before re-enabling hover transitions.
+    void window.getComputedStyle(document.documentElement).color;
+    void window.getComputedStyle(document.body).backgroundColor;
+  } finally {
+    window.setTimeout(() => {
+      style.remove();
+    }, 0);
   }
+}
+
+function applySchemeToDocument(override: "light" | "dark" | null) {
   const resolved = override ?? getSystemScheme();
-  document.documentElement.classList.toggle("light", resolved === "light");
-  document.documentElement.setAttribute("data-theme-ready", "true");
+  disableTransitionsForThemeSwap(() => {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="color-scheme"]');
+    if (meta) {
+      meta.content = override ?? "light dark";
+    }
+    document.documentElement.classList.toggle("light", resolved === "light");
+    document.documentElement.setAttribute("data-theme-ready", "true");
+  });
   return resolved;
 }
 

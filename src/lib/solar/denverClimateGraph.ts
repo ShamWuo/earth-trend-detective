@@ -1,5 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  classifyHttpStatusFault,
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamJson,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
+import type { UpstreamFaultDetail } from "@/types/etg";
 
 export interface ClimateGraphNode {
   id: string;
@@ -153,6 +161,9 @@ export interface SolarGraphAnalysisResult {
   economics: MicrogridEconomicSummary;
   topFailure: FailureCase;
   provenanceMode?: "live" | "cached" | "climatological_fallback";
+  upstreamFault?: UpstreamFaultDetail;
+  upstreamFaults?: UpstreamFaultDetail[];
+  elapsedMs?: number;
   recentTestSeries: Array<{
     date: string;
     actual: number;
@@ -1251,28 +1262,59 @@ function writePersistentSolarCache(
 
 async function fetchWithRetry(
   url: string,
-  timeoutMs = 7000,
+  timeoutMs = 1100,
   headers?: Record<string, string>,
-  attempts = 2
+  attempts = 2,
+  budget?: TelemetryBudget,
+  sourceLabel = "Solar Telemetry Upstream"
 ): Promise<Response> {
+  const cappedTimeout = Math.min(timeoutMs, 1100);
   let lastError: unknown;
-  const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 300;
+  const retryDelayMs = process.env.NODE_ENV === "test" ? 10 : 40;
   for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (budget && budget.remainingMs() < 120) {
+      throw (
+        lastError instanceof Error
+          ? lastError
+          : new Error(`${sourceLabel} chaos deadline exceeded`)
+      );
+    }
+    const startedAttemptAt = Date.now();
     try {
       const res = await fetch(url, {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: budget ? budget.signal(cappedTimeout) : AbortSignal.timeout(cappedTimeout),
         ...(headers ? { headers } : {}),
       });
-      if ((res.status === 429 || res.status >= 500) && attempt < attempts) {
-        await new Promise((r) => setTimeout(r, retryDelayMs));
-        continue;
+      if (!res.ok) {
+        const httpFault = classifyHttpStatusFault(sourceLabel, res.status);
+        budget?.recordFault(httpFault);
+        const attemptElapsed = Date.now() - startedAttemptAt;
+        if (
+          httpFault.retryable &&
+          attempt < attempts &&
+          attemptElapsed < 250 &&
+          (!budget || budget.remainingMs() > 450)
+        ) {
+          await new Promise((r) => setTimeout(r, retryDelayMs));
+          continue;
+        }
       }
       return res;
     } catch (err) {
+      const fault = classifyUpstreamFault(err, sourceLabel);
+      budget?.recordFault(fault);
       lastError = err;
-      if (attempt < attempts) {
+      const attemptElapsed = Date.now() - startedAttemptAt;
+      if (
+        fault.retryable &&
+        attempt < attempts &&
+        attemptElapsed < 250 &&
+        (!budget || budget.remainingMs() > 450)
+      ) {
         await new Promise((r) => setTimeout(r, retryDelayMs));
+        continue;
       }
+      throw lastError instanceof Error ? lastError : new Error(fault.message);
     }
   }
   throw lastError instanceof Error ? lastError : new Error("Network request failed");
@@ -1336,18 +1378,29 @@ function parseOpenMeteoDailyRows(
 
 async function fetchOpenMeteoBridgeRows(
   node: ClimateGraphNode,
-  fallbackClrsky: number
+  fallbackClrsky: number,
+  budget?: TelemetryBudget
 ): Promise<DailyWeatherRow[]> {
   try {
     const url =
       `https://api.open-meteo.com/v1/forecast?latitude=${node.lat}&longitude=${node.lng}` +
       `&daily=shortwave_radiation_sum,temperature_2m_mean,relative_humidity_2m_mean,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant` +
       `&past_days=7&forecast_days=1&timezone=America%2FDenver`;
-    const res = await fetchWithRetry(url, 8000);
-    if (!res.ok) return [];
-    const json = (await res.json()) as OpenMeteoDailyPayload;
+    const res = await fetchWithRetry(
+      url,
+      1000,
+      undefined,
+      1,
+      budget,
+      `Open-Meteo Bridge (${node.name})`
+    );
+    const json = await parseUpstreamJson<OpenMeteoDailyPayload>(
+      res,
+      `Open-Meteo Bridge (${node.name})`
+    );
     return parseOpenMeteoDailyRows(json, node.lat, fallbackClrsky);
-  } catch {
+  } catch (err) {
+    budget?.recordFault(classifyUpstreamFault(err, `Open-Meteo Bridge (${node.name})`));
     return [];
   }
 }
@@ -1355,18 +1408,26 @@ async function fetchOpenMeteoBridgeRows(
 async function fetchOpenMeteoArchiveRows(
   node: ClimateGraphNode,
   startYear: number,
-  endIsoDate = "2025-12-31"
+  endIsoDate = "2025-12-31",
+  budget?: TelemetryBudget
 ): Promise<DailyWeatherRow[]> {
   const url =
     `https://archive-api.open-meteo.com/v1/archive?latitude=${node.lat}&longitude=${node.lng}` +
     `&start_date=${startYear}-01-01&end_date=${endIsoDate}` +
     `&daily=shortwave_radiation_sum,temperature_2m_mean,relative_humidity_2m_mean,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant` +
     `&timezone=America%2FDenver`;
-  const res = await fetchWithRetry(url, 7000);
-  if (!res.ok) {
-    throw new Error(`Open-Meteo Archive HTTP ${res.status} for ${node.name}`);
-  }
-  const json = (await res.json()) as OpenMeteoDailyPayload;
+  const res = await fetchWithRetry(
+    url,
+    1100,
+    undefined,
+    2,
+    budget,
+    `Open-Meteo Archive (${node.name})`
+  );
+  const json = await parseUpstreamJson<OpenMeteoDailyPayload>(
+    res,
+    `Open-Meteo Archive (${node.name})`
+  );
   if (!json || typeof json !== "object") {
     throw new Error(`Malformed Open-Meteo Archive payload for ${node.name}`);
   }
@@ -1411,7 +1472,8 @@ function parseNasaPowerDailyPayload(json: {
 async function fetchNodeNasaPowerRows(
   node: ClimateGraphNode,
   start: string,
-  primaryEnd: string
+  primaryEnd: string,
+  budget?: TelemetryBudget
 ): Promise<DailyWeatherRow[]> {
   const params = "ALLSKY_SFC_SW_DWN,CLRSKY_SFC_SW_DWN,T2M,RH2M,PRECTOTCORR,WS10M,WD10M,PS";
   const headers = {
@@ -1423,16 +1485,27 @@ async function fetchNodeNasaPowerRows(
     `?parameters=${params}&community=RE&longitude=${node.lng}&latitude=${node.lat}` +
     `&start=${start}&end=${endDate}&format=JSON`;
 
-  let res = await fetchWithRetry(buildUrl(primaryEnd), 7000, headers, 2);
+  let res = await fetchWithRetry(
+    buildUrl(primaryEnd),
+    1100,
+    headers,
+    2,
+    budget,
+    `NASA POWER Daily (${node.name})`
+  );
   if ((res.status === 400 || res.status === 422) && primaryEnd > "20251231") {
-    res = await fetchWithRetry(buildUrl("20251231"), 7000, headers, 2);
+    res = await fetchWithRetry(
+      buildUrl("20251231"),
+      1100,
+      headers,
+      2,
+      budget,
+      `NASA POWER Daily (${node.name})`
+    );
   }
-  if (!res.ok) {
-    throw new Error(`NASA POWER Daily HTTP ${res.status} for ${node.name}`);
-  }
-  const json = (await res.json()) as {
+  const json = await parseUpstreamJson<{
     properties?: { parameter?: Record<string, Record<string, number>> };
-  };
+  }>(res, `NASA POWER Daily (${node.name})`);
   if (!json || typeof json !== "object") {
     throw new Error(`Malformed NASA POWER payload for ${node.name}`);
   }
@@ -1543,7 +1616,8 @@ async function fetchEveningHourlyByNode(
   nodes: ClimateGraphNode[],
   startIso: string,
   archiveEndIso: string,
-  includeForecastBridge: boolean
+  includeForecastBridge: boolean,
+  budget?: TelemetryBudget
 ): Promise<{ byNode: Map<string, Map<string, EveningHourlyFields>>; hasData: boolean }> {
   const byNode = new Map<string, Map<string, EveningHourlyFields>>();
   for (const n of nodes) byNode.set(n.id, new Map());
@@ -1567,42 +1641,48 @@ async function fetchEveningHourlyByNode(
     }
   };
 
-  try {
-    if (archiveEndIso >= startIso) {
+  const fetchArchiveHourly = async () => {
+    if (archiveEndIso < startIso) return;
+    try {
       const archiveUrl =
         `https://archive-api.open-meteo.com/v1/archive?latitude=${lats}&longitude=${lngs}` +
         `&start_date=${startIso}&end_date=${archiveEndIso}&hourly=${vars}` +
         `&wind_speed_unit=ms&timezone=America%2FDenver`;
-      const res = await fetchWithRetry(archiveUrl, 7000, undefined, 1);
-      if (res.ok) {
-        try {
-          mergeResponse(await res.json());
-        } catch {
-          // Malformed JSON triggers daily meteorological fallback
-        }
-      }
+      const res = await fetchWithRetry(
+        archiveUrl,
+        1100,
+        undefined,
+        1,
+        budget,
+        "Open-Meteo Evening Archive"
+      );
+      mergeResponse(await parseUpstreamJson(res, "Open-Meteo Evening Archive"));
+    } catch (err) {
+      budget?.recordFault(classifyUpstreamFault(err, "Open-Meteo Evening Archive"));
     }
-  } catch {
-    // Graceful fallback to daily meteorological fields
-  }
+  };
 
-  try {
-    if (includeForecastBridge) {
+  const fetchForecastHourly = async () => {
+    if (!includeForecastBridge) return;
+    try {
       const forecastUrl =
         `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lngs}` +
         `&hourly=${vars}&past_days=7&forecast_days=1&wind_speed_unit=ms&timezone=America%2FDenver`;
-      const res = await fetchWithRetry(forecastUrl, 7000, undefined, 1);
-      if (res.ok) {
-        try {
-          mergeResponse(await res.json());
-        } catch {
-          // Graceful fallback
-        }
-      }
+      const res = await fetchWithRetry(
+        forecastUrl,
+        1100,
+        undefined,
+        1,
+        budget,
+        "Open-Meteo Evening Forecast"
+      );
+      mergeResponse(await parseUpstreamJson(res, "Open-Meteo Evening Forecast"));
+    } catch (err) {
+      budget?.recordFault(classifyUpstreamFault(err, "Open-Meteo Evening Forecast"));
     }
-  } catch {
-    // Graceful fallback
-  }
+  };
+
+  await Promise.all([fetchArchiveHourly(), fetchForecastHourly()]);
 
   return { byNode, hasData };
 }
@@ -1711,44 +1791,85 @@ export async function fetchDenverSolarClimateGraph(
   let usedOpenMeteoBridge = false;
   let usedOpenMeteoArchiveFallback = false;
 
+  const budget = createTelemetryBudget(1500);
   const eveningPromise = fetchEveningHourlyByNode(
     DENVER_CLIMATE_NODES,
     `${startYear}-01-01`,
     archiveEndIso,
-    includeCurrentYear
+    includeCurrentYear,
+    budget
   );
 
-  const entries: Array<readonly [string, DailyWeatherRow[]]> = [];
-  const batchSize = 4;
-  try {
+  const buildDegradedResult = (): SolarGraphAnalysisResult => {
+    const staleMem = SOLAR_CACHE.get(key);
+    const faults = budget.faults;
+    if (staleMem) {
+      return {
+        ...staleMem.result,
+        provenanceMode: "cached",
+        ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+        elapsedMs: budget.elapsedMs(),
+      };
+    }
+    const staleDisk = readPersistentSolarCache(key, { allowStale: true });
+    if (staleDisk) {
+      return {
+        ...staleDisk,
+        provenanceMode: "cached",
+        ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+        elapsedMs: budget.elapsedMs(),
+      };
+    }
+    const fallback = buildDenverSolarClimatologicalFallback(startYear, endYear);
+    return {
+      ...fallback,
+      ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+      elapsedMs: budget.elapsedMs(),
+    };
+  };
+
+  const runLivePipeline = async (): Promise<SolarGraphAnalysisResult> => {
+    const entries: Array<readonly [string, DailyWeatherRow[]]> = [];
+    const batchSize = 4;
     for (let i = 0; i < DENVER_CLIMATE_NODES.length; i += batchSize) {
       const batch = DENVER_CLIMATE_NODES.slice(i, i + batchSize);
       const batchResults = await Promise.all(
         batch.map(async (node) => {
           let rows: DailyWeatherRow[];
           try {
-            rows = await fetchNodeNasaPowerRows(node, start, primaryEnd);
+            rows = await fetchNodeNasaPowerRows(node, start, primaryEnd, budget);
             if (rows.length === 0) {
               throw new Error(`NASA POWER returned 0 valid rows for ${node.name}`);
             }
           } catch (nasaErr) {
+            budget.recordFault(
+              classifyUpstreamFault(nasaErr, `NASA POWER Daily (${node.name})`)
+            );
             try {
-              const archiveRows = await fetchOpenMeteoArchiveRows(node, startYear, archiveEndIso);
+              const archiveRows = await fetchOpenMeteoArchiveRows(
+                node,
+                startYear,
+                archiveEndIso,
+                budget
+              );
               if (archiveRows.length === 0) {
                 throw nasaErr;
               }
               rows = archiveRows;
               usedOpenMeteoArchiveFallback = true;
-            } catch {
+            } catch (archiveErr) {
+              budget.recordFault(
+                classifyUpstreamFault(archiveErr, `Open-Meteo Archive (${node.name})`)
+              );
               throw nasaErr;
             }
           }
 
           // Bridge recent latency with real-time Open-Meteo observations
-          if (includeCurrentYear && rows.length > 0) {
+          if (includeCurrentYear && rows.length > 0 && budget.remainingMs() > 200) {
             const lastObsDate = rows[rows.length - 1].date;
             const lastClrsky = rows[rows.length - 1].clrsky;
-            const bridgeRows = await fetchOpenMeteoBridgeRows(node, lastClrsky);
+            const bridgeRows = await fetchOpenMeteoBridgeRows(node, lastClrsky, budget);
             for (const br of bridgeRows) {
               if (br.date > lastObsDate && br.date <= todayYyyymmdd) {
                 rows.push(br);
@@ -1808,21 +1929,23 @@ export async function fetchDenverSolarClimateGraph(
       result.dataSource = "NASA POWER Daily API (CERES SYN1deg & MERRA-2)";
     }
     result.provenanceMode = "live";
+    if (budget.faults.length > 0) {
+      result.upstreamFault = budget.faults[0];
+      result.upstreamFaults = budget.faults;
+    }
+    result.elapsedMs = budget.elapsedMs();
 
     const expiresAt = Date.now() + SOLAR_CACHE_TTL_MS;
     SOLAR_CACHE.set(key, { expiresAt, result });
     writePersistentSolarCache(key, expiresAt, result);
     return result;
-  } catch {
+  };
+
+  try {
+    return await budget.raceWithFallback(runLivePipeline(), buildDegradedResult);
+  } catch (err) {
+    budget.recordFault(classifyUpstreamFault(err, "Solar Microgrid Pipeline"));
     await eveningPromise.catch(() => null);
-    const staleMem = SOLAR_CACHE.get(key);
-    if (staleMem) {
-      return { ...staleMem.result, provenanceMode: "cached" };
-    }
-    const staleDisk = readPersistentSolarCache(key, { allowStale: true });
-    if (staleDisk) {
-      return { ...staleDisk, provenanceMode: "cached" };
-    }
-    return buildDenverSolarClimatologicalFallback(startYear, endYear);
+    return buildDegradedResult();
   }
 }

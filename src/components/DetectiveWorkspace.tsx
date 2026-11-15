@@ -325,7 +325,11 @@ export function DetectiveWorkspace({
                 update: () => void;
                 types?: string[];
               }
-        ) => { finished: Promise<void> };
+        ) => {
+          finished: Promise<void>;
+          ready?: Promise<void>;
+          updateCallbackDone?: Promise<void>;
+        };
       };
 
       const prefersReducedMotion =
@@ -337,6 +341,7 @@ export function DetectiveWorkspace({
 
       if (
         !prefersReducedMotion &&
+        document.visibilityState === "visible" &&
         typeof docWithTransition.startViewTransition === "function"
       ) {
         let updated = false;
@@ -346,7 +351,11 @@ export function DetectiveWorkspace({
             setViewMode(nextMode);
           });
         };
-        let transition: { finished: Promise<void> };
+        let transition: {
+          finished: Promise<void>;
+          ready?: Promise<void>;
+          updateCallbackDone?: Promise<void>;
+        };
         try {
           transition = docWithTransition.startViewTransition({
             update: applyUpdate,
@@ -357,9 +366,13 @@ export function DetectiveWorkspace({
             ? { finished: Promise.resolve() }
             : docWithTransition.startViewTransition(applyUpdate);
         }
-        void transition.finished.finally(() => {
-          focusStageHeading();
-        });
+        void transition.ready?.catch(() => {});
+        void transition.updateCallbackDone?.catch(() => {});
+        void transition.finished
+          .finally(() => {
+            focusStageHeading();
+          })
+          .catch(() => {});
       } else {
         setViewMode(nextMode);
         requestAnimationFrame(() => {

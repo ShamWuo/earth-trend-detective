@@ -1,11 +1,16 @@
 import {
-  createBoundedSignal,
   normalizeEarthCoordinates,
   type DataProvenanceMode,
 } from "@/lib/earth/coordinates";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamJson,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import { haversineKm } from "@/lib/graph/etgStore";
 import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
-import type { ETGDatasetId, ETGNode } from "@/types/etg";
+import type { ETGDatasetId, ETGNode, UpstreamFaultDetail } from "@/types/etg";
 
 const EONET_CACHE_TTL_MS = 1000 * 60 * 15;
 let eonetCache: { expiresAt: number; signals: ETGNode[] } | null = null;
@@ -92,48 +97,61 @@ export function extractGeometryCentroid(coords: unknown): [number, number] | nul
   return [sum[0] / flatPoints.length, sum[1] / flatPoints.length];
 }
 
-export async function fetchLiveEonetSignals(limit = 10): Promise<{
+export async function fetchLiveEonetSignals(
+  limit = 10,
+  budget?: TelemetryBudget
+): Promise<{
   provenance: "NASA EONET v3 (Live)" | "NASA EONET v3 (Cached)" | "NASA EONET v3 (Baseline Fallback)";
   provenanceMode: DataProvenanceMode;
   signals: ETGNode[];
+  upstreamFault?: UpstreamFaultDetail;
+  upstreamFaults?: UpstreamFaultDetail[];
+  elapsedMs?: number;
 }> {
   const safeLimit = Math.max(1, Math.min(30, Math.floor(limit)));
   const perCategoryLimit = Math.max(2, Math.min(5, Math.ceil(safeLimit / 2)));
+  const activeBudget = budget ?? createTelemetryBudget(1400);
 
   if (eonetCache && eonetCache.expiresAt > Date.now() && eonetCache.signals.length > 0) {
     return {
       provenance: "NASA EONET v3 (Cached)",
       provenanceMode: "cached",
       signals: eonetCache.signals.slice(0, safeLimit),
+      elapsedMs: activeBudget.elapsedMs(),
     };
   }
 
   const responses = await Promise.allSettled(
     EONET_CATEGORIES.map(async (category) => {
-      const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 300;
+      const retryDelayMs = process.env.NODE_ENV === "test" ? 10 : 40;
       for (let attempt = 0; attempt < 2; attempt++) {
+        const startedAttemptAt = Date.now();
         try {
           const res = await fetch(
             `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&limit=${perCategoryLimit}`,
             {
-              signal: createBoundedSignal(8000),
+              signal: activeBudget.signal(1150),
               headers: {
                 Accept: "application/json",
                 "User-Agent": USER_AGENT,
               },
             }
           );
-          if (!res.ok) {
-            if ((res.status === 429 || res.status >= 500) && attempt === 0) {
-              await new Promise((r) => setTimeout(r, retryDelayMs));
-              continue;
-            }
-            return [] as EonetEvent[];
-          }
-          const data = (await res.json()) as { events?: EonetEvent[] };
+          const data = await parseUpstreamJson<{ events?: EonetEvent[] }>(
+            res,
+            `NASA EONET v3 (${category})`
+          );
           return Array.isArray(data?.events) ? data.events : [];
-        } catch {
-          if (attempt === 0) {
+        } catch (err) {
+          const fault = classifyUpstreamFault(err, `NASA EONET v3 (${category})`);
+          activeBudget.recordFault(fault);
+          const attemptElapsed = Date.now() - startedAttemptAt;
+          if (
+            attempt === 0 &&
+            fault.retryable &&
+            attemptElapsed < 250 &&
+            activeBudget.remainingMs() > 500
+          ) {
             await new Promise((r) => setTimeout(r, retryDelayMs));
             continue;
           }
@@ -206,17 +224,22 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
   }
 
   if (parsedCandidates.length === 0) {
+    const faults = activeBudget.faults;
     if (eonetCache && eonetCache.signals.length > 0) {
       return {
         provenance: "NASA EONET v3 (Cached)",
         provenanceMode: "cached",
         signals: eonetCache.signals.slice(0, safeLimit),
+        ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+        elapsedMs: activeBudget.elapsedMs(),
       };
     }
     return {
       provenance: "NASA EONET v3 (Baseline Fallback)",
       provenanceMode: "climatological_fallback",
       signals: [],
+      ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+      elapsedMs: activeBudget.elapsedMs(),
     };
   }
 
@@ -278,9 +301,12 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
     signals: selected,
   };
 
+  const faults = activeBudget.faults;
   return {
     provenance: "NASA EONET v3 (Live)",
     provenanceMode: "live",
     signals: selected,
+    ...(faults[0] ? { upstreamFault: faults[0], upstreamFaults: faults } : {}),
+    elapsedMs: activeBudget.elapsedMs(),
   };
 }

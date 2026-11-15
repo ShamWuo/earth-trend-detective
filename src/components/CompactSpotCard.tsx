@@ -864,7 +864,7 @@ export function CompactSpotCard({
               className="space-y-1 rounded-sm border border-border bg-surface-inset p-2.5 font-sans text-[11px] leading-relaxed text-text-muted"
             >
               <div>
-                <strong className="text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
+                <strong className="ws-numeric text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
               </div>
               <div>
                 <strong className="text-text-primary">Theil-Sen Slope:</strong> Median yearly rate of change (ignores one-off outlier storms).

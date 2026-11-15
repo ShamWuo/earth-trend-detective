@@ -7,6 +7,10 @@ import {
   isWithinUsgsBounds,
   type OpenFeedSeriesResult,
 } from "@/lib/earth/openFeedsClient";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
 
@@ -15,6 +19,14 @@ export const dynamic = "force-dynamic";
 type SupportedFeed = "cams_pm25" | "usgs_gauge" | "glofas_discharge";
 
 export async function POST(request: NextRequest) {
+  const budget = createTelemetryBudget(1500);
+  let resolvedFeed: SupportedFeed | undefined;
+  let resolvedLat = Number.NaN;
+  let resolvedLng = Number.NaN;
+  let resolvedStart = 1995;
+  let resolvedEnd = 2025;
+  let resolvedGranularity: "annual" | "monthly" = "annual";
+
   try {
     const body = (await request.json().catch(() => ({}))) as {
       feed?: string;
@@ -66,31 +78,24 @@ export async function POST(request: NextRequest) {
           ? "monthly"
           : "annual";
 
-    let feedResult: OpenFeedSeriesResult | null = null;
-    if (feed === "cams_pm25") {
-      feedResult = await fetchCamsSurfacePm25Series(
-        lat,
-        lng,
-        startYear,
-        endYear,
-        granularity
-      );
-    } else if (feed === "usgs_gauge") {
-      feedResult = await fetchNearestUsgsGaugeAnnualSeries(
-        lat,
-        lng,
-        startYear,
-        endYear
-      );
-    } else {
-      feedResult = await fetchGlofasDischargeSeries(
-        lat,
-        lng,
-        startYear,
-        endYear,
-        granularity
-      );
-    }
+    resolvedFeed = feed;
+    resolvedLat = lat;
+    resolvedLng = lng;
+    resolvedStart = startYear;
+    resolvedEnd = endYear;
+    resolvedGranularity = granularity;
+
+    const feedPromise =
+      feed === "cams_pm25"
+        ? fetchCamsSurfacePm25Series(lat, lng, startYear, endYear, granularity, budget)
+        : feed === "usgs_gauge"
+          ? fetchNearestUsgsGaugeAnnualSeries(lat, lng, startYear, endYear, budget)
+          : fetchGlofasDischargeSeries(lat, lng, startYear, endYear, granularity, budget);
+
+    let feedResult = await budget.raceWithFallback<OpenFeedSeriesResult | null>(
+      feedPromise,
+      () => null
+    );
 
     if (!feedResult || feedResult.points.length < 6) {
       if (feed === "usgs_gauge" && !isWithinUsgsBounds(lat, lng)) {
@@ -157,6 +162,7 @@ export async function POST(request: NextRequest) {
       series: feedResult.points,
     });
 
+    const upstreamFault = feedResult.upstreamFault ?? budget.faults[0];
     return NextResponse.json({
       status: "ingested",
       feed,
@@ -164,6 +170,9 @@ export async function POST(request: NextRequest) {
       provenanceMode: feedResult.provenanceMode ?? "live",
       sourceUrl: feedResult.sourceUrl,
       pointCount: feedResult.points.length,
+      ...(upstreamFault ? { upstreamFault } : {}),
+      ...(budget.faults.length > 0 ? { upstreamFaults: budget.faults } : {}),
+      elapsedMs: budget.elapsedMs(),
       summaryStats,
       hardwareNode: webhookResult.hardwareNode,
       signalNode: webhookResult.signalNode,
@@ -172,8 +181,32 @@ export async function POST(request: NextRequest) {
       snapshot: store.getSnapshot(),
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to ingest open physical feed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const fault = classifyUpstreamFault(error, resolvedFeed ?? "Open Feeds");
+    if (resolvedFeed && Number.isFinite(resolvedLat) && Number.isFinite(resolvedLng)) {
+      const fallback = buildOpenFeedClimatologicalFallback(
+        resolvedFeed,
+        resolvedLat,
+        resolvedLng,
+        resolvedStart,
+        resolvedEnd,
+        resolvedGranularity
+      );
+      return NextResponse.json({
+        status: "ingested",
+        feed: resolvedFeed,
+        provenance: fallback.provenanceSource,
+        provenanceMode: "climatological_fallback",
+        sourceUrl: fallback.sourceUrl,
+        pointCount: fallback.points.length,
+        upstreamFault: fault,
+        upstreamFaults: budget.faults.length > 0 ? budget.faults : [fault],
+        elapsedMs: budget.elapsedMs(),
+        snapshot: getEtgStore().getSnapshot(),
+      });
+    }
+    return NextResponse.json(
+      { error: fault.message, upstreamFault: fault, elapsedMs: budget.elapsedMs() },
+      { status: 400 }
+    );
   }
 }

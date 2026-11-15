@@ -1,9 +1,17 @@
 import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamJson,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import type {
   CurrentEarthConditions,
   CurrentFeedDiagnostics,
   ETGDatasetId,
   TemperatureUnit,
+  UpstreamFaultDetail,
+  UpstreamFaultKind,
 } from "@/types/etg";
 
 const USER_AGENT =
@@ -367,33 +375,38 @@ export function clearCurrentConditionsCache(): void {
 
 type FetchJsonResult =
   | { ok: true; data: unknown }
-  | { ok: false; status: "failed_to_fetch"; reason: string };
+  | {
+      ok: false;
+      status: "failed_to_fetch";
+      reason: string;
+      faultKind: UpstreamFaultKind;
+      httpStatus?: number;
+      fault: UpstreamFaultDetail;
+    };
 
 async function fetchJsonWithStatus(
   url: string,
-  feedLabel: string
+  feedLabel: string,
+  budget?: TelemetryBudget
 ): Promise<FetchJsonResult> {
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(3500),
+      signal: budget ? budget.signal(1150) : AbortSignal.timeout(1150),
       cache: "no-store",
     });
-    if (!res.ok) {
-      return {
-        ok: false,
-        status: "failed_to_fetch",
-        reason: `${feedLabel} returned HTTP ${res.status}.`,
-      };
-    }
-    const data = await res.json();
+    const data = await parseUpstreamJson<unknown>(res, feedLabel);
     return { ok: true, data };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Network error";
+    const fault = classifyUpstreamFault(err, feedLabel);
+    budget?.recordFault(fault);
     return {
       ok: false,
       status: "failed_to_fetch",
-      reason: `${feedLabel}: ${msg}`,
+      reason: `${feedLabel} (${fault.kind}): ${fault.message}`,
+      faultKind: fault.kind,
+      ...(fault.httpStatus !== undefined ? { httpStatus: fault.httpStatus } : {}),
+      fault,
     };
   }
 }
@@ -405,7 +418,8 @@ async function fetchJsonWithStatus(
  */
 export async function fetchCurrentEarthConditionsDetailed(
   lat: number,
-  lng: number
+  lng: number,
+  budget?: TelemetryBudget
 ): Promise<{
   current: CurrentEarthConditions | null;
   diagnostics: CurrentFeedDiagnostics;
@@ -461,14 +475,17 @@ export async function fetchCurrentEarthConditionsDetailed(
     timezone: "auto",
   });
 
+  const activeBudget = budget ?? createTelemetryBudget(1300);
   const [forecastRes, airRes] = await Promise.all([
     fetchJsonWithStatus(
       `https://api.open-meteo.com/v1/forecast?${forecastParams.toString()}`,
-      "Open-Meteo Weather"
+      "Open-Meteo Weather",
+      activeBudget
     ),
     fetchJsonWithStatus(
       `https://air-quality-api.open-meteo.com/v1/air-quality?${aqParams.toString()}`,
-      "CAMS Air Quality"
+      "CAMS Air Quality",
+      activeBudget
     ),
   ]);
 
@@ -503,7 +520,13 @@ export async function fetchCurrentEarthConditionsDetailed(
         ? "ok"
         : "unavailable",
     ...(!forecastRes.ok
-      ? { weatherReason: forecastRes.reason }
+      ? {
+          weatherReason: forecastRes.reason,
+          weatherFaultKind: forecastRes.faultKind,
+          ...(forecastRes.httpStatus !== undefined
+            ? { weatherHttpStatus: forecastRes.httpStatus }
+            : {}),
+        }
       : !hasWeatherMetrics
         ? { weatherReason: "No live surface weather grid reading for this coordinate." }
         : {}),
@@ -513,7 +536,13 @@ export async function fetchCurrentEarthConditionsDetailed(
         ? "ok"
         : "unavailable",
     ...(!airRes.ok
-      ? { airQualityReason: airRes.reason }
+      ? {
+          airQualityReason: airRes.reason,
+          airQualityFaultKind: airRes.faultKind,
+          ...(airRes.httpStatus !== undefined
+            ? { airQualityHttpStatus: airRes.httpStatus }
+            : {}),
+        }
       : !hasAirQualityMetrics
         ? {
             airQualityReason:

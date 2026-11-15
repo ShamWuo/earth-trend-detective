@@ -72,7 +72,7 @@ async function handlePredict(params: PredictRequestParams) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bundle }),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(1350),
       });
       if (!res.ok) {
         return {
@@ -149,7 +149,7 @@ async function handlePredict(params: PredictRequestParams) {
           dataset: params.dataset,
           horizonSteps: params.horizonSteps ?? prediction.horizonSteps,
         }),
-        signal: AbortSignal.timeout(4500),
+        signal: AbortSignal.timeout(1350),
       });
       if (l4Res.ok) {
         const l4Data = (await l4Res.json()) as Partial<GraphPredictionResult> & {

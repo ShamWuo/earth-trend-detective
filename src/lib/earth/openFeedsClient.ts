@@ -1,12 +1,18 @@
 import { parseUsgsAnnualRdb } from "@/lib/agencies/challengeSourcesClient";
 import {
   buildClimatologicalSeriesPoints,
-  createBoundedSignal,
   normalizeEarthCoordinates,
   type DataProvenanceMode,
 } from "@/lib/earth/coordinates";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+  parseUpstreamJson,
+  parseUpstreamText,
+  type TelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import { haversineDistanceKm } from "@/lib/plainLanguage";
-import type { TimeSeriesPoint, TrendProvenanceSource } from "@/types/etg";
+import type { TimeSeriesPoint, TrendProvenanceSource, UpstreamFaultDetail } from "@/types/etg";
 
 const USER_AGENT =
   "EarthTrendDetective/1.0 (NASA-Space-Apps; Open-Physical-Feeds)";
@@ -37,6 +43,7 @@ export interface OpenFeedSeriesResult {
   provenanceMode?: DataProvenanceMode;
   sourceUrl: string;
   siteInfo?: UsgsSiteCandidate;
+  upstreamFault?: UpstreamFaultDetail;
 }
 
 /**
@@ -173,7 +180,8 @@ export async function fetchNearestUsgsGaugeAnnualSeries(
   lat: number,
   lng: number,
   startYear = 1995,
-  endYear = 2025
+  endYear = 2025,
+  budget?: TelemetryBudget
 ): Promise<OpenFeedSeriesResult | null> {
   const coord = normalizeEarthCoordinates(lat, lng, {
     poleGuardMargin: 0,
@@ -189,6 +197,7 @@ export async function fetchNearestUsgsGaugeAnnualSeries(
     return { ...cached.result, provenanceMode: "cached" };
   }
 
+  const activeBudget = budget ?? createTelemetryBudget(1350);
   const delta = 1.25;
   const minLng = Math.max(-170, coord.lng - delta);
   const maxLng = Math.min(-64.5, coord.lng + delta);
@@ -203,60 +212,72 @@ export async function fetchNearestUsgsGaugeAnnualSeries(
 
   try {
     const siteRes = await fetch(siteQueryUrl, {
-      signal: createBoundedSignal(8000),
+      signal: activeBudget.signal(650),
       headers: { Accept: "text/plain", "User-Agent": USER_AGENT },
     });
-    if (!siteRes.ok) {
-      return cached ? { ...cached.result, provenanceMode: "cached" } : null;
-    }
-
-    const siteRdb = await siteRes.text();
+    const siteRdb = await parseUpstreamText(siteRes, "USGS NWIS Site");
     const candidates = parseUsgsSiteRdb(siteRdb, coord.lat, coord.lng).slice(0, 3);
     if (candidates.length === 0) {
       return null;
     }
 
-    for (const candidate of candidates) {
-      try {
+    const statAttempts = await Promise.allSettled(
+      candidates.map(async (candidate) => {
         const statUrl =
           `https://waterservices.usgs.gov/nwis/stat/?format=rdb` +
           `&sites=${encodeURIComponent(candidate.siteNo)}` +
           `&statReportType=annual&statTypeCd=mean&parameterCd=00060`;
 
         const statRes = await fetch(statUrl, {
-          signal: createBoundedSignal(8000),
+          signal: activeBudget.signal(750),
           headers: { Accept: "text/plain", "User-Agent": USER_AGENT },
         });
-        if (!statRes.ok) continue;
-
-        const statRdb = await statRes.text();
+        const statRdb = await parseUpstreamText(statRes, `USGS NWIS Stat (${candidate.siteNo})`);
         const points = parseUsgsAnnualRdb(statRdb, startYear, endYear);
-        if (points.length >= 6) {
-          const result: OpenFeedSeriesResult = {
-            points,
-            metricName: `River Discharge — ${candidate.siteName} (${candidate.distanceKm} km)`,
-            unit: "m³/s",
-            parameterCode: "USGS_00060",
-            provenanceSource: "USGS NWIS River Gauge (Live)",
-            provenanceMode: "live",
-            sourceUrl: statUrl,
-            siteInfo: candidate,
-          };
-          OPEN_FEEDS_CACHE.set(cacheKey, {
-            expiresAt: Date.now() + OPEN_FEEDS_CACHE_TTL_MS,
-            result,
-          });
-          return result;
+        if (points.length < 6) {
+          throw new Error(`USGS site ${candidate.siteNo} returned < 6 annual points`);
         }
-      } catch {
-        continue;
+        return { candidate, statUrl, points };
+      })
+    );
+
+    for (const outcome of statAttempts) {
+      if (outcome.status === "fulfilled") {
+        const { candidate, statUrl, points } = outcome.value;
+        const result: OpenFeedSeriesResult = {
+          points,
+          metricName: `River Discharge — ${candidate.siteName} (${candidate.distanceKm} km)`,
+          unit: "m³/s",
+          parameterCode: "USGS_00060",
+          provenanceSource: "USGS NWIS River Gauge (Live)",
+          provenanceMode: "live",
+          sourceUrl: statUrl,
+          siteInfo: candidate,
+        };
+        OPEN_FEEDS_CACHE.set(cacheKey, {
+          expiresAt: Date.now() + OPEN_FEEDS_CACHE_TTL_MS,
+          result,
+        });
+        return result;
+      } else {
+        activeBudget.recordFault(
+          classifyUpstreamFault(outcome.reason, "USGS NWIS Stat")
+        );
       }
     }
-  } catch {
-    return cached ? { ...cached.result, provenanceMode: "cached" } : null;
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "USGS NWIS Site");
+    activeBudget.recordFault(fault);
+    return cached ? { ...cached.result, provenanceMode: "cached", upstreamFault: fault } : null;
   }
 
-  return null;
+  return cached
+    ? {
+        ...cached.result,
+        provenanceMode: "cached",
+        ...(activeBudget.faults[0] ? { upstreamFault: activeBudget.faults[0] } : {}),
+      }
+    : null;
 }
 
 /**
@@ -325,7 +346,8 @@ export async function fetchGlofasDischargeSeries(
   lng: number,
   startYear = 1995,
   endYear = 2025,
-  granularity: "annual" | "monthly" = "annual"
+  granularity: "annual" | "monthly" = "annual",
+  budget?: TelemetryBudget
 ): Promise<OpenFeedSeriesResult | null> {
   const coord = normalizeEarthCoordinates(lat, lng);
   const safeStartYear = Math.max(1984, startYear);
@@ -336,6 +358,7 @@ export async function fetchGlofasDischargeSeries(
     return { ...cached.result, provenanceMode: "cached" };
   }
 
+  const activeBudget = budget ?? createTelemetryBudget(1350);
   const url =
     `https://flood-api.open-meteo.com/v1/flood` +
     `?latitude=${coord.apiLat.toFixed(4)}&longitude=${coord.apiLng.toFixed(4)}` +
@@ -343,14 +366,10 @@ export async function fetchGlofasDischargeSeries(
 
   try {
     const res = await fetch(url, {
-      signal: createBoundedSignal(8000),
+      signal: activeBudget.signal(1150),
       headers: { Accept: "application/json", "User-Agent": USER_AGENT },
     });
-    if (!res.ok) {
-      return cached ? { ...cached.result, provenanceMode: "cached" } : null;
-    }
-
-    const json = await res.json();
+    const json = await parseUpstreamJson<unknown>(res, "Copernicus GloFAS v4");
     const points = parseGlofasDailyPayload(json, startYear, endYear, granularity);
     if (points.length < 6) {
       return null;
@@ -370,8 +389,10 @@ export async function fetchGlofasDischargeSeries(
       result,
     });
     return result;
-  } catch {
-    return cached ? { ...cached.result, provenanceMode: "cached" } : null;
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "Copernicus GloFAS v4");
+    activeBudget.recordFault(fault);
+    return cached ? { ...cached.result, provenanceMode: "cached", upstreamFault: fault } : null;
   }
 }
 
@@ -441,7 +462,8 @@ export async function fetchCamsSurfacePm25Series(
   lng: number,
   startYear = 2022,
   endYear = 2025,
-  granularity: "annual" | "monthly" = "monthly"
+  granularity: "annual" | "monthly" = "monthly",
+  budget?: TelemetryBudget
 ): Promise<OpenFeedSeriesResult | null> {
   const coord = normalizeEarthCoordinates(lat, lng);
   // CAMS reanalysis PM2.5 archive on Open-Meteo starts mid-2022; clamping keeps payloads fast.
@@ -452,6 +474,7 @@ export async function fetchCamsSurfacePm25Series(
     return { ...cached.result, provenanceMode: "cached" };
   }
 
+  const activeBudget = budget ?? createTelemetryBudget(1350);
   const url =
     `https://air-quality-api.open-meteo.com/v1/air-quality` +
     `?latitude=${coord.apiLat.toFixed(4)}&longitude=${coord.apiLng.toFixed(4)}` +
@@ -459,14 +482,10 @@ export async function fetchCamsSurfacePm25Series(
 
   try {
     const res = await fetch(url, {
-      signal: createBoundedSignal(8000),
+      signal: activeBudget.signal(1150),
       headers: { Accept: "application/json", "User-Agent": USER_AGENT },
     });
-    if (!res.ok) {
-      return cached ? { ...cached.result, provenanceMode: "cached" } : null;
-    }
-
-    const json = await res.json();
+    const json = await parseUpstreamJson<unknown>(res, "Copernicus CAMS PM2.5");
     const points = parseCamsHourlyPm25Payload(json, startYear, endYear, granularity);
     if (points.length < 6) {
       return null;
@@ -486,7 +505,9 @@ export async function fetchCamsSurfacePm25Series(
       result,
     });
     return result;
-  } catch {
-    return cached ? { ...cached.result, provenanceMode: "cached" } : null;
+  } catch (err) {
+    const fault = classifyUpstreamFault(err, "Copernicus CAMS PM2.5");
+    activeBudget.recordFault(fault);
+    return cached ? { ...cached.result, provenanceMode: "cached", upstreamFault: fault } : null;
   }
 }

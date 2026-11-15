@@ -89,7 +89,7 @@
     --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
     --accent: #1d4ed8;
     --accent-light: #2563eb;
-    --accent-fg: #1d4ed8;
+    --accent-fg: #1e40af;
     --accent-fg-strong: #1e3a8a;
     --accent-hover: #1e40af;
     --accent-glow: rgba(29, 78, 216, 0.12);
@@ -145,7 +145,7 @@
   --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
   --accent: #1d4ed8;
   --accent-light: #2563eb;
-  --accent-fg: #1d4ed8;
+  --accent-fg: #1e40af;
   --accent-fg-strong: #1e3a8a;
   --accent-hover: #1e40af;
   --accent-glow: rgba(29, 78, 216, 0.12);

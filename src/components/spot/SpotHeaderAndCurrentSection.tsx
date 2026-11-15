@@ -726,7 +726,7 @@ export function SpotCurrentConditionsSection({
                 (current.cloudCoverPct !== null || current.shortwaveRadiationWm2 !== null) && (
                   <div className="rounded-sm border border-border-subtle bg-surface px-2.5 py-1.5">
                     <div className="flex items-center gap-1 text-[10px] text-text-subtle">
-                      <Cloud className="h-3 w-3 text-slate-300" aria-hidden="true" />
+                      <Cloud className="h-3 w-3 text-sky-400" aria-hidden="true" />
                       <span>Clouds &amp; Solar</span>
                     </div>
                     <div className="ws-numeric mt-0.5 font-mono text-[11px] font-semibold text-text-primary">

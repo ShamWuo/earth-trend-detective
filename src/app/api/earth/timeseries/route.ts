@@ -4,6 +4,10 @@ import {
   fetchCurrentEarthConditionsDetailed,
   inferEmbeddedSeriesUnits,
 } from "@/lib/earth/currentConditionsClient";
+import {
+  classifyUpstreamFault,
+  createTelemetryBudget,
+} from "@/lib/earth/upstreamResilience";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import {
   buildClimatologicalTrendSummary,
@@ -67,6 +71,7 @@ function analyzeEmbeddedNodeSeries(
 }
 
 export async function GET(req: NextRequest) {
+  const budget = createTelemetryBudget(1550);
   let resolvedLat: number | null = null;
   let resolvedLng: number | null = null;
   let dataset: ETGDatasetId = "nasa_power";
@@ -121,7 +126,7 @@ export async function GET(req: NextRequest) {
 
     if (primary) {
       if (resolvedLat !== null && resolvedLng !== null) {
-        currentPromise = fetchCurrentEarthConditionsDetailed(resolvedLat, resolvedLng);
+        currentPromise = fetchCurrentEarthConditionsDetailed(resolvedLat, resolvedLng, budget);
         const primaryDataset = primary.dataset;
         const embeddedIsNonT2mNasaPower =
           primaryDataset === "nasa_power" &&
@@ -130,10 +135,26 @@ export async function GET(req: NextRequest) {
           (ds) => ds !== primaryDataset || embeddedIsNonT2mNasaPower
         );
         if (needsExtraDatasets) {
-          const extra = await fetchMultiDatasetSummariesDetailed(
-            resolvedLat,
-            resolvedLng,
-            parsedDatasets
+          const extra = await budget.raceWithFallback(
+            fetchMultiDatasetSummariesDetailed(
+              resolvedLat,
+              resolvedLng,
+              parsedDatasets,
+              1995,
+              2025,
+              budget
+            ),
+            () => ({
+              summaries: [],
+              diagnostics: parsedDatasets
+                .filter((ds) => ds !== primaryDataset || embeddedIsNonT2mNasaPower)
+                .map((ds) => ({
+                  dataset: ds,
+                  status: "failed_to_fetch" as const,
+                  faultKind: "timeout" as const,
+                  reason: "Telemetry deadline exceeded during multi-dataset enrichment",
+                })),
+            })
           );
           const seenKeys = new Set<string>([`${primary.dataset}:${primary.parameter}`]);
           const seenDatasets = new Set<ETGDatasetId>(
@@ -176,10 +197,28 @@ export async function GET(req: NextRequest) {
       });
       resolvedLat = coord.lat;
       resolvedLng = coord.lng;
-      currentPromise = fetchCurrentEarthConditionsDetailed(coord.lat, coord.lng);
+      currentPromise = fetchCurrentEarthConditionsDetailed(coord.lat, coord.lng, budget);
 
       if (parsedDatasets.length >= 2) {
-        const multi = await fetchMultiDatasetSummariesDetailed(coord.lat, coord.lng, parsedDatasets);
+        const multi = await budget.raceWithFallback(
+          fetchMultiDatasetSummariesDetailed(
+            coord.lat,
+            coord.lng,
+            parsedDatasets,
+            1995,
+            2025,
+            budget
+          ),
+          () => ({
+            summaries: [],
+            diagnostics: parsedDatasets.map((ds) => ({
+              dataset: ds,
+              status: "failed_to_fetch" as const,
+              faultKind: "timeout" as const,
+              reason: "Telemetry route deadline exceeded",
+            })),
+          })
+        );
         summaries = multi.summaries;
         datasetDiagnostics.push(...multi.diagnostics);
         primary = summaries.find((s) => s.dataset === dataset) ?? summaries[0] ?? null;
@@ -189,19 +228,30 @@ export async function GET(req: NextRequest) {
           datasetDiagnostics.push({
             dataset: "community",
             status: "unavailable",
+            faultKind: "unavailable",
             reason:
               "Local sensor trends come from nearby geo-pinned stations rather than a global gridded feed.",
           });
         } else {
           try {
-            primary = await fetchEarthTimeSeries(coord.lat, coord.lng, singleDs);
+            primary = await fetchEarthTimeSeries(
+              coord.lat,
+              coord.lng,
+              singleDs,
+              1995,
+              2025,
+              budget
+            );
             summaries = [primary];
           } catch (err) {
+            const fault = classifyUpstreamFault(err, singleDs);
+            budget.recordFault(fault);
             datasetDiagnostics.push({
               dataset: singleDs,
               status: isTelemetryUnavailableError(err) ? "unavailable" : "failed_to_fetch",
-              reason:
-                err instanceof Error ? err.message : `Failed to fetch ${singleDs} telemetry.`,
+              faultKind: fault.kind,
+              ...(fault.httpStatus !== undefined ? { httpStatus: fault.httpStatus } : {}),
+              reason: fault.message,
             });
           }
         }
@@ -240,24 +290,47 @@ export async function GET(req: NextRequest) {
             }
             compareResolvedLat = compareLat;
             compareResolvedLng = compareLng;
-            return fetchEarthTimeSeries(compareLat, compareLng, compareDataset).catch(
-              () => null
-            );
+            return fetchEarthTimeSeries(
+              compareLat,
+              compareLng,
+              compareDataset,
+              1995,
+              2025,
+              budget
+            ).catch(() => null);
           })()
         : Promise.resolve(secondary);
 
     const secondaryCurrentPromise =
       compareResolvedLat !== null && compareResolvedLng !== null
-        ? fetchCurrentEarthConditionsDetailed(compareResolvedLat, compareResolvedLng).then(
+        ? fetchCurrentEarthConditionsDetailed(compareResolvedLat, compareResolvedLng, budget).then(
             (res) => res.current
           )
         : Promise.resolve(null);
 
-    const [currentOutcome, secondaryResolved, secondaryCurrent] = await Promise.all([
-      currentPromise,
-      secondarySeriesPromise,
-      secondaryCurrentPromise,
-    ]);
+    const [currentOutcome, secondaryResolved, secondaryCurrent] = await budget.raceWithFallback(
+      Promise.all([currentPromise, secondarySeriesPromise, secondaryCurrentPromise]),
+      () =>
+        [
+          {
+            current: null,
+            diagnostics: {
+              weatherStatus: "failed_to_fetch" as const,
+              weatherReason: "Open-Meteo current conditions deadline exceeded",
+              weatherFaultKind: "timeout" as const,
+              airQualityStatus: "failed_to_fetch" as const,
+              airQualityReason: "Open-Meteo CAMS current deadline exceeded",
+              airQualityFaultKind: "timeout" as const,
+            },
+          },
+          null,
+          null,
+        ] as [
+          { current: CurrentEarthConditions | null; diagnostics: CurrentFeedDiagnostics | undefined },
+          TrendAnalysisSummary | null,
+          CurrentEarthConditions | null,
+        ]
+    );
     secondary = secondaryResolved;
     const current = currentOutcome.current;
     const currentDiagnostics = currentOutcome.diagnostics;
@@ -291,15 +364,23 @@ export async function GET(req: NextRequest) {
         ? null
         : "unavailable";
 
-    const diagnosticsPayload = {
-      ...(currentDiagnostics ? { current: currentDiagnostics } : {}),
-      ...(datasetDiagnostics.length > 0 ? { datasets: datasetDiagnostics } : {}),
-    };
-
     const climatologicalFallback =
       !primary && resolvedLat !== null && resolvedLng !== null
         ? buildClimatologicalTrendSummary(resolvedLat, resolvedLng, dataset)
         : null;
+
+    const resolvedProvenanceMode =
+      !hasAnyData && climatologicalFallback
+        ? ("climatological_fallback" as const)
+        : (primary?.provenanceMode ?? current?.provenanceMode ?? null);
+
+    const diagnosticsPayload = {
+      ...(currentDiagnostics ? { current: currentDiagnostics } : {}),
+      ...(datasetDiagnostics.length > 0 ? { datasets: datasetDiagnostics } : {}),
+      ...(budget.faults.length > 0 ? { faults: budget.faults } : {}),
+      elapsedMs: budget.elapsedMs(),
+      ...(resolvedProvenanceMode ? { provenanceMode: resolvedProvenanceMode } : {}),
+    };
 
     if (!hasAnyData && climatologicalFallback) {
       return NextResponse.json({
@@ -311,6 +392,7 @@ export async function GET(req: NextRequest) {
         secondaryCurrent,
         provenanceMode: "climatological_fallback" as const,
         failureKind,
+        ...(budget.faults[0] ? { upstreamFault: budget.faults[0] } : {}),
         diagnostics: diagnosticsPayload,
         climatologicalFallback,
       });
@@ -330,10 +412,13 @@ export async function GET(req: NextRequest) {
       secondaryCurrent,
       provenanceMode: primary?.provenanceMode ?? current?.provenanceMode ?? null,
       failureKind,
+      ...(budget.faults[0] ? { upstreamFault: budget.faults[0] } : {}),
       diagnostics: diagnosticsPayload,
       ...(climatologicalFallback ? { climatologicalFallback } : {}),
     });
   } catch (err) {
+    const fault = classifyUpstreamFault(err, dataset ?? "nasa_power");
+    budget.recordFault(fault);
     if (resolvedLat !== null && resolvedLng !== null) {
       const climatologicalFallback = buildClimatologicalTrendSummary(
         resolvedLat,
@@ -349,14 +434,21 @@ export async function GET(req: NextRequest) {
         secondaryCurrent: null,
         provenanceMode: "climatological_fallback" as const,
         failureKind: "failed_to_fetch" as const,
-        error: err instanceof Error ? err.message : "Time-series query fell back to climatology",
+        upstreamFault: fault,
+        diagnostics: {
+          faults: budget.faults,
+          elapsedMs: budget.elapsedMs(),
+          provenanceMode: "climatological_fallback" as const,
+        },
+        error: fault.message,
         climatologicalFallback,
       });
     }
     return NextResponse.json(
       {
-        error: err instanceof Error ? err.message : "Time-series query failed",
+        error: fault.message,
         failureKind: "failed_to_fetch",
+        upstreamFault: fault,
       },
       { status: 400 }
     );
