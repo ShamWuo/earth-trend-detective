@@ -10,10 +10,12 @@ import {
 import { getEtgStore, haversineKm, type EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
 import {
-  fetchNasaGistempZonalCsvText,
-  fetchNoaaGlobalCo2Series,
-  fetchNsidcArcticSeaIceSeries,
-  parseGistempZonalCsv,
+  buildGistempClimatologicalFallback,
+  buildNoaaCo2ClimatologicalFallback,
+  buildNsidcSeaIceClimatologicalFallback,
+  fetchNasaGistempZonalSeriesWithFallback,
+  fetchNoaaGlobalCo2SeriesWithFallback,
+  fetchNsidcArcticSeaIceSeriesWithFallback,
 } from "@/lib/nasa/gistempAndCo2Client";
 import { fetchLiveEonetSignals } from "@/lib/nasa/eonetClient";
 import { fetchMultiParamNasaPower } from "@/lib/nasa/nasaPowerClient";
@@ -239,28 +241,49 @@ export async function discoverGlobalEarthTrends(
   // 2. Fetch live upstream NASA, NOAA CDO, NSIDC, KNMI Climate Explorer, CSA/Geo.ca, SWOT/RCM/AppEEARS, and USGS/SeaWiFS streams concurrently
   const maxEonetSites = options?.maxEonetSites ?? 7;
   const [
-    csvTextRes,
-    noaaRes,
-    nsidcRes,
-    eonetRes,
+    gistempSettled,
+    noaaSettled,
+    nsidcSettled,
+    eonetSettled,
     noaaCdoSettled,
     knmiSettled,
     knmiMonthlySettled,
     geocaSettled,
     usgsPlumeSettled,
     orbitalSettled,
-  ] = await Promise.all([
-    fetchNasaGistempZonalCsvText(),
-    fetchNoaaGlobalCo2Series(1995, 2025),
-    fetchNsidcArcticSeaIceSeries(1995, 2025),
+  ] = await Promise.allSettled([
+    fetchNasaGistempZonalSeriesWithFallback(1995, 2025),
+    fetchNoaaGlobalCo2SeriesWithFallback(1995, 2025),
+    fetchNsidcArcticSeaIceSeriesWithFallback(1995, 2025),
     fetchLiveEonetSignals(maxEonetSites),
-    Promise.allSettled([fetchNoaaCdoGlobalStations(1995, 2025)]).then((r) => r[0]),
-    Promise.allSettled([fetchKnmiClimateIndices(1995, 2025)]).then((r) => r[0]),
-    Promise.allSettled([fetchKnmiMonthlyClimateIndices(1995, 2025)]).then((r) => r[0]),
-    Promise.allSettled([fetchGeocaCanadianSeries(1995, 2025)]).then((r) => r[0]),
-    Promise.allSettled([fetchUsgsCoastalPlumeDischarge(1995, 2025)]).then((r) => r[0]),
-    Promise.allSettled([fetchCsaSwotAndRcmMetadata()]).then((r) => r[0]),
+    fetchNoaaCdoGlobalStations(1995, 2025),
+    fetchKnmiClimateIndices(1995, 2025),
+    fetchKnmiMonthlyClimateIndices(1995, 2025),
+    fetchGeocaCanadianSeries(1995, 2025),
+    fetchUsgsCoastalPlumeDischarge(1995, 2025),
+    fetchCsaSwotAndRcmMetadata(),
   ]);
+
+  const gistempFull =
+    gistempSettled.status === "fulfilled"
+      ? gistempSettled.value
+      : { ...buildGistempClimatologicalFallback(1995, 2025), provenanceMode: "climatological_fallback" as const };
+  const noaaRes =
+    noaaSettled.status === "fulfilled"
+      ? noaaSettled.value
+      : { ...buildNoaaCo2ClimatologicalFallback(1995, 2025), provenanceMode: "climatological_fallback" as const };
+  const nsidcRes =
+    nsidcSettled.status === "fulfilled"
+      ? nsidcSettled.value
+      : { ...buildNsidcSeaIceClimatologicalFallback(1995, 2025), provenanceMode: "climatological_fallback" as const };
+  const eonetRes =
+    eonetSettled.status === "fulfilled"
+      ? eonetSettled.value
+      : {
+          provenance: "NASA EONET v3 (Baseline Fallback)" as const,
+          provenanceMode: "climatological_fallback" as const,
+          signals: [],
+        };
 
   const noaaCdoRecords = noaaCdoSettled.status === "fulfilled" ? noaaCdoSettled.value : [];
   const knmiRecords = knmiSettled.status === "fulfilled" ? knmiSettled.value : [];
@@ -277,8 +300,19 @@ export async function discoverGlobalEarthTrends(
       ? orbitalSettled.value
       : { passes: [], appeearsProductCount: 0, rcmCollectionCount: 0, seawifsCollectionTitle: null };
 
-  const gistempFull = parseGistempZonalCsv(csvTextRes, 1995, 2025);
-  const gistempEarly = parseGistempZonalCsv(csvTextRes, 1995, 2010);
+  const gistempEarly = {
+    sourceUrl: gistempFull.sourceUrl,
+    globalSeries: gistempFull.globalSeries.filter((p) => p.t <= 2010),
+    zones: gistempFull.zones.map((z) => ({
+      ...z,
+      points: z.points.filter((p) => p.t <= 2010),
+    })),
+  };
+
+  const co2Provenance =
+    noaaRes.provenanceMode === "climatological_fallback"
+      ? ("NOAA GML CO2 (Climatological Fallback)" as const)
+      : ("NOAA GML CO2 (Live)" as const);
 
   // 3. Record NOAA Global CO2 Signal + Insight
   const co2Summary = analyzeTimeSeries(noaaRes.points, {
@@ -288,7 +322,8 @@ export async function discoverGlobalEarthTrends(
     parameter: "CO2_GL (NOAA Marine Mean)",
     unit: "ppm",
     slopeUnit: "ppm/yr",
-    provenance: "NOAA GML CO2 (Live)",
+    provenance: co2Provenance,
+    provenanceMode: noaaRes.provenanceMode,
   });
 
   const co2SignalUuid = "signal-noaa-global-co2";
@@ -348,6 +383,10 @@ export async function discoverGlobalEarthTrends(
   ];
 
   // 3b. Record NOAA/NSIDC September Arctic Sea Ice Extent Signal
+  const nsidcProvenance =
+    nsidcRes.provenanceMode === "climatological_fallback"
+      ? ("NOAA/NSIDC Sea Ice v4 (Climatological Fallback)" as const)
+      : ("NOAA/NSIDC Sea Ice v4 (Live)" as const);
   const nsidcSummary = analyzeTimeSeries(nsidcRes.points, {
     lat: 82.5,
     lng: -135.0,
@@ -355,7 +394,8 @@ export async function discoverGlobalEarthTrends(
     parameter: "SEA_ICE_EXTENT_09 (NSIDC v4.0)",
     unit: "M km²",
     slopeUnit: "M km²/yr",
-    provenance: "NOAA/NSIDC Sea Ice v4 (Live)",
+    provenance: nsidcProvenance,
+    provenanceMode: nsidcRes.provenanceMode,
   });
 
   const nsidcSignalUuid = "signal-nsidc-arctic-seaice";
@@ -417,6 +457,10 @@ export async function discoverGlobalEarthTrends(
   let beliefRevisionsCreated = 0;
   const gistempSignalByBand = new Map<string, { node: ETGNode; summary: TrendAnalysisSummary; points: TimeSeriesPoint[] }>();
 
+  const gistempProvenance =
+    gistempFull.provenanceMode === "climatological_fallback"
+      ? ("NASA GISTEMP v4 (Climatological Fallback)" as const)
+      : ("NASA GISTEMP v4 (Live)" as const);
   for (const zone of gistempFull.zones) {
     const zSummary = analyzeTimeSeries(zone.points, {
       lat: zone.lat,
@@ -425,7 +469,8 @@ export async function discoverGlobalEarthTrends(
       parameter: `GISTEMP ${zone.column} (Ts+dSST)`,
       unit: "°C anom",
       slopeUnit: "°C/yr",
-      provenance: "NASA GISTEMP v4 (Live)",
+      provenance: gistempProvenance,
+      provenanceMode: gistempFull.provenanceMode,
     });
 
     const peakPt = zone.points.reduce(

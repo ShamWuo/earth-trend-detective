@@ -510,7 +510,7 @@ export function SpotScienceAndActionsSection({
           <button
             type="submit"
             disabled={committing}
-            className="w-full rounded-sm bg-amber-500 px-3 py-1.5 text-xs font-semibold text-zinc-950 hover:bg-amber-400 cursor-pointer"
+            className="w-full rounded-sm border border-amber-400 bg-amber-950 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
           >
             Save revision
           </button>

@@ -270,7 +270,7 @@ export function WorkbenchEdgeComposerForm({
           </div>
           <div>
             <label htmlFor={`${baseId}-edge-weight`} className="ws-eyebrow mb-1 block">
-              Weight ({edgeWeight.toFixed(2)})
+              Weight (<span className="ws-numeric">{edgeWeight.toFixed(2)}</span>)
             </label>
             <input
               id={`${baseId}-edge-weight`}
@@ -328,17 +328,24 @@ export function WorkbenchEdgeComposerForm({
         </div>
 
         {selectedEdge?.properties.correlation_r !== undefined && (
-          <div className="flex items-center justify-between rounded-sm border border-border bg-surface-inset px-2.5 py-1.5 font-mono text-[11px] text-text-muted">
+          <div className="flex items-center justify-between rounded-sm border border-border bg-surface-inset px-2.5 py-1.5 font-mono ws-numeric text-[11px] text-text-muted">
             <span>Pearson r: {selectedEdge.properties.correlation_r.toFixed(3)}</span>
             {selectedEdge.properties.predictive_lift_pct !== undefined && (
-              <span className="text-emerald-400">
+              <span className="text-emerald-300">
                 Lift: +{selectedEdge.properties.predictive_lift_pct.toFixed(1)}%
               </span>
             )}
           </div>
         )}
 
-        {localError && <div className="text-[11px] text-rose-400">{localError}</div>}
+        {localError && (
+          <div
+            role="alert"
+            className="rounded-sm border border-rose-400 bg-rose-950 px-2.5 py-1.5 text-[11px] text-rose-300"
+          >
+            {localError}
+          </div>
+        )}
 
         <div className="flex items-center gap-2 pt-1">
           <button

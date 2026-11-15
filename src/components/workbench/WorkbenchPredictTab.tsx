@@ -296,14 +296,21 @@ export function WorkbenchPredictTab({
       </fieldset>
 
       {predictLoading && (
-        <div className="flex items-center gap-2 rounded-md border border-border bg-surface-inset p-3 text-text-muted">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 rounded-md border border-border bg-surface-inset p-3 text-text-muted"
+        >
           <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
           <span>Fitting leak-free Ridge model over {maxHops}-hop neighborhood…</span>
         </div>
       )}
 
       {predictError && !predictLoading && (
-        <div className="space-y-2.5 rounded-md border border-amber-400 bg-amber-950 p-3 text-[11px] text-amber-300">
+        <div
+          role="alert"
+          className="space-y-2.5 rounded-md border border-amber-400 bg-amber-950 p-3 text-[11px] text-amber-300"
+        >
           <p>{predictError}</p>
           <p className="text-text-muted">
             Need a multi-node continuous daily graph to benchmark? Load the 7-node Denver Front
@@ -312,7 +319,7 @@ export function WorkbenchPredictTab({
           <button
             type="button"
             onClick={() => void onMaterializeSolarGraph()}
-            className="inline-flex items-center gap-1.5 rounded-sm bg-amber-500 px-2.5 py-1.5 font-semibold text-black hover:bg-amber-400 cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-sm border border-amber-400 bg-surface-elevated px-2.5 py-1.5 font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
           >
             <Sun className="h-3.5 w-3.5" />
             Load 7-Node Solar Predictive Graph
@@ -347,7 +354,7 @@ export function WorkbenchPredictTab({
                   </span>
                 )}
                 <span
-                  className={`rounded-sm border px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                  className={`rounded-sm border px-2 py-0.5 font-mono ws-numeric text-[10px] font-semibold ${
                     prediction.skillLiftVsSelfPct > 0
                       ? "border-emerald-400 bg-emerald-950 text-emerald-300"
                       : "border-border bg-surface text-text-muted"
@@ -359,21 +366,21 @@ export function WorkbenchPredictTab({
               </div>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="font-mono text-xl font-bold text-text-primary">
+              <span className="font-mono ws-numeric text-xl font-bold text-text-primary">
                 {prediction.nextForecast.graphAwarePred.toFixed(2)} {prediction.unit}
               </span>
-              <span className="font-mono text-[11px] text-text-muted">
+              <span className="font-mono ws-numeric text-[11px] text-text-muted">
                 ± {prediction.nextForecast.ci95HalfWidth.toFixed(2)} (95% CI)
               </span>
             </div>
             {prediction.quantiles && (
-              <div className="font-mono text-[10px] text-sky-300">
+              <div className="font-mono ws-numeric text-[10px] text-sky-300">
                 Quantiles: P10 {prediction.quantiles.p10.toFixed(2)} · P50{" "}
                 {prediction.quantiles.p50.toFixed(2)} · P90 {prediction.quantiles.p90.toFixed(2)}{" "}
                 {prediction.unit}
               </div>
             )}
-            <div className="font-mono text-[10px] text-text-muted">
+            <div className="font-mono ws-numeric text-[10px] text-text-muted">
               Self AR: {prediction.nextForecast.selfOnlyPred.toFixed(2)} · Persistence:{" "}
               {prediction.nextForecast.persistencePred.toFixed(2)}
               {typeof prediction.nonlinearSkillGainPct === "number" &&
@@ -412,13 +419,13 @@ export function WorkbenchPredictTab({
           {prediction.communityImpact &&
             (prediction.communityImpact.communityNodesActive > 0 ||
               prediction.communityImpact.trustGatedCount > 0) && (
-              <div className="rounded-md border border-emerald-500/40 bg-surface-inset px-2.5 py-2 text-[11px] flex flex-wrap items-center justify-between gap-1.5">
-                <span className="text-text-secondary">
+              <div className="rounded-md border border-emerald-400 bg-emerald-950 px-2.5 py-2 text-[11px] flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-text-primary ws-numeric">
                   Community Graph: <strong>{prediction.communityImpact.communityNodesActive}</strong>{" "}
                   active · <strong>{prediction.communityImpact.trustGatedCount}</strong> trust-gated
                 </span>
                 <span
-                  className={`font-mono text-[10px] font-semibold ${
+                  className={`font-mono ws-numeric text-[10px] font-semibold ${
                     prediction.communityImpact.marginalCommunityLiftPct > 0
                       ? "text-emerald-300"
                       : "text-text-muted"
@@ -434,6 +441,7 @@ export function WorkbenchPredictTab({
           {/* Model Recommendation & Guardrail Banner */}
           <div
             role="status"
+            aria-live="polite"
             className={`rounded-md border p-2.5 text-[11px] space-y-1 ${
               prediction.reliabilityWarning
                 ? "border-amber-400 bg-amber-950 text-amber-300"
@@ -456,7 +464,7 @@ export function WorkbenchPredictTab({
                       : "Persistence"}
                 </span>
               </span>
-              <span className="font-mono">
+              <span className="font-mono ws-numeric">
                 {prediction.recommendedForecastValue.toFixed(2)} {prediction.unit}
               </span>
             </div>
@@ -469,28 +477,28 @@ export function WorkbenchPredictTab({
           <div className="grid grid-cols-3 gap-1.5 text-center">
             <div className="ws-inset p-2">
               <div className="text-[10px] text-text-muted">Persistence</div>
-              <div className="font-mono text-xs font-semibold text-text-primary">
+              <div className="font-mono ws-numeric text-xs font-semibold text-text-primary">
                 RMSE {prediction.persistence.rmse.toFixed(3)}
               </div>
-              <div className="font-mono text-[10px] text-text-subtle">
+              <div className="font-mono ws-numeric text-[10px] text-text-subtle">
                 R² {prediction.persistence.r2.toFixed(2)}
               </div>
             </div>
             <div className="ws-inset p-2">
               <div className="text-[10px] text-text-muted">Self-Only AR</div>
-              <div className="font-mono text-xs font-semibold text-text-primary">
+              <div className="font-mono ws-numeric text-xs font-semibold text-text-primary">
                 RMSE {prediction.selfOnly.rmse.toFixed(3)}
               </div>
-              <div className="font-mono text-[10px] text-text-subtle">
+              <div className="font-mono ws-numeric text-[10px] text-text-subtle">
                 R² {prediction.selfOnly.r2.toFixed(2)}
               </div>
             </div>
             <div className="rounded-md border border-sky-400 bg-sky-950 p-2">
               <div className="text-[10px] font-semibold text-sky-300">Graph Model</div>
-              <div className="font-mono text-xs font-bold text-text-primary">
+              <div className="font-mono ws-numeric text-xs font-bold text-text-primary">
                 RMSE {prediction.graphAware.rmse.toFixed(3)}
               </div>
-              <div className="font-mono text-[10px] text-emerald-300">
+              <div className="font-mono ws-numeric text-[10px] text-emerald-300">
                 R² {prediction.graphAware.r2.toFixed(2)}
               </div>
             </div>
@@ -526,7 +534,7 @@ export function WorkbenchPredictTab({
                         <div className="flex items-center gap-1.5 shrink-0">
                           {c.ablationLiftPct !== undefined && (
                             <span
-                              className={`rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
+                              className={`rounded-sm border px-1.5 py-0.5 font-mono ws-numeric text-[9px] font-semibold ${
                                 c.ablationLiftPct > 0
                                   ? "border-emerald-400 bg-emerald-950 text-emerald-300"
                                   : c.ablationLiftPct < 0
@@ -539,7 +547,7 @@ export function WorkbenchPredictTab({
                               {c.ablationLiftPct >= 0 ? "lift" : "overfit"}
                             </span>
                           )}
-                          <span className="font-mono text-[10px] text-sky-300">
+                          <span className="font-mono ws-numeric text-[10px] text-sky-300">
                             {c.sharePct.toFixed(1)}% · lag {c.lagSteps}
                           </span>
                         </div>
@@ -566,7 +574,7 @@ export function WorkbenchPredictTab({
                 const peer = nodeById.get(candidatePreviewUuid);
                 if (peer) onStartQuickConnect(peer, selectedNode);
               }}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-sm bg-violet-500 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-400 cursor-pointer"
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-sm border border-violet-400 bg-violet-950 px-3 py-2 text-xs font-semibold text-violet-200 hover:border-violet-300 cursor-pointer"
             >
               <Link2 className="h-3.5 w-3.5" />
               Wire Previewed Neighbor into Graph
@@ -578,7 +586,7 @@ export function WorkbenchPredictTab({
               type="button"
               disabled={ledgerBusy}
               onClick={() => void handleLogProspectiveForecast()}
-              className="inline-flex items-center justify-center gap-1.5 rounded-sm bg-sky-500 px-2.5 py-2 text-[11px] font-semibold text-black hover:bg-sky-400 disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center justify-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-2 text-[11px] font-semibold text-sky-200 hover:border-sky-300 disabled:opacity-50 cursor-pointer"
             >
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Log Live Forecast</span>
@@ -596,7 +604,8 @@ export function WorkbenchPredictTab({
 
           {(localStatus || localError) && (
             <div
-              role="status"
+              role={localError ? "alert" : "status"}
+              aria-live={localError ? undefined : "polite"}
               className={`rounded-sm border px-2.5 py-1.5 text-[10.5px] ${
                 localError
                   ? "border-rose-400 bg-rose-950 text-rose-300"
@@ -692,10 +701,10 @@ export function WorkbenchPredictTab({
                   <tbody>
                     {ledgerRecords.slice(0, 8).map((rec) => (
                       <tr key={rec.id}>
-                        <th scope="row" className="font-mono text-text-primary">
+                        <th scope="row" className="font-mono ws-numeric text-text-primary">
                           {rec.target_period}
                         </th>
-                        <td className="font-mono text-text-primary">
+                        <td className="font-mono ws-numeric text-text-primary">
                           <div>
                             {rec.predicted_value.toFixed(2)} ± {rec.ci95_half_width.toFixed(2)}
                           </div>
@@ -703,7 +712,7 @@ export function WorkbenchPredictTab({
                             Self AR {rec.self_only_pred.toFixed(2)}
                           </div>
                         </td>
-                        <td className="font-mono text-text-muted">
+                        <td className="font-mono ws-numeric text-text-muted">
                           {rec.status === "scored" && typeof rec.actual_value === "number"
                             ? `${rec.actual_value.toFixed(2)} ${rec.unit}`
                             : "Awaiting"}
@@ -712,7 +721,7 @@ export function WorkbenchPredictTab({
                           {rec.status === "scored" ? (
                             <div className="space-y-0.5">
                               <span
-                                className={`inline-flex items-center rounded-sm border px-1.5 py-0.5 font-mono text-[9px] font-semibold ${
+                                className={`inline-flex items-center rounded-sm border px-1.5 py-0.5 font-mono ws-numeric text-[9px] font-semibold ${
                                   rec.covered_by_ci95
                                     ? "border-emerald-400 bg-emerald-950 text-emerald-300"
                                     : "border-amber-400 bg-amber-950 text-amber-300"
@@ -722,7 +731,7 @@ export function WorkbenchPredictTab({
                                 MAE {rec.abs_error?.toFixed(2)}
                               </span>
                               {typeof rec.self_abs_error === "number" && (
-                                <div className="font-mono text-[9px] text-text-subtle">
+                                <div className="font-mono ws-numeric text-[9px] text-text-subtle">
                                   Self {rec.self_abs_error.toFixed(2)}
                                 </div>
                               )}

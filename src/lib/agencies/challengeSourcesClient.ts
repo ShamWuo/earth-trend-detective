@@ -1,3 +1,4 @@
+import { createBoundedSignal, normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import type { ETGDatasetId, TimeSeriesPoint, TrendProvenanceSource } from "@/types/etg";
 
 const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observatory)";
@@ -142,18 +143,22 @@ export async function fetchNoaaCdoGlobalStations(
     headers.token = process.env.NOAA_CDO_TOKEN;
   }
 
-  const res = await fetch(NOAA_CDO_ENDPOINT, {
-    signal: AbortSignal.timeout(10000),
-    headers,
-  });
-  if (!res.ok) {
-    throw new Error(`NOAA CDO HTTP ${res.status}`);
+  try {
+    const res = await fetch(NOAA_CDO_ENDPOINT, {
+      signal: createBoundedSignal(8000),
+      headers,
+    });
+    if (!res.ok) {
+      throw new Error(`NOAA CDO HTTP ${res.status}`);
+    }
+    const rows = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(rows)) {
+      throw new Error("NOAA CDO returned non-array JSON");
+    }
+    return parseNoaaCdoGsoyJson(rows, startYear, endYear);
+  } catch {
+    return [];
   }
-  const rows = (await res.json()) as Array<Record<string, unknown>>;
-  if (!Array.isArray(rows)) {
-    throw new Error("NOAA CDO returned non-array JSON");
-  }
-  return parseNoaaCdoGsoyJson(rows, startYear, endYear);
 }
 
 /**
@@ -301,7 +306,7 @@ export async function fetchKnmiClimateIndices(
   const settled = await Promise.allSettled(
     KNMI_INDICES.map(async (spec) => {
       const res = await fetch(spec.url, {
-        signal: AbortSignal.timeout(10000),
+        signal: createBoundedSignal(8000),
         headers: { "User-Agent": USER_AGENT },
       });
       if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
@@ -342,7 +347,7 @@ export async function fetchKnmiMonthlyClimateIndices(
   const settled = await Promise.allSettled(
     KNMI_INDICES.map(async (spec) => {
       const res = await fetch(spec.url, {
-        signal: AbortSignal.timeout(10000),
+        signal: createBoundedSignal(8000),
         headers: { "User-Agent": USER_AGENT },
       });
       if (!res.ok) throw new Error(`KNMI ${spec.id} HTTP ${res.status}`);
@@ -536,7 +541,7 @@ export async function fetchGeocaCanadianSeries(
     "https://api.weather.gc.ca/collections/ahccd-annual/items?f=json&station_id__id_station=2400573&limit=80";
 
   const results = await Promise.allSettled([
-    fetch(mackenzieUrl, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": USER_AGENT } })
+    fetch(mackenzieUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaHydrometricJson(
@@ -553,7 +558,7 @@ export async function fetchGeocaCanadianSeries(
           endYear
         )
       ),
-    fetch(stLawrenceUrl, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": USER_AGENT } })
+    fetch(stLawrenceUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaHydrometricJson(
@@ -570,7 +575,7 @@ export async function fetchGeocaCanadianSeries(
           endYear
         )
       ),
-    fetch(clydeRiverUrl, { signal: AbortSignal.timeout(10000), headers: { "User-Agent": USER_AGENT } })
+    fetch(clydeRiverUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((json) =>
         parseGeocaAhccdJson(
@@ -661,43 +666,51 @@ export async function fetchUsgsCoastalPlumeDischarge(
   startYear = 1995,
   endYear = 2025
 ): Promise<AgencyTimeSeriesRecord | null> {
-  const res = await fetch(USGS_MISSISSIPPI_URL, {
-    signal: AbortSignal.timeout(10000),
-    headers: { "User-Agent": USER_AGENT },
-  });
-  if (!res.ok) {
-    throw new Error(`USGS NWIS HTTP ${res.status}`);
-  }
-  const rdb = await res.text();
-  const points = parseUsgsAnnualRdb(rdb, startYear, endYear);
-  if (points.length < 5) return null;
+  try {
+    const res = await fetch(USGS_MISSISSIPPI_URL, {
+      signal: createBoundedSignal(8000),
+      headers: { "User-Agent": USER_AGENT },
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const rdb = await res.text();
+    const points = parseUsgsAnnualRdb(rdb, startYear, endYear);
+    if (points.length < 5) return null;
 
-  return {
-    id: "usgs-mississippi-07374000",
-    name: "Mississippi River Coastal Plume Discharge (SeaWiFS Reference)",
-    region: "Lower Mississippi Delta / Gulf of Mexico Plume",
-    lat: 30.45,
-    lng: -91.19,
-    dataset: "air_quality",
-    parameter: "River Discharge vs SeaWiFS Chl-a",
-    unit: "m³/s",
-    slopeUnit: "m³/s/yr",
-    sourceSystem: "USGS / NASA NTRS SeaWiFS Plume",
-    sourceUrl: USGS_MISSISSIPPI_URL,
-    provenance: "USGS / NASA SeaWiFS Coastal Plume (Live)",
-    producerType: "research_station",
-    points,
-  };
+    return {
+      id: "usgs-mississippi-07374000",
+      name: "Mississippi River Coastal Plume Discharge (SeaWiFS Reference)",
+      region: "Lower Mississippi Delta / Gulf of Mexico Plume",
+      lat: 30.45,
+      lng: -91.19,
+      dataset: "air_quality",
+      parameter: "River Discharge vs SeaWiFS Chl-a",
+      unit: "m³/s",
+      slopeUnit: "m³/s/yr",
+      sourceSystem: "USGS / NASA NTRS SeaWiFS Plume",
+      sourceUrl: USGS_MISSISSIPPI_URL,
+      provenance: "USGS / NASA SeaWiFS Coastal Plume (Live)",
+      producerType: "research_station",
+      points,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseCmrBoxCentroid(boxes?: string[]): { lat: number; lng: number } | null {
   if (!Array.isArray(boxes) || boxes.length === 0) return null;
-  const parts = boxes[0].trim().split(/\s+/).map(Number);
+  const parts = String(boxes[0] ?? "").trim().split(/\s+/).map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
   const [south, west, north, east] = parts;
+  const norm = normalizeEarthCoordinates((south + north) / 2, (west + east) / 2, {
+    poleGuardMargin: 0,
+    antimeridianMargin: 0,
+  });
   return {
-    lat: Number(((south + north) / 2).toFixed(2)),
-    lng: Number(((west + east) / 2).toFixed(2)),
+    lat: Number(norm.lat.toFixed(2)),
+    lng: Number(norm.lng.toFixed(2)),
   };
 }
 
@@ -716,16 +729,16 @@ export async function fetchCsaSwotAndRcmMetadata(): Promise<{
   const appeearsUrl = "https://appeears.earthdatacloud.nasa.gov/api/product?limit=8";
 
   const [swotRes, rcmRes, seawifsRes, appeearsRes] = await Promise.allSettled([
-    fetch(swotUrl, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(swotUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(rcmUrl, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(rcmUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(seawifsUrl, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(seawifsUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
-    fetch(appeearsUrl, { signal: AbortSignal.timeout(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
+    fetch(appeearsUrl, { signal: createBoundedSignal(8000), headers: { "User-Agent": USER_AGENT } }).then((r) =>
       r.ok ? r.json() : null
     ),
   ]);

@@ -194,7 +194,7 @@ export function BacktestChart({
           <span className="h-0.5 w-3 bg-sky-400 inline-block" /> Graph Model
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="h-0.5 w-3 border-b border-dashed border-slate-400 inline-block" /> Self AR
+          <span className="h-0.5 w-3 border-b border-dashed border-text-muted inline-block" /> Self AR
         </span>
       </div>
     </div>

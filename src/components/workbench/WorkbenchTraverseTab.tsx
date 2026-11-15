@@ -561,7 +561,7 @@ export function WorkbenchTraverseTab({
                   <button
                     type="button"
                     onClick={() => void onAcceptCandidateLink(cand)}
-                    className="shrink-0 inline-flex items-center gap-1 rounded-sm bg-violet-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-violet-400 cursor-pointer"
+                    className="shrink-0 inline-flex items-center gap-1 rounded-sm border border-violet-400 bg-violet-950 px-2 py-0.5 text-[10px] font-semibold text-violet-200 hover:border-violet-300 cursor-pointer"
                   >
                     <Link2 className="h-2.5 w-2.5" />
                     Wire

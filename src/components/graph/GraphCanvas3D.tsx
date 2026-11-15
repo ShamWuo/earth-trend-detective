@@ -919,17 +919,13 @@ export function GraphCanvas3D({
               style={{ opacity: 0, pointerEvents: "none", top: 0, left: 0 }}
               className={`absolute inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider uppercase whitespace-nowrap shadow-sm transition-opacity duration-150 cursor-pointer ${
                 isFocusedRegion
-                  ? isLightTheme
-                    ? "border-amber-600 bg-amber-100/95 text-amber-950"
-                    : "border-amber-400 bg-amber-950/90 text-amber-200"
-                  : isLightTheme
-                    ? "border-zinc-300 bg-white/85 text-zinc-700 hover:border-amber-500 hover:text-zinc-950"
-                    : "border-white/15 bg-[#0f131d]/85 text-zinc-300 hover:border-amber-400/70 hover:text-white"
+                  ? "border-amber-400 bg-amber-950 text-amber-200"
+                  : "border-border bg-surface-elevated text-text-muted hover:border-amber-400 hover:text-text-primary"
               }`}
             >
               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
               <span className="max-w-[165px] truncate">{cluster.label}</span>
-              <span className="shrink-0 opacity-65">· {cluster.count}</span>
+              <span className="shrink-0 ws-numeric opacity-75">· {cluster.count}</span>
             </button>
           );
         })}
@@ -984,9 +980,7 @@ export function GraphCanvas3D({
               } ${
                 isSelected
                   ? "border-accent-fg bg-surface text-text-primary"
-                  : isLightTheme
-                    ? "border-border bg-white text-zinc-900 hover:border-zinc-400"
-                    : "border-border bg-[#12151e] text-zinc-100 hover:border-zinc-500"
+                  : "border-border bg-surface-elevated text-text-primary hover:border-border-strong"
               }`}
             >
               <span
@@ -998,29 +992,17 @@ export function GraphCanvas3D({
                 {displayName}
               </span>
               {role === "upstream" && (
-                <span
-                  className={`rounded-xs px-1 font-mono text-[9px] ${
-                    isLightTheme ? "bg-teal-100 text-teal-900" : "bg-teal-950 text-teal-300"
-                  }`}
-                >
+                <span className="rounded-xs bg-teal-950 px-1 font-mono text-[9px] text-teal-300">
                   driver
                 </span>
               )}
               {role === "downstream" && (
-                <span
-                  className={`rounded-xs px-1 font-mono text-[9px] ${
-                    isLightTheme ? "bg-amber-100 text-amber-900" : "bg-amber-950 text-amber-300"
-                  }`}
-                >
+                <span className="rounded-xs bg-amber-950 px-1 font-mono text-[9px] text-amber-300">
                   impact
                 </span>
               )}
               {isSuperseded && (
-                <span
-                  className={`rounded-xs px-1 font-mono text-[8.5px] uppercase ${
-                    isLightTheme ? "bg-zinc-100 text-zinc-700" : "bg-zinc-800 text-zinc-300"
-                  }`}
-                >
+                <span className="rounded-xs bg-surface-band px-1 font-mono text-[8.5px] uppercase text-text-muted">
                   superseded
                 </span>
               )}
@@ -1057,11 +1039,7 @@ export function GraphCanvas3D({
                 <span className="truncate text-text-primary">
                   + Wire: {cand.sourceName.slice(0, 14)} → {cand.targetName.slice(0, 14)}
                 </span>
-                <span
-                  className={`shrink-0 font-mono text-[10px] ${
-                    isLightTheme ? "text-violet-700" : "text-violet-300"
-                  }`}
-                >
+                <span className="shrink-0 font-mono ws-numeric text-[10px] text-violet-300">
                   {cand.pearsonR !== undefined ? `r=${cand.pearsonR.toFixed(2)}` : `${Math.round(cand.score * 100)}%`}
                 </span>
               </button>
@@ -1083,16 +1061,10 @@ export function GraphCanvas3D({
             <div
               className={`flex items-center gap-2 font-semibold ${
                 activeEdge.type === "drives_opposite"
-                  ? isLightTheme
-                    ? "text-rose-700"
-                    : "text-rose-300"
+                  ? "text-rose-300"
                   : activeEdge.type === "supersedes"
-                    ? isLightTheme
-                      ? "text-purple-700"
-                      : "text-purple-300"
-                    : isLightTheme
-                      ? "text-amber-800"
-                      : "text-amber-300"
+                    ? "text-purple-300"
+                    : "text-amber-300"
               }`}
             >
               <span>

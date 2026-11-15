@@ -1,6 +1,18 @@
+import {
+  createBoundedSignal,
+  normalizeEarthCoordinates,
+  type DataProvenanceMode,
+} from "@/lib/earth/coordinates";
 import { haversineKm } from "@/lib/graph/etgStore";
 import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
 import type { ETGDatasetId, ETGNode } from "@/types/etg";
+
+const EONET_CACHE_TTL_MS = 1000 * 60 * 15;
+let eonetCache: { expiresAt: number; signals: ETGNode[] } | null = null;
+
+export function clearEonetCache(): void {
+  eonetCache = null;
+}
 
 interface EonetGeometry {
   date?: string;
@@ -81,28 +93,54 @@ export function extractGeometryCentroid(coords: unknown): [number, number] | nul
 }
 
 export async function fetchLiveEonetSignals(limit = 10): Promise<{
-  provenance: "NASA EONET v3 (Live)";
+  provenance: "NASA EONET v3 (Live)" | "NASA EONET v3 (Cached)" | "NASA EONET v3 (Baseline Fallback)";
+  provenanceMode: DataProvenanceMode;
   signals: ETGNode[];
 }> {
-  const perCategoryLimit = Math.max(2, Math.min(5, Math.ceil(limit / 2)));
+  const safeLimit = Math.max(1, Math.min(30, Math.floor(limit)));
+  const perCategoryLimit = Math.max(2, Math.min(5, Math.ceil(safeLimit / 2)));
+
+  if (eonetCache && eonetCache.expiresAt > Date.now() && eonetCache.signals.length > 0) {
+    return {
+      provenance: "NASA EONET v3 (Cached)",
+      provenanceMode: "cached",
+      signals: eonetCache.signals.slice(0, safeLimit),
+    };
+  }
 
   const responses = await Promise.allSettled(
     EONET_CATEGORIES.map(async (category) => {
-      const res = await fetch(
-        `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&limit=${perCategoryLimit}`,
-        {
-          signal: AbortSignal.timeout(12000),
-          headers: {
-            Accept: "application/json",
-            "User-Agent": USER_AGENT,
-          },
+      const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 300;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const res = await fetch(
+            `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&limit=${perCategoryLimit}`,
+            {
+              signal: createBoundedSignal(8000),
+              headers: {
+                Accept: "application/json",
+                "User-Agent": USER_AGENT,
+              },
+            }
+          );
+          if (!res.ok) {
+            if ((res.status === 429 || res.status >= 500) && attempt === 0) {
+              await new Promise((r) => setTimeout(r, retryDelayMs));
+              continue;
+            }
+            return [] as EonetEvent[];
+          }
+          const data = (await res.json()) as { events?: EonetEvent[] };
+          return Array.isArray(data?.events) ? data.events : [];
+        } catch {
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, retryDelayMs));
+            continue;
+          }
+          return [] as EonetEvent[];
         }
-      );
-      if (!res.ok) {
-        throw new Error(`NASA EONET ${category} HTTP ${res.status}`);
       }
-      const data = (await res.json()) as { events?: EonetEvent[] };
-      return Array.isArray(data.events) ? data.events : [];
+      return [] as EonetEvent[];
     })
   );
 
@@ -110,6 +148,7 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
   for (const r of responses) {
     if (r.status === "fulfilled") {
       for (const ev of r.value) {
+        if (!ev || typeof ev.id !== "string" || typeof ev.title !== "string") continue;
         if (!rawById.has(ev.id)) {
           rawById.set(ev.id, ev);
         }
@@ -119,11 +158,18 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
 
   const parsedCandidates: ETGNode[] = [];
   for (const ev of rawById.values()) {
-    const latestGeo = ev.geometry?.[ev.geometry.length - 1];
+    const latestGeo = Array.isArray(ev.geometry) ? ev.geometry[ev.geometry.length - 1] : undefined;
     const lngLat = extractGeometryCentroid(latestGeo?.coordinates);
     if (!lngLat) continue;
-    const [lng, lat] = lngLat;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const [rawLng, rawLat] = lngLat;
+    if (!Number.isFinite(rawLat) || !Number.isFinite(rawLng)) continue;
+
+    const norm = normalizeEarthCoordinates(rawLat, rawLng, {
+      poleGuardMargin: 0,
+      antimeridianMargin: 0,
+    });
+    const lat = norm.lat;
+    const lng = norm.lng;
 
     const cat = ev.categories?.[0];
     const dataset = mapEonetCategoryToDataset(cat?.id);
@@ -160,7 +206,18 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
   }
 
   if (parsedCandidates.length === 0) {
-    throw new Error("NASA EONET v3 returned 0 live Earth observation events.");
+    if (eonetCache && eonetCache.signals.length > 0) {
+      return {
+        provenance: "NASA EONET v3 (Cached)",
+        provenanceMode: "cached",
+        signals: eonetCache.signals.slice(0, safeLimit),
+      };
+    }
+    return {
+      provenance: "NASA EONET v3 (Baseline Fallback)",
+      provenanceMode: "climatological_fallback",
+      signals: [],
+    };
   }
 
   // Enforce global spatial & category diversity (>= 800 km separation first, then fill remainder)
@@ -170,7 +227,7 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
 
   // Pass 1: one representative per category with >= 800 km spatial spread
   for (const node of parsedCandidates) {
-    if (selected.length >= limit) break;
+    if (selected.length >= safeLimit) break;
     const cat = String(node.properties.eonet_category || "");
     if (seenCategories.has(cat)) continue;
     const farEnough = selected.every(
@@ -191,7 +248,7 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
 
   // Pass 2: fill remaining slots keeping >= 800 km separation where possible
   for (const node of parsedCandidates) {
-    if (selected.length >= limit) break;
+    if (selected.length >= safeLimit) break;
     if (usedIds.has(node.uuid)) continue;
     const farEnough = selected.every(
       (s) =>
@@ -210,14 +267,20 @@ export async function fetchLiveEonetSignals(limit = 10): Promise<{
 
   // Pass 3: if still below limit, fill with remaining live events
   for (const node of parsedCandidates) {
-    if (selected.length >= limit) break;
+    if (selected.length >= safeLimit) break;
     if (usedIds.has(node.uuid)) continue;
     selected.push(node);
     usedIds.add(node.uuid);
   }
 
+  eonetCache = {
+    expiresAt: Date.now() + EONET_CACHE_TTL_MS,
+    signals: selected,
+  };
+
   return {
     provenance: "NASA EONET v3 (Live)",
+    provenanceMode: "live",
     signals: selected,
   };
 }

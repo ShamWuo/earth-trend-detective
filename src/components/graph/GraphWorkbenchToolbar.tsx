@@ -7,7 +7,7 @@ import type { TraversalFilterState } from "@/components/graph/graphViewShared";
 
 export interface GraphWorkbenchToolbarProps {
   renderMode: "3d" | "2d";
-  isLightTheme: boolean;
+  isLightTheme?: boolean;
   selectedNodeName?: string | null;
   hasSelection: boolean;
   connectMode: boolean;
@@ -33,7 +33,7 @@ export interface GraphWorkbenchToolbarProps {
  */
 export function GraphWorkbenchToolbar({
   renderMode,
-  isLightTheme,
+  isLightTheme: _isLightTheme,
   selectedNodeName,
   hasSelection,
   connectMode,
@@ -120,7 +120,7 @@ export function GraphWorkbenchToolbar({
               className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
             >
               <Plus
-                className={`h-3.5 w-3.5 ${isLightTheme ? "text-amber-700" : "text-amber-400"}`}
+                className="h-3.5 w-3.5 text-amber-400"
                 aria-hidden="true"
               />
               <span>Add Node</span>
@@ -132,11 +132,7 @@ export function GraphWorkbenchToolbar({
               type="button"
               aria-pressed={connectMode}
               onClick={onToggleConnectMode}
-              className={`inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary transition-colors hover:bg-surface-hover cursor-pointer ${
-                isLightTheme
-                  ? "aria-pressed:border-amber-600 aria-pressed:bg-amber-100 aria-pressed:text-amber-900"
-                  : "aria-pressed:border-accent-fg aria-pressed:bg-amber-950 aria-pressed:text-amber-300"
-              }`}
+              className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary transition-colors hover:bg-surface-hover aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
             >
               <GitBranchPlus className="h-3.5 w-3.5" aria-hidden="true" />
               <span>{connectMode ? "Connecting…" : "Connect"}</span>
@@ -151,9 +147,7 @@ export function GraphWorkbenchToolbar({
               className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 font-medium text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer"
             >
               <Sparkles
-                className={`h-3.5 w-3.5 ${
-                  isLightTheme ? "text-violet-700" : "text-violet-400"
-                } ${discoveringLinks ? "animate-pulse" : ""}`}
+                className={`h-3.5 w-3.5 text-violet-400 ${discoveringLinks ? "animate-pulse" : ""}`}
                 aria-hidden="true"
               />
               <span>{discoveringLinks ? "Scanning…" : "Find Links"}</span>
@@ -177,11 +171,7 @@ export function GraphWorkbenchToolbar({
                   }
                   aria-pressed={traversalFilter.maxHops === h}
                   onClick={() => onChangeTraversalFilter({ ...traversalFilter, maxHops: h })}
-                  className={`rounded-sm border border-transparent px-2 py-1 font-mono text-[10px] font-medium text-text-muted hover:text-text-primary disabled:opacity-35 cursor-pointer disabled:cursor-not-allowed ${
-                    isLightTheme
-                      ? "aria-pressed:border-sky-600 aria-pressed:bg-sky-100 aria-pressed:text-sky-900"
-                      : "aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300"
-                  }`}
+                  className="rounded-sm border border-transparent px-2 py-1 font-mono ws-numeric text-[10px] font-medium text-text-muted hover:text-text-primary disabled:opacity-35 aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer disabled:cursor-not-allowed"
                 >
                   {h === null ? "All" : `${h}-Hop`}
                 </button>
@@ -210,11 +200,7 @@ export function GraphWorkbenchToolbar({
                           maxHops: traversalFilter.maxHops ?? 2,
                         })
                       }
-                      className={`rounded-sm border border-transparent px-2 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary cursor-pointer ${
-                        isLightTheme
-                          ? "aria-pressed:border-teal-600 aria-pressed:bg-teal-100 aria-pressed:text-teal-900"
-                          : "aria-pressed:border-teal-400 aria-pressed:bg-teal-950 aria-pressed:text-teal-300"
-                      }`}
+                      className="rounded-sm border border-transparent px-2 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-teal-400 aria-pressed:bg-teal-950 aria-pressed:text-teal-300 cursor-pointer"
                     >
                       {dir.label}
                     </button>
@@ -237,11 +223,7 @@ export function GraphWorkbenchToolbar({
                           traversalFilter.layoutMode === "causal_flow" ? "force" : "causal_flow",
                       })
                     }
-                    className={`inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary cursor-pointer ${
-                      isLightTheme
-                        ? "aria-pressed:border-amber-600 aria-pressed:bg-amber-100 aria-pressed:text-amber-900"
-                        : "aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300"
-                    }`}
+                    className="inline-flex items-center gap-1 rounded-sm border border-transparent px-2.5 py-1 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-amber-400 aria-pressed:bg-amber-950 aria-pressed:text-amber-300 cursor-pointer"
                   >
                     <Waypoints className="h-3 w-3" aria-hidden="true" />
                     <span>Causal Flow</span>
@@ -260,7 +242,7 @@ export function GraphWorkbenchToolbar({
                 aria-label="Move to region"
                 value={selectedRegionScope ?? ""}
                 onChange={(e) => onChangeRegionScope(e.target.value ? e.target.value : null)}
-                className="max-w-[180px] rounded-sm border border-border bg-surface-band px-2 py-1 text-[10px] font-medium text-text-primary focus:border-accent-fg focus:outline-none cursor-pointer"
+                className="max-w-[180px] rounded-sm border border-border bg-surface-band px-2 py-1 text-[10px] font-medium text-text-primary focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)] cursor-pointer"
               >
                 <option value="">All Regions (Overview)</option>
                 {regionOptions.map((opt) => (
@@ -286,7 +268,7 @@ export function GraphWorkbenchToolbar({
                     onClick={() => onChangeRegionScope(null)}
                     aria-label="Clear region focus"
                     title="Return to global overview"
-                    className="rounded-sm border border-transparent p-1 text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-sm border border-transparent text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
                   >
                     <X className="h-3 w-3" aria-hidden="true" />
                   </button>
@@ -300,14 +282,12 @@ export function GraphWorkbenchToolbar({
       {/* Contextual sub-banner for Connect Mode or Candidate Ghost Links */}
       {connectMode && (
         <div
-          className={`etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border bg-surface px-3 py-1 text-[11px] shadow ${
-            isLightTheme ? "border-amber-600/70 text-amber-900" : "border-amber-400 text-amber-300"
-          }`}
+          role="status"
+          aria-live="polite"
+          className="etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border border-amber-400 bg-amber-950 px-3 py-1 text-[11px] text-amber-300 shadow"
         >
           <span
-            className={`h-1.5 w-1.5 rounded-full animate-pulse ${
-              isLightTheme ? "bg-amber-600" : "bg-amber-400"
-            }`}
+            className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"
             aria-hidden="true"
           />
           {connectSourceName ? (
@@ -322,7 +302,7 @@ export function GraphWorkbenchToolbar({
               type="button"
               onClick={onToggleConnectMode}
               aria-label="Exit connect mode"
-              className="ml-1 rounded-sm p-0.5 text-text-muted hover:text-text-primary cursor-pointer"
+              className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-sm text-amber-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
             >
               <X className="h-3 w-3" />
             </button>
@@ -332,16 +312,16 @@ export function GraphWorkbenchToolbar({
 
       {!connectMode && candidateCount > 0 && (
         <div
-          className={`etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border bg-surface px-3 py-1 text-[11px] shadow ${
-            isLightTheme ? "border-violet-600/70 text-violet-900" : "border-violet-400 text-violet-300"
-          }`}
+          role="status"
+          aria-live="polite"
+          className="etg-hud-pill pointer-events-auto flex items-center gap-2 rounded-md border border-violet-400 bg-violet-950 px-3 py-1 text-[11px] text-violet-300 shadow"
         >
           <Sparkles
-            className={`h-3 w-3 ${isLightTheme ? "text-violet-700" : "text-violet-400"}`}
+            className="h-3 w-3 text-violet-400"
             aria-hidden="true"
           />
           <span>
-            {candidateCount} latent connection{candidateCount === 1 ? "" : "s"} found
+            <span className="ws-numeric">{candidateCount}</span> latent connection{candidateCount === 1 ? "" : "s"} found
             {selectedNodeName ? ` around ${selectedNodeName}` : ""} — click a dashed violet edge to wire
           </span>
           {onClearCandidateLinks && (
@@ -349,7 +329,7 @@ export function GraphWorkbenchToolbar({
               type="button"
               onClick={onClearCandidateLinks}
               aria-label="Hide discovered link suggestions"
-              className="ml-1 rounded-sm p-0.5 text-text-muted hover:text-text-primary cursor-pointer"
+              className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-sm text-violet-300 hover:bg-surface-hover hover:text-text-primary cursor-pointer"
             >
               <X className="h-3 w-3" />
             </button>

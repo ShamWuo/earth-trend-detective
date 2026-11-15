@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  buildOpenFeedClimatologicalFallback,
   fetchCamsSurfacePm25Series,
   fetchGlofasDischargeSeries,
   fetchNearestUsgsGaugeAnnualSeries,
+  isWithinUsgsBounds,
   type OpenFeedSeriesResult,
 } from "@/lib/earth/openFeedsClient";
 import { getEtgStore } from "@/lib/graph/etgStore";
@@ -91,14 +93,21 @@ export async function POST(request: NextRequest) {
     }
 
     if (!feedResult || feedResult.points.length < 6) {
-      return NextResponse.json(
-        {
-          error:
-            feed === "usgs_gauge"
-              ? `No active USGS river gauge with >= 6 years of annual discharge data found near (${lat.toFixed(2)}, ${lng.toFixed(2)}). Try GloFAS Discharge outside the US.`
-              : `No sufficient observations returned from ${feed} near (${lat.toFixed(2)}, ${lng.toFixed(2)}).`,
-        },
-        { status: 404 }
+      if (feed === "usgs_gauge" && !isWithinUsgsBounds(lat, lng)) {
+        return NextResponse.json(
+          {
+            error: `No active USGS river gauge outside US domain near (${lat.toFixed(2)}, ${lng.toFixed(2)}). Try GloFAS Discharge outside the US.`,
+          },
+          { status: 404 }
+        );
+      }
+      feedResult = buildOpenFeedClimatologicalFallback(
+        feed,
+        lat,
+        lng,
+        startYear,
+        endYear,
+        granularity
       );
     }
 
@@ -111,6 +120,7 @@ export async function POST(request: NextRequest) {
       unit: feedResult.unit,
       slopeUnit: `${feedResult.unit}/yr`,
       provenance: feedResult.provenanceSource,
+      provenanceMode: feedResult.provenanceMode ?? "live",
     });
 
     const latest = feedResult.points[feedResult.points.length - 1];
@@ -138,7 +148,12 @@ export async function POST(request: NextRequest) {
       value: latest.value,
       unit: feedResult.unit,
       observed_at: latest.date,
-      confidence: feed === "usgs_gauge" ? 0.96 : 0.9,
+      confidence:
+        feedResult.provenanceMode === "climatological_fallback"
+          ? 0.58
+          : feed === "usgs_gauge"
+            ? 0.96
+            : 0.9,
       series: feedResult.points,
     });
 
@@ -146,6 +161,7 @@ export async function POST(request: NextRequest) {
       status: "ingested",
       feed,
       provenance: feedResult.provenanceSource,
+      provenanceMode: feedResult.provenanceMode ?? "live",
       sourceUrl: feedResult.sourceUrl,
       pointCount: feedResult.points.length,
       summaryStats,

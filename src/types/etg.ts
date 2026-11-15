@@ -243,20 +243,28 @@ export interface TrendAnalysisPoint {
 
 export type TrendProvenanceSource =
   | "NASA POWER MERRA-2 (Live)"
+  | "NASA POWER MERRA-2 (Climatological Fallback)"
   | "NASA GES DISC / POWER Hydrology (Live)"
   | "NASA GISTEMP v4 (Live)"
+  | "NASA GISTEMP v4 (Climatological Fallback)"
   | "NOAA GML CO2 (Live)"
+  | "NOAA GML CO2 (Climatological Fallback)"
   | "NOAA/NSIDC Sea Ice v4 (Live)"
+  | "NOAA/NSIDC Sea Ice v4 (Climatological Fallback)"
   | "NOAA NCEI CDO (Live)"
   | "KNMI Climate Explorer (Live)"
   | "CSA / Geo.ca Hydrometric & AHCCD (Live)"
   | "USGS / NASA SeaWiFS Coastal Plume (Live)"
   | "USGS NWIS River Gauge (Live)"
   | "Copernicus GloFAS v4 (Live)"
+  | "Copernicus GloFAS v4 (Climatological Fallback)"
   | "NASA POWER AOD_55 (Live)"
   | "Copernicus CAMS PM2.5 (Live)"
+  | "Copernicus CAMS PM2.5 (Climatological Fallback)"
   | "NASA POWER Evapotranspiration (Live)"
   | "Empirical Dataset (Imported)";
+
+export type ProvenanceMode = "live" | "cached" | "climatological_fallback";
 
 export interface TrendAnalysisSummary {
   lat: number;
@@ -266,6 +274,7 @@ export interface TrendAnalysisSummary {
   unit: string;
   slopeUnit: string;
   provenance: TrendProvenanceSource;
+  provenanceMode?: ProvenanceMode;
   measurementKind?: "direct_observation" | "reanalysis_physical" | "meteorological_proxy";
   proxyNote?: string;
   mean: number;
@@ -328,6 +337,7 @@ export interface CurrentEarthConditions {
   aqiCategory: string | null;
   uvIndex: number | null;
   source: string;
+  provenanceMode?: "live" | "cached";
 }
 
 export type TelemetryFeedStatus = "ok" | "unavailable" | "failed_to_fetch";
@@ -343,8 +353,9 @@ export interface CurrentFeedDiagnostics {
 
 export interface DatasetTelemetryDiagnostic {
   dataset: ETGDatasetId;
-  status: TelemetryFailureKind;
+  status: TelemetryFailureKind | "climatological_fallback";
   reason: string;
+  provenanceMode?: ProvenanceMode;
 }
 
 export interface TelemetryQueryDiagnostics {

@@ -6,9 +6,17 @@ import {
   CHALLENGE_SPACE_AGENCY_RESOURCES,
   EARTH_TREND_DATASETS,
 } from "@/lib/datasets";
+import { attachDialogLightDismissFallback } from "@/lib/a11y/dialogLightDismiss";
 import type { ETGDatasetId, ETGNode } from "@/types/etg";
 
 export type IngestionTabId = "dataset" | "agencies" | "mcp" | "webhook" | "community";
+const INGESTION_TABS: readonly IngestionTabId[] = [
+  "dataset",
+  "agencies",
+  "mcp",
+  "webhook",
+  "community",
+];
 
 interface IngestionModalProps {
   open: boolean;
@@ -28,6 +36,8 @@ export function IngestionModal({
   const titleId = useId();
   const baseId = useId();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const tabButtonRefs = useRef<Partial<Record<IngestionTabId, HTMLButtonElement | null>>>({});
   const [tab, setTab] = useState<IngestionTabId>(initialTab);
 
   useEffect(() => {
@@ -82,32 +92,11 @@ export function IngestionModal({
     const dialog = dialogRef.current;
     if (!dialog) return;
     if ("closedBy" in HTMLDialogElement.prototype) return;
-
-    const isOutside = (e: PointerEvent) => {
-      const r = dialog.getBoundingClientRect();
-      return (
-        e.clientX < r.left ||
-        e.clientX > r.right ||
-        e.clientY < r.top ||
-        e.clientY > r.bottom
-      );
-    };
-
-    let pressedOutside = false;
-    const onDown = (e: PointerEvent) => {
-      pressedOutside = isOutside(e);
-    };
-    const onUp = (e: PointerEvent) => {
-      if (pressedOutside && isOutside(e)) dialog.close("backdrop");
-      pressedOutside = false;
-    };
-
-    dialog.addEventListener("pointerdown", onDown);
-    dialog.addEventListener("pointerup", onUp);
-    return () => {
-      dialog.removeEventListener("pointerdown", onDown);
-      dialog.removeEventListener("pointerup", onUp);
-    };
+    return attachDialogLightDismissFallback(
+      dialog,
+      () => dialog.close("backdrop"),
+      contentRef.current,
+    );
   }, []);
 
   const handleNativeClose = () => {
@@ -180,6 +169,8 @@ export function IngestionModal({
       } else {
         setDsError(data.error || "Live discovery failed");
       }
+    } catch (err) {
+      setDsError(err instanceof Error ? err.message : "Live discovery network request failed");
     } finally {
       setRunning(false);
     }
@@ -235,6 +226,8 @@ export function IngestionModal({
           : data.error || "Webhook failed"
       );
       if (res.ok) await onIngested();
+    } catch (err) {
+      setWhStatus(err instanceof Error ? err.message : "Webhook request failed");
     } finally {
       setRunning(false);
     }
@@ -281,6 +274,8 @@ export function IngestionModal({
         const d = await res.json();
         setObsStatus(d.error || "Submission failed");
       }
+    } catch (err) {
+      setObsStatus(err instanceof Error ? err.message : "Observation submission failed");
     } finally {
       setRunning(false);
     }
@@ -346,6 +341,21 @@ export function IngestionModal({
 
   const insightNodes = nodes.filter((n) => n.label === "Insight");
 
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const currentIndex = INGESTION_TABS.indexOf(tab);
+    let nextIndex = -1;
+    if (e.key === "ArrowRight") nextIndex = (currentIndex + 1) % INGESTION_TABS.length;
+    else if (e.key === "ArrowLeft")
+      nextIndex = (currentIndex - 1 + INGESTION_TABS.length) % INGESTION_TABS.length;
+    else if (e.key === "Home") nextIndex = 0;
+    else if (e.key === "End") nextIndex = INGESTION_TABS.length - 1;
+    if (nextIndex < 0) return;
+    e.preventDefault();
+    const nextTab = INGESTION_TABS[nextIndex];
+    setTab(nextTab);
+    tabButtonRefs.current[nextTab]?.focus();
+  };
+
   return (
     <dialog
       ref={dialogRef}
@@ -354,6 +364,7 @@ export function IngestionModal({
       className="etg-dialog"
       {...({ closedby: "any" } as Record<string, unknown>)}
     >
+      <div ref={contentRef} className="flex flex-1 min-h-0 flex-col bg-surface text-text-primary">
       {/* Dialog Header */}
       <div className="flex items-center justify-between border-b border-border bg-surface-band px-4 py-3">
         <div>
@@ -368,7 +379,7 @@ export function IngestionModal({
           type="button"
           onClick={() => dialogRef.current?.close("close-button")}
           aria-label="Close ingestion modal"
-          className="inline-flex h-7 w-7 items-center justify-center rounded border border-border text-text-muted hover:text-text-primary cursor-pointer"
+          className="inline-flex h-8 w-8 items-center justify-center rounded border border-border text-text-muted hover:text-text-primary cursor-pointer"
         >
           <X className="h-4 w-4" />
         </button>
@@ -378,12 +389,19 @@ export function IngestionModal({
       <div
         role="tablist"
         aria-label="Data ingestion channels"
+        onKeyDown={handleTabKeyDown}
         className="etg-tablist bg-surface text-xs"
       >
         <button
+          ref={(el) => {
+            tabButtonRefs.current.dataset = el;
+          }}
+          id={`${baseId}-tab-dataset`}
           type="button"
           role="tab"
           aria-selected={tab === "dataset"}
+          aria-controls={`${baseId}-panel-dataset`}
+          tabIndex={tab === "dataset" ? 0 : -1}
           onClick={() => setTab("dataset")}
           className="etg-tab flex items-center gap-1.5"
         >
@@ -391,9 +409,15 @@ export function IngestionModal({
           Dataset Import
         </button>
         <button
+          ref={(el) => {
+            tabButtonRefs.current.agencies = el;
+          }}
+          id={`${baseId}-tab-agencies`}
           type="button"
           role="tab"
           aria-selected={tab === "agencies"}
+          aria-controls={`${baseId}-panel-agencies`}
+          tabIndex={tab === "agencies" ? 0 : -1}
           onClick={() => setTab("agencies")}
           className="etg-tab flex items-center gap-1.5"
         >
@@ -401,19 +425,31 @@ export function IngestionModal({
           Agency Hub (12)
         </button>
         <button
+          ref={(el) => {
+            tabButtonRefs.current.mcp = el;
+          }}
+          id={`${baseId}-tab-mcp`}
           type="button"
           role="tab"
           aria-selected={tab === "mcp"}
+          aria-controls={`${baseId}-panel-mcp`}
+          tabIndex={tab === "mcp" ? 0 : -1}
           onClick={() => setTab("mcp")}
           className="etg-tab flex items-center gap-1.5"
         >
           <Bot className="h-3.5 w-3.5" />
-          MCP &amp; OpenAPI
+          MCP &amp; OpenAPI (16)
         </button>
         <button
+          ref={(el) => {
+            tabButtonRefs.current.webhook = el;
+          }}
+          id={`${baseId}-tab-webhook`}
           type="button"
           role="tab"
           aria-selected={tab === "webhook"}
+          aria-controls={`${baseId}-panel-webhook`}
+          tabIndex={tab === "webhook" ? 0 : -1}
           onClick={() => setTab("webhook")}
           className="etg-tab flex items-center gap-1.5"
         >
@@ -421,9 +457,15 @@ export function IngestionModal({
           Sensor Webhook
         </button>
         <button
+          ref={(el) => {
+            tabButtonRefs.current.community = el;
+          }}
+          id={`${baseId}-tab-community`}
           type="button"
           role="tab"
           aria-selected={tab === "community"}
+          aria-controls={`${baseId}-panel-community`}
+          tabIndex={tab === "community" ? 0 : -1}
           onClick={() => setTab("community")}
           className="etg-tab flex items-center gap-1.5"
         >
@@ -434,7 +476,12 @@ export function IngestionModal({
 
       {/* Scroll Body — padding lives inside child containers, never directly on [role="tabpanel"] */}
       <div className="flex-1 overflow-y-auto text-xs">
-        <div role="tabpanel" hidden={tab !== "dataset"}>
+        <div
+          id={`${baseId}-panel-dataset`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-dataset`}
+          hidden={tab !== "dataset"}
+        >
           <div className="space-y-4 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
@@ -571,19 +618,31 @@ export function IngestionModal({
             </form>
 
             {dsStatus && (
-              <div role="status" className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300">
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
+              >
                 {dsStatus}
               </div>
             )}
             {dsError && (
-              <div role="status" className="rounded-md border border-rose-400 bg-rose-950 p-2.5 font-medium text-rose-300">
+              <div
+                role="alert"
+                className="rounded-md border border-rose-400 bg-rose-950 p-2.5 font-medium text-rose-300"
+              >
                 {dsError}
               </div>
             )}
           </div>
         </div>
 
-        <div role="tabpanel" hidden={tab !== "agencies"}>
+        <div
+          id={`${baseId}-panel-agencies`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-agencies`}
+          hidden={tab !== "agencies"}
+        >
           <div className="space-y-4 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
               <div>
@@ -605,7 +664,11 @@ export function IngestionModal({
             </div>
 
             {dsStatus && (
-              <div role="status" className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300">
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
+              >
                 {dsStatus}
               </div>
             )}
@@ -665,7 +728,12 @@ export function IngestionModal({
           </div>
         </div>
 
-        <div role="tabpanel" hidden={tab !== "mcp"}>
+        <div
+          id={`${baseId}-panel-mcp`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-mcp`}
+          hidden={tab !== "mcp"}
+        >
           <div className="space-y-3 p-4">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <div className="ws-inset p-2">
@@ -706,6 +774,10 @@ export function IngestionModal({
                     setMcpArgs('{\n  "lat": 0,\n  "lng": 0,\n  "dataset": "nasa_power"\n}');
                   } else if (next === "etg_ingest_signal") {
                     setMcpArgs('{\n  "name": "",\n  "description": "",\n  "lat": 0,\n  "lng": 0,\n  "dataset": "community",\n  "confidence": 0.9\n}');
+                  } else if (next === "etg_propose_insight") {
+                    setMcpArgs('{\n  "name": "",\n  "description": "",\n  "summary": ""\n}');
+                  } else if (next === "etg_corroborate_trend") {
+                    setMcpArgs('{\n  "signal_uuid": "",\n  "insight_uuid": ""\n}');
                   } else if (next === "etg_connect_nodes") {
                     setMcpArgs('{\n  "source_uuid": "",\n  "target_uuid": "",\n  "type": "leads",\n  "optimal_lag_steps": 1,\n  "lag_unit": "days",\n  "mechanism": ""\n}');
                   } else if (next === "etg_unlink_or_update") {
@@ -716,6 +788,14 @@ export function IngestionModal({
                     setMcpArgs('{\n  "min_abs_r": 0.45,\n  "limit": 10\n}');
                   } else if (next === "etg_predict_from_graph") {
                     setMcpArgs('{\n  "target_uuid": "",\n  "max_hops": 2,\n  "horizon_steps": 1\n}');
+                  } else if (next === "etg_scan_trend_microscope") {
+                    setMcpArgs('{\n  "target_uuid": ""\n}');
+                  } else if (next === "etg_ingest_open_feed") {
+                    setMcpArgs('{\n  "feed": "usgs_gauge",\n  "lat": 39.74,\n  "lng": -104.99\n}');
+                  } else if (next === "etg_resolve_gibs_imagery") {
+                    setMcpArgs('{\n  "lat": 39.74,\n  "lng": -104.99,\n  "dataset": "nasa_power"\n}');
+                  } else if (next === "etg_query_solar_graph") {
+                    setMcpArgs('{\n  "start_year": 2019\n}');
                   } else {
                     setMcpArgs('{\n  "only_opposite_trends": true\n}');
                   }
@@ -726,12 +806,18 @@ export function IngestionModal({
                 <option value="etg_query_graph">etg_query_graph</option>
                 <option value="etg_analyze_timeseries">etg_analyze_timeseries</option>
                 <option value="etg_ingest_signal">etg_ingest_signal</option>
+                <option value="etg_propose_insight">etg_propose_insight</option>
+                <option value="etg_corroborate_trend">etg_corroborate_trend</option>
                 <option value="etg_trace_teleconnection">etg_trace_teleconnection</option>
                 <option value="etg_connect_nodes">etg_connect_nodes</option>
                 <option value="etg_unlink_or_update">etg_unlink_or_update</option>
                 <option value="etg_traverse_subgraph">etg_traverse_subgraph</option>
                 <option value="etg_discover_missing_links">etg_discover_missing_links</option>
                 <option value="etg_predict_from_graph">etg_predict_from_graph</option>
+                <option value="etg_scan_trend_microscope">etg_scan_trend_microscope</option>
+                <option value="etg_ingest_open_feed">etg_ingest_open_feed</option>
+                <option value="etg_resolve_gibs_imagery">etg_resolve_gibs_imagery</option>
+                <option value="etg_query_solar_graph">etg_query_solar_graph</option>
               </select>
 
               <label htmlFor={`${baseId}-mcp-args`} className="sr-only">
@@ -758,14 +844,24 @@ export function IngestionModal({
             </div>
 
             {mcpOutput && (
-              <pre className="max-h-56 overflow-auto rounded border border-border bg-bg p-2.5 font-mono text-[11px] text-emerald-300">
+              <pre
+                tabIndex={0}
+                role="region"
+                aria-label="MCP tool execution output"
+                className="max-h-56 overflow-auto rounded border border-border bg-bg p-2.5 font-mono ws-numeric text-[11px] text-emerald-300"
+              >
                 {mcpOutput}
               </pre>
             )}
           </div>
         </div>
 
-        <div role="tabpanel" hidden={tab !== "webhook"}>
+        <div
+          id={`${baseId}-panel-webhook`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-webhook`}
+          hidden={tab !== "webhook"}
+        >
           <div className="p-4">
           <form onSubmit={sendWebhook} className="space-y-3">
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -818,7 +914,7 @@ export function IngestionModal({
                   placeholder="-90 to 90"
                   value={whLat}
                   onChange={(e) => setWhLat(e.target.value)}
-                  className="form-input font-mono"
+                  className="form-input font-mono ws-numeric"
                 />
               </div>
               <div>
@@ -834,7 +930,7 @@ export function IngestionModal({
                   placeholder="-180 to 180"
                   value={whLng}
                   onChange={(e) => setWhLng(e.target.value)}
-                  className="form-input font-mono"
+                  className="form-input font-mono ws-numeric"
                 />
               </div>
               <div>
@@ -850,7 +946,7 @@ export function IngestionModal({
                   placeholder="Numeric sensor reading"
                   value={whValue}
                   onChange={(e) => setWhValue(e.target.value)}
-                  className="form-input font-mono"
+                  className="form-input font-mono ws-numeric"
                 />
               </div>
               <div>
@@ -878,7 +974,11 @@ export function IngestionModal({
               {running ? "Streaming…" : `POST /api/graph/nodes/${whNodeId || "{nodeId}"}/webhook`}
             </button>
             {whStatus && (
-              <div role="status" className="font-medium text-emerald-400">
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
+              >
                 {whStatus}
               </div>
             )}
@@ -886,7 +986,12 @@ export function IngestionModal({
           </div>
         </div>
 
-        <div role="tabpanel" hidden={tab !== "community"}>
+        <div
+          id={`${baseId}-panel-community`}
+          role="tabpanel"
+          aria-labelledby={`${baseId}-tab-community`}
+          hidden={tab !== "community"}
+        >
           <div className="p-4">
           <form onSubmit={submitCommunitySignal} className="space-y-3">
             <div>
@@ -933,7 +1038,7 @@ export function IngestionModal({
                   placeholder="-90..90"
                   value={obsLat}
                   onChange={(e) => setObsLat(e.target.value)}
-                  className="form-input font-mono"
+                  className="form-input font-mono ws-numeric"
                 />
               </div>
               <div>
@@ -949,7 +1054,7 @@ export function IngestionModal({
                   placeholder="-180..180"
                   value={obsLng}
                   onChange={(e) => setObsLng(e.target.value)}
-                  className="form-input font-mono"
+                  className="form-input font-mono ws-numeric"
                 />
               </div>
               <div>
@@ -998,13 +1103,18 @@ export function IngestionModal({
               {running ? "Publishing…" : "Publish Signal to Earth Trend Graph"}
             </button>
             {obsStatus && (
-              <div role="status" className="font-medium text-emerald-400">
+              <div
+                role="status"
+                aria-live="polite"
+                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
+              >
                 {obsStatus}
               </div>
             )}
           </form>
           </div>
         </div>
+      </div>
       </div>
     </dialog>
   );

@@ -46,6 +46,7 @@ export function WorkspaceStageBanner({
       {statusMessage ? (
         <div
           role="status"
+          aria-live="polite"
           className="etg-hud-pill pointer-events-auto flex max-w-[min(520px,100%)] items-center gap-2 rounded-md bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg"
         >
           <span className="truncate">{statusMessage}</span>
@@ -53,7 +54,7 @@ export function WorkspaceStageBanner({
             type="button"
             onClick={onDismissStatus}
             aria-label="Dismiss notification"
-            className="shrink-0 text-text-subtle hover:text-text-primary cursor-pointer"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-text-subtle hover:bg-surface-hover hover:text-text-primary cursor-pointer"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
@@ -61,6 +62,7 @@ export function WorkspaceStageBanner({
       ) : (
         <div
           role="status"
+          aria-live="polite"
           className="etg-hud-pill pointer-events-auto flex max-w-[min(520px,100%)] items-center gap-2 rounded-md border border-amber-400 bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg"
         >
           <GitCompare className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />

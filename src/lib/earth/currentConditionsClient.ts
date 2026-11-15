@@ -1,3 +1,4 @@
+import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import type {
   CurrentEarthConditions,
   CurrentFeedDiagnostics,
@@ -421,15 +422,19 @@ export async function fetchCurrentEarthConditionsDetailed(
     };
   }
 
-  const cacheKey = `${lat.toFixed(2)}:${lng.toFixed(2)}`;
+  const coord = normalizeEarthCoordinates(lat, lng);
+  const cacheKey = `${coord.lat.toFixed(2)}:${coord.lng.toFixed(2)}`;
   const cached = currentCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return { current: cached.value, diagnostics: cached.diagnostics };
+    return {
+      current: { ...cached.value, provenanceMode: "cached" },
+      diagnostics: cached.diagnostics,
+    };
   }
 
   const forecastParams = new URLSearchParams({
-    latitude: lat.toFixed(4),
-    longitude: lng.toFixed(4),
+    latitude: coord.apiLat.toFixed(4),
+    longitude: coord.apiLng.toFixed(4),
     current: [
       "temperature_2m",
       "apparent_temperature",
@@ -450,8 +455,8 @@ export async function fetchCurrentEarthConditionsDetailed(
   });
 
   const aqParams = new URLSearchParams({
-    latitude: lat.toFixed(4),
-    longitude: lng.toFixed(4),
+    latitude: coord.apiLat.toFixed(4),
+    longitude: coord.apiLng.toFixed(4),
     current: "pm2_5,pm10,us_aqi,uv_index",
     timezone: "auto",
   });
@@ -467,12 +472,15 @@ export async function fetchCurrentEarthConditionsDetailed(
     ),
   ]);
 
-  const parsed = parseOpenMeteoCurrentPayload({
-    lat,
-    lng,
+  const parsedRaw = parseOpenMeteoCurrentPayload({
+    lat: coord.lat,
+    lng: coord.lng,
     forecast: forecastRes.ok ? forecastRes.data : undefined,
     airQuality: airRes.ok ? airRes.data : undefined,
   });
+  const parsed: CurrentEarthConditions | null = parsedRaw
+    ? { ...parsedRaw, provenanceMode: "live" }
+    : null;
 
   const hasWeatherMetrics = Boolean(
     parsed &&

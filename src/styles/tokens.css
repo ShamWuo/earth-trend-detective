@@ -1,4 +1,6 @@
 :root {
+  color-scheme: dark;
+
   /* Design Geometry & Motion Tokens */
   --design-radius-base: 4px;
   --design-radius-scale: 1;
@@ -34,7 +36,7 @@
   --text-secondary: #94a3b8;
   --text-muted: #cbd5e1;
   --text-subtle: #94a3b8;
-  --text-faint: #7e8da3;
+  --text-faint: #8b9bb3;
 
   --border: #333336;
   --border-subtle: #27272a;
@@ -43,7 +45,7 @@
   --header-bg: #1b1b1d;
   --form-field-bg: #1c1c1e;
   --form-field-border: #45454b;
-  --form-field-placeholder: #8c9bb1;
+  --form-field-placeholder: #94a3b8;
   --button-primary-bg: #f9fafb;
   --button-primary-text: #161617;
   --blueprint-line: rgba(255, 255, 255, 0.045);
@@ -78,9 +80,10 @@
 /* Light Theme Override Tokens — Warm Ivory / Crisp Neutral */
 @media (prefers-color-scheme: light) {
   :root:not(:has(> head > meta[name="color-scheme"][content="dark"])) {
-    --bg: #fafafa;
-    --surface: #f4f4f5;
-    --surface-hover: #e4e4e7;
+    color-scheme: light;
+    --bg: #faf9f5;
+    --surface: #f3f2ec;
+    --surface-hover: #e6e4dc;
     --surface-elevated: #ffffff;
     --surface-inset: color-mix(in srgb, var(--surface) 92%, #000000 8%);
     --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
@@ -91,17 +94,17 @@
     --accent-hover: #1e40af;
     --accent-glow: rgba(29, 78, 216, 0.12);
     --text-primary: #09090b;
-    --text-secondary: #52525b;
+    --text-secondary: #48484f;
     --text-muted: #3f3f46;
-    --text-subtle: #52525b;
-    --text-faint: #63636e;
-    --border: #e4e4e7;
-    --border-subtle: #ededf0;
-    --border-strong: #a1a1aa;
-    --header-bg: #fafafa;
+    --text-subtle: #48484f;
+    --text-faint: #52525b;
+    --border: #dfded7;
+    --border-subtle: #eae8e1;
+    --border-strong: #8f8d84;
+    --header-bg: #faf9f5;
     --form-field-bg: #ffffff;
     --form-field-border: #71717a;
-    --form-field-placeholder: #71717a;
+    --form-field-placeholder: #52525b;
     --button-primary-bg: #09090b;
     --button-primary-text: #ffffff;
     --blueprint-line: rgba(29, 78, 216, 0.045);
@@ -133,9 +136,10 @@
 
 :root.light,
 :root:has(> head > meta[name="color-scheme"][content="light"]) {
-  --bg: #fafafa;
-  --surface: #f4f4f5;
-  --surface-hover: #e4e4e7;
+  color-scheme: light;
+  --bg: #faf9f5;
+  --surface: #f3f2ec;
+  --surface-hover: #e6e4dc;
   --surface-elevated: #ffffff;
   --surface-inset: color-mix(in srgb, var(--surface) 92%, #000000 8%);
   --surface-band: color-mix(in srgb, var(--surface) 95%, #000000 5%);
@@ -146,17 +150,17 @@
   --accent-hover: #1e40af;
   --accent-glow: rgba(29, 78, 216, 0.12);
   --text-primary: #09090b;
-  --text-secondary: #52525b;
+  --text-secondary: #48484f;
   --text-muted: #3f3f46;
-  --text-subtle: #52525b;
-  --text-faint: #63636e;
-  --border: #e4e4e7;
-  --border-subtle: #ededf0;
-  --border-strong: #a1a1aa;
-  --header-bg: #fafafa;
+  --text-subtle: #48484f;
+  --text-faint: #52525b;
+  --border: #dfded7;
+  --border-subtle: #eae8e1;
+  --border-strong: #8f8d84;
+  --header-bg: #faf9f5;
   --form-field-bg: #ffffff;
   --form-field-border: #71717a;
-  --form-field-placeholder: #71717a;
+  --form-field-placeholder: #52525b;
   --button-primary-bg: #09090b;
   --button-primary-text: #ffffff;
   --blueprint-line: rgba(29, 78, 216, 0.045);

@@ -59,9 +59,20 @@ html:active-view-transition-type(expand-to-globe)::view-transition-new(etg-stage
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  /* Suppress spatial animations & persistent motion while keeping subtle color/opacity transitions intact */
   .animate-fade-in,
   .animate-pulse-subtle {
     animation: none !important;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-property: color, background-color, border-color, text-decoration-color, fill, stroke, opacity !important;
   }
 
   ::view-transition-group(*),

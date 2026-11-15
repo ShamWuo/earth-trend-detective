@@ -565,7 +565,7 @@ export function GlobeHudOverlays({
                     ? "bg-rose-400"
                     : regionalHud.layerId
                       ? "bg-sky-400"
-                      : "bg-slate-400"
+                      : "bg-text-subtle"
                 }`}
                 aria-hidden="true"
               />

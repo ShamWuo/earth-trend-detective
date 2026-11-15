@@ -1,3 +1,4 @@
+import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import type {
   CouplingRegime,
   CrossRegionComparison,
@@ -6,6 +7,7 @@ import type {
   MannKendallResult,
   OlsRegressionResult,
   PettittChangePointResult,
+  ProvenanceMode,
   RollingCorrelationPoint,
   SeasonalMannKendallResult,
   TheilSenResult,
@@ -639,9 +641,17 @@ export function analyzeTimeSeries(
     unit: string;
     slopeUnit: string;
     provenance: TrendProvenanceSource;
+    provenanceMode?: ProvenanceMode;
     alpha?: number;
   }
 ): TrendAnalysisSummary {
+  const coord = normalizeEarthCoordinates(options.lat, options.lng, {
+    poleGuardMargin: 0,
+    antimeridianMargin: 0,
+  });
+  const safeAlpha = Number.isFinite(options.alpha)
+    ? Math.max(1e-6, Math.min(0.5, options.alpha!))
+    : 0.05;
   const sorted = rawPoints
     .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value))
     .sort((a, b) => a.t - b.t);
@@ -655,11 +665,11 @@ export function analyzeTimeSeries(
   const min = n > 0 ? Math.min(...values) : 0;
   const max = n > 0 ? Math.max(...values) : 0;
 
-  const mk = mannKendallTest(values, options.alpha ?? 0.05);
+  const mk = mannKendallTest(values, safeAlpha);
   const ts = theilSenEstimator(sorted, mk.varS);
   const ols = computeOlsRegression(sorted);
   const changePoint = computePettittChangePoint(sorted);
-  const seasonalAnalysis = computeSeasonalMannKendall(sorted, options.alpha ?? 0.05);
+  const seasonalAnalysis = computeSeasonalMannKendall(sorted, safeAlpha);
 
   const points: TrendAnalysisPoint[] = sorted.map((p, idx) => {
     const start = Math.max(0, idx - 2);
@@ -726,13 +736,14 @@ export function analyzeTimeSeries(
   }
 
   return {
-    lat: options.lat,
-    lng: options.lng,
+    lat: coord.lat,
+    lng: coord.lng,
     dataset: options.dataset,
     parameter: options.parameter,
     unit: options.unit,
     slopeUnit: options.slopeUnit,
     provenance: options.provenance,
+    ...(options.provenanceMode ? { provenanceMode: options.provenanceMode } : {}),
     mean,
     stdDev,
     min,
@@ -1021,10 +1032,12 @@ export function compareRegionalSeries(
   seriesB: readonly TimeSeriesPoint[],
   context?: CompareSeriesContext
 ): CrossRegionComparison {
-  const mapB = new Map(seriesB.map((p) => [p.date, p]));
+  const cleanA = seriesA.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value));
+  const cleanB = seriesB.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value));
+  const mapB = new Map(cleanB.map((p) => [p.date, p]));
   const paired: Array<{ date: string; tA: number; tB: number; rawA: number; rawB: number }> = [];
 
-  for (const ptA of seriesA) {
+  for (const ptA of cleanA) {
     const ptB = mapB.get(ptA.date);
     if (ptB !== undefined) {
       paired.push({
@@ -1041,23 +1054,27 @@ export function compareRegionalSeries(
   // strictly refusing positional alignment across non-overlapping calendar eras.
   if (paired.length < 3) {
     const calFractionA =
-      seriesA.length > 0
-        ? seriesA.filter((p) => parseCalendarKey(p.date) !== null).length / seriesA.length
+      cleanA.length > 0
+        ? cleanA.filter((p) => parseCalendarKey(p.date) !== null).length / cleanA.length
         : 0;
     const calFractionB =
-      seriesB.length > 0
-        ? seriesB.filter((p) => parseCalendarKey(p.date) !== null).length / seriesB.length
+      cleanB.length > 0
+        ? cleanB.filter((p) => parseCalendarKey(p.date) !== null).length / cleanB.length
         : 0;
     const bothCalendar = calFractionA >= 0.8 && calFractionB >= 0.8;
 
     if (bothCalendar) {
       paired.length = 0;
-      const hasMonthA = seriesA.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / seriesA.length >= 0.8;
-      const hasMonthB = seriesB.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / seriesB.length >= 0.8;
+      const hasMonthA =
+        cleanA.length > 0 &&
+        cleanA.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / cleanA.length >= 0.8;
+      const hasMonthB =
+        cleanB.length > 0 &&
+        cleanB.filter((p) => parseCalendarKey(p.date)?.yearMonth).length / cleanB.length >= 0.8;
 
       if (hasMonthA && hasMonthB) {
-        const bA = aggregateByCalendarBucket(seriesA, "yearMonth");
-        const bB = aggregateByCalendarBucket(seriesB, "yearMonth");
+        const bA = aggregateByCalendarBucket(cleanA, "yearMonth");
+        const bB = aggregateByCalendarBucket(cleanB, "yearMonth");
         const keys = [...bA.keys()].filter((k) => bB.has(k)).sort();
         for (const key of keys) {
           const a = bA.get(key)!;
@@ -1068,8 +1085,8 @@ export function compareRegionalSeries(
 
       if (paired.length < 3) {
         paired.length = 0;
-        const yA = aggregateByCalendarBucket(seriesA, "year");
-        const yB = aggregateByCalendarBucket(seriesB, "year");
+        const yA = aggregateByCalendarBucket(cleanA, "year");
+        const yB = aggregateByCalendarBucket(cleanB, "year");
         const keys = [...yA.keys()].filter((k) => yB.has(k)).sort();
         for (const key of keys) {
           const a = yA.get(key)!;
@@ -1080,14 +1097,14 @@ export function compareRegionalSeries(
     } else {
       // Only align by index when synthetic non-calendar step identifiers are used
       paired.length = 0;
-      const len = Math.min(seriesA.length, seriesB.length);
+      const len = Math.min(cleanA.length, cleanB.length);
       for (let i = 0; i < len; i++) {
         paired.push({
-          date: seriesA[i].date,
-          tA: seriesA[i].t,
-          tB: seriesB[i].t,
-          rawA: seriesA[i].value,
-          rawB: seriesB[i].value,
+          date: cleanA[i].date,
+          tA: cleanA[i].t,
+          tB: cleanB[i].t,
+          rawA: cleanA[i].value,
+          rawB: cleanB[i].value,
         });
       }
     }

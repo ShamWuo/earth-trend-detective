@@ -65,7 +65,7 @@ export function resolveMicroscopeNodeBadge(
     return {
       text: "CYCLE",
       title: `Possible seasonal/oscillatory cycle (${Math.round(cue.dealiasing.oscillationShare * 100)}% cycle share, P_false=${Math.round(cue.dealiasing.falseTrendProb * 100)}%)`,
-      pillClass: isLightTheme ? "bg-amber-100 text-amber-900" : "bg-amber-950 text-amber-300",
+      pillClass: "bg-amber-950 text-amber-300",
       bg: isLightTheme ? "#fef3c7" : "#451a03",
       fg: isLightTheme ? "#92400e" : "#fcd34d",
     };
@@ -74,7 +74,7 @@ export function resolveMicroscopeNodeBadge(
     return {
       text: "GLITCH",
       title: `Step-shift or sensor artifact risk (${Math.round(cue.dealiasing.artifactShare * 100)}% artifact share)`,
-      pillClass: isLightTheme ? "bg-rose-100 text-rose-900" : "bg-rose-950 text-rose-300",
+      pillClass: "bg-rose-950 text-rose-300",
       bg: isLightTheme ? "#ffe4e6" : "#4c0519",
       fg: isLightTheme ? "#be123c" : "#fda4af",
     };
@@ -83,7 +83,7 @@ export function resolveMicroscopeNodeBadge(
     return {
       text: "PRE-MK",
       title: `Pre-Mann-Kendall early inflection (${Math.round(cue.onsetProb * 100)}% onset prob, +${cue.leadStepsAhead} step lead)`,
-      pillClass: isLightTheme ? "bg-sky-100 text-sky-900" : "bg-sky-950 text-sky-300",
+      pillClass: "bg-sky-950 text-sky-300",
       bg: isLightTheme ? "#e0f2fe" : "#082f49",
       fg: isLightTheme ? "#075985" : "#38bdf8",
     };

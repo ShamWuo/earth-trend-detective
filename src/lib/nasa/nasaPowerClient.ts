@@ -1,5 +1,10 @@
 import { DATASET_BY_ID } from "@/lib/datasets";
 import {
+  buildClimatologicalSeriesPoints,
+  createBoundedSignal,
+  normalizeEarthCoordinates,
+} from "@/lib/earth/coordinates";
+import {
   fetchCamsSurfacePm25Series,
   fetchGlofasDischargeSeries,
   fetchNearestUsgsGaugeAnnualSeries,
@@ -268,14 +273,49 @@ export function parseNasaPowerMonthlyPayload(
     }));
 }
 
+/**
+ * Synthesizes a deterministic lat/lon climatological baseline summary when upstream
+ * NASA/Open-Meteo/Copernicus services time out, rate-limit (429), or are offline.
+ */
+export function buildClimatologicalTrendSummary(
+  lat: number,
+  lng: number,
+  dataset: ETGDatasetId = "nasa_power",
+  startYear = 1995,
+  endYear = 2025
+): TrendAnalysisSummary {
+  const coord = normalizeEarthCoordinates(lat, lng, {
+    poleGuardMargin: 0,
+    antimeridianMargin: 0,
+  });
+  const base = buildClimatologicalSeriesPoints(coord.lat, coord.lng, dataset, startYear, endYear);
+  const summary = analyzeTimeSeries(base.points, {
+    lat: coord.lat,
+    lng: coord.lng,
+    dataset,
+    parameter: `${base.parameter} (Climatological Fallback)`,
+    unit: base.unit,
+    slopeUnit: base.slopeUnit,
+    provenance: "NASA POWER MERRA-2 (Climatological Fallback)",
+    provenanceMode: "climatological_fallback",
+  });
+  return attachMeasurementMetadata(
+    dataset,
+    summary,
+    "meteorological_proxy",
+    base.note
+  );
+}
+
 async function fetchNasaPowerRaw(url: string): Promise<{
   properties?: { parameter?: Record<string, Record<string, unknown>> };
 }> {
   let lastError: Error | null = null;
+  const retryDelayMs = process.env.NODE_ENV === "test" ? 15 : 350;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(url, {
-        signal: AbortSignal.timeout(15000),
+        signal: createBoundedSignal(9000),
         headers: {
           Accept: "application/json",
           "User-Agent": USER_AGENT,
@@ -283,20 +323,24 @@ async function fetchNasaPowerRaw(url: string): Promise<{
       });
       if (!res.ok) {
         const msg = `NASA POWER MERRA-2 HTTP ${res.status} ${res.statusText}`;
-        if (res.status >= 500 && attempt === 0) {
+        if ((res.status === 429 || res.status >= 500) && attempt === 0) {
           lastError = new Error(msg);
-          await new Promise((r) => setTimeout(r, 400));
+          await new Promise((r) => setTimeout(r, retryDelayMs));
           continue;
         }
         throw new Error(msg);
       }
-      return (await res.json()) as {
+      const parsed = (await res.json()) as unknown;
+      if (!parsed || typeof parsed !== "object") {
+        throw new Error("NASA POWER MERRA-2 returned malformed non-object JSON payload");
+      }
+      return parsed as {
         properties?: { parameter?: Record<string, Record<string, unknown>> };
       };
     } catch (err) {
       lastError = err instanceof Error ? err : new Error("NASA POWER request failed");
       if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, retryDelayMs));
         continue;
       }
     }
@@ -311,12 +355,13 @@ export async function fetchEarthTimeSeries(
   startYear = 1995,
   endYear = 2025
 ): Promise<TrendAnalysisSummary> {
-  const clampedLat = Math.max(-89.5, Math.min(89.5, lat));
-  const clampedLng = Math.max(-179.5, Math.min(179.5, lng));
+  const coord = normalizeEarthCoordinates(lat, lng);
+  const clampedLat = coord.apiLat;
+  const clampedLng = coord.apiLng;
   const key = cacheKey(clampedLat, clampedLng, dataset);
   const cached = SERIES_CACHE.get(key);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.summary;
+    return { ...cached.summary, provenanceMode: "cached" };
   }
 
   const config = POWER_PARAM_MAP[dataset] ?? POWER_PARAM_MAP.nasa_power;
@@ -337,6 +382,7 @@ export async function fetchEarthTimeSeries(
             unit: usgs.unit,
             slopeUnit: "m³/s/yr",
             provenance: usgs.provenanceSource,
+            provenanceMode: "live",
           }),
           "direct_observation"
         );
@@ -366,6 +412,7 @@ export async function fetchEarthTimeSeries(
             unit: glofas.unit,
             slopeUnit: "m³/s/yr",
             provenance: glofas.provenanceSource,
+            provenanceMode: "live",
           }),
           "reanalysis_physical"
         );
@@ -403,6 +450,7 @@ export async function fetchEarthTimeSeries(
               unit: "0–1 wet",
               slopeUnit: "/yr",
               provenance: "NASA GES DISC / POWER Hydrology (Live)",
+              provenanceMode: "live",
             }),
             hydroMonthly
           ),
@@ -462,6 +510,7 @@ export async function fetchEarthTimeSeries(
               unit: "AOD",
               slopeUnit: "/yr",
               provenance: "NASA POWER AOD_55 (Live)",
+              provenanceMode: "live",
             }),
             aodMonthly
           ),
@@ -482,6 +531,7 @@ export async function fetchEarthTimeSeries(
         unit: camsSnapshot.unit,
         slopeUnit: "μg/m³/yr",
         provenance: camsSnapshot.provenanceSource,
+        provenanceMode: "live",
       });
       const camsSummary = attachMeasurementMetadata(
         "air_quality",
@@ -524,6 +574,7 @@ export async function fetchEarthTimeSeries(
               unit: "MJ/m²/d",
               slopeUnit: "MJ/m²/d/yr",
               provenance: "NASA POWER Evapotranspiration (Live)",
+              provenanceMode: "live",
             }),
             evapMonthly
           ),
@@ -565,6 +616,7 @@ export async function fetchEarthTimeSeries(
             unit: "kPa",
             slopeUnit: "kPa/yr",
             provenance: "NASA POWER MERRA-2 (Live)",
+            provenanceMode: "live",
           }),
           vpdMonthly
         )
@@ -606,6 +658,7 @@ export async function fetchEarthTimeSeries(
         unit: config.unit,
         slopeUnit: config.slopeUnit,
         provenance: "NASA POWER MERRA-2 (Live)",
+        provenanceMode: "live",
       }),
       monthlyRawPoints
     )
@@ -637,8 +690,9 @@ export async function fetchMultiParamNasaPower(
   };
   sourceUrl: string;
 }> {
-  const clampedLat = Math.max(-89.5, Math.min(89.5, lat));
-  const clampedLng = Math.max(-179.5, Math.min(179.5, lng));
+  const coord = normalizeEarthCoordinates(lat, lng);
+  const clampedLat = coord.apiLat;
+  const clampedLng = coord.apiLng;
 
   const sourceUrl =
     `https://power.larc.nasa.gov/api/temporal/monthly/point` +
@@ -682,6 +736,7 @@ export async function fetchMultiParamNasaPower(
             unit: config.unit,
             slopeUnit: config.slopeUnit,
             provenance: "NASA POWER MERRA-2 (Live)",
+            provenanceMode: "live",
           }),
           monthlyPts
         ),
@@ -711,8 +766,9 @@ export async function fetchMultiDatasetSummariesDetailed(
   summaries: TrendAnalysisSummary[];
   diagnostics: DatasetTelemetryDiagnostic[];
 }> {
-  const clampedLat = Math.max(-89.5, Math.min(89.5, lat));
-  const clampedLng = Math.max(-179.5, Math.min(179.5, lng));
+  const coord = normalizeEarthCoordinates(lat, lng);
+  const clampedLat = coord.apiLat;
+  const clampedLng = coord.apiLng;
 
   const diagnostics: DatasetTelemetryDiagnostic[] = [];
   const uniqueRequested = Array.from(
@@ -748,7 +804,7 @@ export async function fetchMultiDatasetSummariesDetailed(
   for (const ds of targets) {
     const cached = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, ds));
     if (cached && cached.expiresAt > now) {
-      resolved.set(ds, cached.summary);
+      resolved.set(ds, { ...cached.summary, provenanceMode: "cached" });
     } else {
       missing.push(ds);
     }
@@ -885,6 +941,7 @@ export async function fetchMultiDatasetSummariesDetailed(
                   unit: "kPa",
                   slopeUnit: "kPa/yr",
                   provenance: "NASA POWER MERRA-2 (Live)",
+                  provenanceMode: "live",
                 }),
                 vpdMonthly
               )
@@ -927,6 +984,7 @@ export async function fetchMultiDatasetSummariesDetailed(
               unit: config.unit,
               slopeUnit: config.slopeUnit,
               provenance: "NASA POWER MERRA-2 (Live)",
+              provenanceMode: "live",
             }),
             monthlyRawPoints
           )
@@ -1099,8 +1157,9 @@ export async function fetchRegionalMultiScaleSeries(
   summary: TrendAnalysisSummary;
   channelNames: string[];
 }> {
-  const clampedLat = Math.max(-89.5, Math.min(89.5, lat));
-  const clampedLng = Math.max(-179.5, Math.min(179.5, lng));
+  const coord = normalizeEarthCoordinates(lat, lng);
+  const clampedLat = coord.apiLat;
+  const clampedLng = coord.apiLng;
   const startYear = options?.startYear ?? 1995;
   const endYear = options?.endYear ?? 2025;
   const includeDailyRecent = options?.includeDailyRecent ?? false;
@@ -1210,11 +1269,37 @@ export async function fetchRegionalMultiScaleSeries(
       unit: dataset === "wildfire" ? "kPa" : config.unit,
       slopeUnit: dataset === "wildfire" ? "kPa/yr" : config.slopeUnit,
       provenance: "NASA POWER MERRA-2 (Live)",
+      provenanceMode: "live",
     });
   } else {
-    throw summaryRes.status === "rejected"
-      ? summaryRes.reason
-      : new Error("Insufficient regional multi-scale observations");
+    const stale = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, dataset));
+    if (stale) {
+      summary = { ...stale.summary, provenanceMode: "cached" };
+    } else {
+      summary = buildClimatologicalTrendSummary(lat, lng, dataset, startYear, endYear);
+    }
+    annualPoints = summary.points.map((p) => ({
+      date: p.date,
+      t: p.t,
+      value: p.value,
+    }));
+    if (monthPoints.length < 12) {
+      monthPoints = annualPoints.flatMap((pt) => {
+        const yearNum = Number(pt.date.slice(0, 4));
+        if (!Number.isInteger(yearNum)) return [];
+        const phase = ((clampedLat * 0.17 + clampedLng * 0.11) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+        const seasonAmp = Math.max(0.05, Math.abs(summary.stdDev) * 0.45);
+        return Array.from({ length: 12 }, (_, idx) => {
+          const monthNum = idx + 1;
+          const seasonalDelta = Math.sin(((monthNum - 1) / 12) * Math.PI * 2 + phase) * seasonAmp;
+          return {
+            date: `${yearNum}-${String(monthNum).padStart(2, "0")}`,
+            t: Number((yearNum + (monthNum - 0.5) / 12).toFixed(4)),
+            value: Number((pt.value + seasonalDelta).toFixed(4)),
+          };
+        });
+      });
+    }
   }
 
   const channelSet = new Set<string>();

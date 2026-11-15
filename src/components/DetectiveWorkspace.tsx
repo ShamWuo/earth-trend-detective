@@ -328,10 +328,17 @@ export function DetectiveWorkspace({
         ) => { finished: Promise<void> };
       };
 
+      const prefersReducedMotion =
+        typeof window !== "undefined" &&
+        Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+
       const transitionType =
         nextMode === "graph" ? "coalesce-to-graph" : "expand-to-globe";
 
-      if (typeof docWithTransition.startViewTransition === "function") {
+      if (
+        !prefersReducedMotion &&
+        typeof docWithTransition.startViewTransition === "function"
+      ) {
         let updated = false;
         const applyUpdate = () => {
           updated = true;
@@ -1124,6 +1131,9 @@ export function DetectiveWorkspace({
 
   return (
     <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-bg text-text-primary">
+      <a href="#etg-main-stage" className="etg-skip-link">
+        Skip to interactive Earth stage
+      </a>
       <WorkspaceHeader
         topicButtonLabel={topicButtonLabel}
         activeFilterCount={activeFilterCount}
@@ -1203,7 +1213,9 @@ export function DetectiveWorkspace({
         />
 
         <main
-          className="relative min-h-0 min-w-0 flex-1 overflow-hidden"
+          id="etg-main-stage"
+          tabIndex={-1}
+          className="relative min-h-0 min-w-0 flex-1 overflow-hidden focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent-fg)]"
           style={{ viewTransitionName: "etg-stage" }}
         >
           <h2 ref={viewHeadingRef} tabIndex={-1} className="sr-only">

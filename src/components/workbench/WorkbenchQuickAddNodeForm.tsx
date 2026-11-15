@@ -402,8 +402,23 @@ export function WorkbenchQuickAddNodeForm({
           </div>
         )}
 
-        {localError && <div className="text-[11px] text-rose-400">{localError}</div>}
-        {localStatus && <div className="text-[11px] text-emerald-400">{localStatus}</div>}
+        {localError && (
+          <div
+            role="alert"
+            className="rounded-sm border border-rose-400 bg-rose-950 px-2.5 py-1.5 text-[11px] text-rose-300"
+          >
+            {localError}
+          </div>
+        )}
+        {localStatus && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-sm border border-emerald-400 bg-emerald-950 px-2.5 py-1.5 text-[11px] text-emerald-300"
+          >
+            {localStatus}
+          </div>
+        )}
 
         <button
           type="submit"

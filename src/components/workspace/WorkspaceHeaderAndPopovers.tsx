@@ -211,7 +211,7 @@ export function WorkspaceHeader({
             value={searchQuery}
             onChange={(e) => onChangeSearchQuery(e.target.value)}
             placeholder="Search pins or trends…"
-            className="h-7 w-36 rounded-sm border border-border bg-surface-inset pr-2.5 pl-7 text-xs text-text-primary placeholder:text-text-subtle transition-all focus:w-48 focus:border-accent-fg focus:outline-none"
+            className="h-7 w-36 rounded-sm border border-border bg-surface-inset pr-2.5 pl-7 text-xs text-text-primary placeholder:text-text-subtle transition-all focus:w-48 focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)]"
           />
         </search>
 

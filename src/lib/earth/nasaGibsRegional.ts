@@ -1,3 +1,4 @@
+import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import type { ETGDatasetId } from "@/types/etg";
 
 export type ActiveGibsLayerId =
@@ -697,10 +698,13 @@ export function computeRegionalTileSpec(params: {
   const width = tier === "corridor" ? 2048 : 1600;
   const height = tier === "corridor" ? 1536 : 1200;
 
-  // Normalize longitude cleanly before snapping
-  let normLng = ((((lng + 180) % 360) + 360) % 360) - 180;
-  if (normLng === -180 && lng > 0) normLng = 180;
-  const clampedLat = Math.max(-85, Math.min(85, lat));
+  // Normalize coordinates cleanly before snapping (guards poles, antimeridian, and NaN)
+  const norm = normalizeEarthCoordinates(lat, lng, {
+    poleGuardMargin: 0,
+    antimeridianMargin: 0,
+  });
+  const normLng = norm.lng;
+  const clampedLat = Math.max(-85, Math.min(85, norm.lat));
 
   const centerLng = Math.round(normLng / snapDeg) * snapDeg;
   const centerLat = Math.round(clampedLat / snapDeg) * snapDeg;

@@ -25,14 +25,35 @@ h1, h2, h3 {
   text-wrap: balance;
 }
 
-/* Focus visibility (WCAG 2.4.7) */
+/* Focus visibility (WCAG 2.4.7 & non-text 3:1 focus indicator) */
 :where(
-  a[href], button, select, summary,
+  a[href], button, select, summary, input, textarea,
   [tabindex]:not([tabindex="-1"]),
   [role="button"], [role="tab"], [role="option"], [role="switch"]
 ):focus-visible {
   outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
+}
+
+/* Skip Link for keyboard navigation (visible only on focus) */
+.etg-skip-link {
+  position: fixed;
+  top: -4rem;
+  left: 0.75rem;
+  z-index: 100;
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--accent-fg);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.etg-skip-link:focus-visible {
+  top: 0.75rem;
 }
 
 /* ─── Native <dialog> Modal Scroll Containment & Styling ─── */
@@ -561,14 +582,29 @@ input[type="range"].etg-slider:focus-visible {
   color: #fda4af;
 }
 
-.light .etg-tone-warm {
-  color: #b45309;
+:root.light .etg-tone-warm,
+:root:has(> head > meta[name="color-scheme"][content="light"]) .etg-tone-warm {
+  color: #92400e;
 }
-.light .etg-tone-cool {
+:root.light .etg-tone-cool,
+:root:has(> head > meta[name="color-scheme"][content="light"]) .etg-tone-cool {
   color: #0369a1;
 }
-.light .etg-tone-rise {
+:root.light .etg-tone-rise,
+:root:has(> head > meta[name="color-scheme"][content="light"]) .etg-tone-rise {
   color: #be123c;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(:has(> head > meta[name="color-scheme"][content="dark"])) .etg-tone-warm {
+    color: #92400e;
+  }
+  :root:not(:has(> head > meta[name="color-scheme"][content="dark"])) .etg-tone-cool {
+    color: #0369a1;
+  }
+  :root:not(:has(> head > meta[name="color-scheme"][content="dark"])) .etg-tone-rise {
+    color: #be123c;
+  }
 }
 
 .etg-globe-void {
@@ -611,7 +647,7 @@ input[type="range"].etg-slider:focus-visible {
 }
 
 input.visually-hidden:focus-visible + label {
-  outline: 2px solid var(--color-accent-primary, #38bdf8);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }
 
@@ -627,7 +663,7 @@ input.visually-hidden:focus-visible + label {
 }
 
 .etg-table-wrapper:focus-visible {
-  outline: 2px solid var(--color-accent-primary, #38bdf8);
+  outline: 2px solid var(--accent-fg);
   outline-offset: 2px;
 }
 
@@ -642,7 +678,7 @@ input.visually-hidden:focus-visible + label {
 .etg-table td {
   padding: 0.45rem 0.55rem;
   text-align: left;
-  border-bottom: 1px solid var(--color-border-hairline, rgba(255, 255, 255, 0.07));
+  border-bottom: 1px solid var(--border);
 }
 
 .etg-table thead th {
@@ -666,7 +702,7 @@ input.visually-hidden:focus-visible + label {
   .etg-table tbody tr {
     display: block;
     padding: 0.45rem 0.6rem;
-    border-bottom: 1px solid var(--color-border-hairline, rgba(255, 255, 255, 0.1));
+    border-bottom: 1px solid var(--border);
   }
 
   .etg-table tbody tr:last-child {
@@ -686,25 +722,25 @@ input.visually-hidden:focus-visible + label {
   .etg-table td:nth-child(1)::before,
   .etg-table tbody th:nth-child(1)::before {
     content: var(--label-1, "Horizon") ": ";
-    color: var(--color-text-muted, #94a3b8);
+    color: var(--text-muted);
     font-weight: 600;
   }
 
   .etg-table td:nth-child(2)::before {
     content: var(--label-2, "Forecast") ": ";
-    color: var(--color-text-muted, #94a3b8);
+    color: var(--text-muted);
     font-weight: 600;
   }
 
   .etg-table td:nth-child(3)::before {
     content: var(--label-3, "Actual") ": ";
-    color: var(--color-text-muted, #94a3b8);
+    color: var(--text-muted);
     font-weight: 600;
   }
 
   .etg-table td:nth-child(4)::before {
     content: var(--label-4, "Outcome") ": ";
-    color: var(--color-text-muted, #94a3b8);
+    color: var(--text-muted);
     font-weight: 600;
   }
 }

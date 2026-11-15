@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import {
   fetchCurrentEarthConditionsDetailed,
   inferEmbeddedSeriesUnits,
 } from "@/lib/earth/currentConditionsClient";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import {
+  buildClimatologicalTrendSummary,
   enrichSummaryWithMonthlySeasonality,
   fetchEarthTimeSeries,
   fetchMultiDatasetSummariesDetailed,
@@ -65,6 +67,10 @@ function analyzeEmbeddedNodeSeries(
 }
 
 export async function GET(req: NextRequest) {
+  let resolvedLat: number | null = null;
+  let resolvedLng: number | null = null;
+  let dataset: ETGDatasetId = "nasa_power";
+
   try {
     const { searchParams } = new URL(req.url);
     const store = getEtgStore();
@@ -74,8 +80,6 @@ export async function GET(req: NextRequest) {
       searchParams.get("compare_node_uuid") ?? searchParams.get("compareNodeUuid");
 
     let primary: TrendAnalysisSummary | null = null;
-    let resolvedLat: number | null = null;
-    let resolvedLng: number | null = null;
     if (nodeUuid) {
       const node = store.getNode(nodeUuid);
       if (node) {
@@ -92,7 +96,10 @@ export async function GET(req: NextRequest) {
 
     const latRaw = searchParams.get("lat");
     const lngRaw = searchParams.get("lng");
-    const dataset = (searchParams.get("dataset") as ETGDatasetId) || "nasa_power";
+    dataset = (searchParams.get("dataset") as ETGDatasetId) || "nasa_power";
+    const preferFallback =
+      searchParams.get("fallback") === "1" ||
+      searchParams.get("fallback") === "climatological";
     const datasetsParam = searchParams.get("datasets");
     const parsedDatasets = datasetsParam
       ? Array.from(
@@ -163,12 +170,16 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      resolvedLat = lat;
-      resolvedLng = lng;
-      currentPromise = fetchCurrentEarthConditionsDetailed(lat, lng);
+      const coord = normalizeEarthCoordinates(lat, lng, {
+        poleGuardMargin: 0,
+        antimeridianMargin: 0,
+      });
+      resolvedLat = coord.lat;
+      resolvedLng = coord.lng;
+      currentPromise = fetchCurrentEarthConditionsDetailed(coord.lat, coord.lng);
 
       if (parsedDatasets.length >= 2) {
-        const multi = await fetchMultiDatasetSummariesDetailed(lat, lng, parsedDatasets);
+        const multi = await fetchMultiDatasetSummariesDetailed(coord.lat, coord.lng, parsedDatasets);
         summaries = multi.summaries;
         datasetDiagnostics.push(...multi.diagnostics);
         primary = summaries.find((s) => s.dataset === dataset) ?? summaries[0] ?? null;
@@ -183,7 +194,7 @@ export async function GET(req: NextRequest) {
           });
         } else {
           try {
-            primary = await fetchEarthTimeSeries(lat, lng, singleDs);
+            primary = await fetchEarthTimeSeries(coord.lat, coord.lng, singleDs);
             summaries = [primary];
           } catch (err) {
             datasetDiagnostics.push({
@@ -285,24 +296,29 @@ export async function GET(req: NextRequest) {
       ...(datasetDiagnostics.length > 0 ? { datasets: datasetDiagnostics } : {}),
     };
 
-    if (!hasAnyData && hasFetchFailure) {
-      const firstFailedReason =
-        datasetDiagnostics.find((d) => d.status === "failed_to_fetch")?.reason ||
-        (currentDiagnostics?.weatherStatus === "failed_to_fetch"
-          ? currentDiagnostics.weatherReason
-          : undefined) ||
-        (currentDiagnostics?.airQualityStatus === "failed_to_fetch"
-          ? currentDiagnostics.airQualityReason
-          : undefined) ||
-        "Failed to fetch live Earth telemetry.";
-      return NextResponse.json(
-        {
-          error: firstFailedReason,
-          failureKind: "failed_to_fetch",
-          diagnostics: diagnosticsPayload,
-        },
-        { status: 502 }
-      );
+    const climatologicalFallback =
+      !primary && resolvedLat !== null && resolvedLng !== null
+        ? buildClimatologicalTrendSummary(resolvedLat, resolvedLng, dataset)
+        : null;
+
+    if (!hasAnyData && climatologicalFallback) {
+      return NextResponse.json({
+        primary: climatologicalFallback,
+        secondary,
+        comparison,
+        summaries: [climatologicalFallback],
+        current,
+        secondaryCurrent,
+        provenanceMode: "climatological_fallback" as const,
+        failureKind,
+        diagnostics: diagnosticsPayload,
+        climatologicalFallback,
+      });
+    }
+
+    if (preferFallback && !primary && climatologicalFallback) {
+      primary = climatologicalFallback;
+      summaries = [climatologicalFallback];
     }
 
     return NextResponse.json({
@@ -312,16 +328,37 @@ export async function GET(req: NextRequest) {
       summaries,
       current,
       secondaryCurrent,
+      provenanceMode: primary?.provenanceMode ?? current?.provenanceMode ?? null,
       failureKind,
       diagnostics: diagnosticsPayload,
+      ...(climatologicalFallback ? { climatologicalFallback } : {}),
     });
   } catch (err) {
+    if (resolvedLat !== null && resolvedLng !== null) {
+      const climatologicalFallback = buildClimatologicalTrendSummary(
+        resolvedLat,
+        resolvedLng,
+        dataset
+      );
+      return NextResponse.json({
+        primary: climatologicalFallback,
+        secondary: null,
+        comparison: null,
+        summaries: [climatologicalFallback],
+        current: null,
+        secondaryCurrent: null,
+        provenanceMode: "climatological_fallback" as const,
+        failureKind: "failed_to_fetch" as const,
+        error: err instanceof Error ? err.message : "Time-series query fell back to climatology",
+        climatologicalFallback,
+      });
+    }
     return NextResponse.json(
       {
         error: err instanceof Error ? err.message : "Time-series query failed",
         failureKind: "failed_to_fetch",
       },
-      { status: 502 }
+      { status: 400 }
     );
   }
 }

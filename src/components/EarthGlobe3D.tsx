@@ -750,8 +750,11 @@ export function EarthGlobe3D({
     const animate = () => {
       animId = requestAnimationFrame(animate);
       const elapsed = (performance.now() - startTimeMs) * 0.001;
+      const reducedMotion =
+        typeof window !== "undefined" &&
+        Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
-      if (cloudMesh.visible) {
+      if (cloudMesh.visible && !reducedMotion) {
         cloudMesh.rotation.y += 0.00018;
         earthMat.uniforms.uCloudDriftU.value = cloudMesh.rotation.y / (Math.PI * 2);
       }
@@ -761,18 +764,21 @@ export function EarthGlobe3D({
         let dTheta = t.theta - spherical.theta;
         while (dTheta > Math.PI) dTheta -= Math.PI * 2;
         while (dTheta < -Math.PI) dTheta += Math.PI * 2;
-        spherical.theta += dTheta * 0.08;
-        spherical.phi += (t.phi - spherical.phi) * 0.08;
-        spherical.radius += (t.radius - spherical.radius) * 0.08;
+        const lerpFactor = reducedMotion ? 1 : 0.08;
+        spherical.theta += dTheta * lerpFactor;
+        spherical.phi += (t.phi - spherical.phi) * lerpFactor;
+        spherical.radius += (t.radius - spherical.radius) * lerpFactor;
         if (
-          Math.abs(dTheta) < 0.005 &&
-          Math.abs(t.phi - spherical.phi) < 0.005 &&
-          Math.abs(t.radius - spherical.radius) < 0.25
+          reducedMotion ||
+          (Math.abs(dTheta) < 0.005 &&
+            Math.abs(t.phi - spherical.phi) < 0.005 &&
+            Math.abs(t.radius - spherical.radius) < 0.25)
         ) {
           cameraTargetRef.current = null;
         }
       } else if (
         autoRotateRef.current &&
+        !reducedMotion &&
         !isDragging &&
         spherical.radius > REGIONAL_ZOOM_EXIT_RADIUS
       ) {
@@ -1138,9 +1144,54 @@ export function EarthGlobe3D({
     }
   };
 
+  const handleGlobeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    const refs = sceneRefs.current;
+    if (!refs) return;
+    const stepTheta = 0.14;
+    const stepPhi = 0.11;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      cameraTargetRef.current = null;
+      refs.spherical.theta -= stepTheta;
+      setAutoRotate(false);
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      cameraTargetRef.current = null;
+      refs.spherical.theta += stepTheta;
+      setAutoRotate(false);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cameraTargetRef.current = null;
+      refs.spherical.phi = Math.max(0.2, refs.spherical.phi - stepPhi);
+      setAutoRotate(false);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cameraTargetRef.current = null;
+      refs.spherical.phi = Math.min(Math.PI - 0.2, refs.spherical.phi + stepPhi);
+      setAutoRotate(false);
+    } else if (e.key === "+" || e.key === "=") {
+      e.preventDefault();
+      adjustCameraRadius(-1);
+    } else if (e.key === "-" || e.key === "_") {
+      e.preventDefault();
+      adjustCameraRadius(32);
+    } else if (e.key === "0" || e.key === "Home") {
+      e.preventDefault();
+      resetCamera();
+    }
+  };
+
   return (
     <div className="etg-globe-void relative h-full w-full overflow-hidden select-none">
-      <div ref={containerRef} className="h-full w-full" aria-label="Interactive 3D Earth Globe" />
+      <div
+        ref={containerRef}
+        tabIndex={0}
+        role="region"
+        onKeyDown={handleGlobeKeyDown}
+        className="h-full w-full focus-visible:outline-2 focus-visible:outline-offset-[-4px] focus-visible:outline-[var(--accent-fg)]"
+        aria-label="Interactive 3D Earth Globe. Use Arrow keys to orbit, plus or minus to zoom, and Home to reset camera."
+      />
       <GlobeHudOverlays
         nodes={nodes}
         microscopeScan={microscopeScan}

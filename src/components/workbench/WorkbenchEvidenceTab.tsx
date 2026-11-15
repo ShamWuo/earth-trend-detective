@@ -175,7 +175,7 @@ export function WorkbenchEvidenceTab({
       <div className="grid grid-cols-2 gap-2">
         <div className="ws-inset p-2.5">
           <div className="ws-eyebrow">Mann-Kendall p</div>
-          <div className="font-mono text-sm font-semibold text-text-primary mt-0.5">
+          <div className="font-mono ws-numeric text-sm font-semibold text-text-primary mt-0.5">
             {typeof selectedNode.properties.p_value === "number"
               ? selectedNode.properties.p_value.toFixed(4)
               : "n/a"}
@@ -183,7 +183,7 @@ export function WorkbenchEvidenceTab({
         </div>
         <div className="ws-inset p-2.5">
           <div className="ws-eyebrow">Theil-Sen Slope</div>
-          <div className="font-mono text-sm font-semibold text-text-primary mt-0.5 flex items-center gap-1">
+          <div className="font-mono ws-numeric text-sm font-semibold text-text-primary mt-0.5 flex items-center gap-1">
             <TrendingUp className="h-3.5 w-3.5 text-teal-400" />
             {typeof selectedNode.properties.theil_sen_slope === "number"
               ? `${selectedNode.properties.theil_sen_slope >= 0 ? "+" : ""}${selectedNode.properties.theil_sen_slope.toFixed(3)}`
@@ -321,7 +321,7 @@ export function WorkbenchEvidenceTab({
             <button
               type="submit"
               disabled={busy}
-              className="w-full rounded-sm bg-amber-500 px-3 py-1.5 font-semibold text-black hover:bg-amber-400 cursor-pointer"
+              className="w-full rounded-sm border border-amber-400 bg-amber-950 px-3 py-1.5 font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
             >
               Record Supersedes Revision
             </button>
@@ -329,8 +329,23 @@ export function WorkbenchEvidenceTab({
         )}
       </div>
 
-      {localError && <div className="text-[11px] text-rose-400">{localError}</div>}
-      {localStatus && <div className="text-[11px] text-emerald-400">{localStatus}</div>}
+      {localError && (
+        <div
+          role="alert"
+          className="rounded-sm border border-rose-400 bg-rose-950 px-2.5 py-1.5 text-[11px] text-rose-300"
+        >
+          {localError}
+        </div>
+      )}
+      {localStatus && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-sm border border-emerald-400 bg-emerald-950 px-2.5 py-1.5 text-[11px] text-emerald-300"
+        >
+          {localStatus}
+        </div>
+      )}
     </div>
   );
 }
