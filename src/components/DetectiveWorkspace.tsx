@@ -174,12 +174,12 @@ export interface GuidedDipoleCase {
 export const GUIDED_DIPOLE_CASES: readonly GuidedDipoleCase[] = [
   {
     id: "enso-pacific-dipole",
-    shortLabel: "ENSO Rainfall Seesaw",
-    title: "ENSO Pacific Rainfall Seesaw",
+    shortLabel: "Indo-Pacific vs. Madagascar",
+    title: "Walker / ENSO Warm Pool vs. Madagascar Drying",
     subtitle:
-      "Warm Eastern Pacific boosts South American coastal moisture while suppressing Maritime Continent rainfall",
-    spotA: { lat: -12.05, lng: -77.04, dataset: "hydrology", name: "Lima / Coastal Peru" },
-    spotB: { lat: -12.46, lng: 130.84, dataset: "hydrology", name: "Darwin / Northern Australia" },
+      "Western Pacific warm-pool ocean warming contrasted with SW Indian Ocean / Madagascar canopy & moisture decline",
+    spotA: { lat: 2.0, lng: 145.0, dataset: "ocean_temp", name: "Indo-Pacific Warm Pool" },
+    spotB: { lat: -20.513, lng: 45.91, dataset: "deforestation", name: "SW Indian Ocean / Madagascar" },
   },
   {
     id: "arctic-north-atlantic",
@@ -192,12 +192,12 @@ export const GUIDED_DIPOLE_CASES: readonly GuidedDipoleCase[] = [
   },
   {
     id: "western-us-aridity-east-hydro",
-    shortLabel: "West VPD vs. Midwest Discharge",
-    title: "Western Fire Aridity vs. Midwest Discharge",
+    shortLabel: "West VPD vs. Plains River",
+    title: "Western Fire Aridity vs. Northern Plains Discharge",
     subtitle:
-      "Rising Vapor Pressure Deficit fuel aridity in the West vs. wetting river discharge trends in the Midwest",
+      "Rising Vapor Pressure Deficit fuel aridity in Northern California contrasted against Northern Plains river discharge shifts",
     spotA: { lat: 39.73, lng: -121.61, dataset: "wildfire", name: "Northern California Foothills" },
-    spotB: { lat: 37.0, lng: -89.18, dataset: "hydrology", name: "Lower Ohio / Mississippi Basin" },
+    spotB: { lat: 49.9, lng: -97.1, dataset: "hydrology", name: "Red River / Northern Plains" },
   },
   {
     id: "boulder-front-range-aridity",
@@ -1782,6 +1782,10 @@ export function DetectiveWorkspace({
         title: c.title,
         subtitle: c.subtitle,
         dataset: c.spotA.dataset,
+        spotAName: c.spotA.name,
+        spotBName: c.spotB.name,
+        spotACoord: { lat: c.spotA.lat, lng: c.spotA.lng },
+        spotBCoord: { lat: c.spotB.lat, lng: c.spotB.lng },
       })),
     []
   );
@@ -3004,6 +3008,7 @@ export function DetectiveWorkspace({
                 onToggleMobileCollapse={() => setMobileSheetCollapsed((v) => !v)}
                 enabledRelationCategories={enabledRelationCategories}
                 compareMode={compareMode}
+                comparePending={Boolean(probedCoord && comparePinB)}
                 guidedCases={guidedCaseItems}
                 activeCaseStudyId={activeCaseStudyId}
                 onSelectCaseStudy={handleSelectCaseStudyById}

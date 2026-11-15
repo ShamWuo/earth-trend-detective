@@ -151,6 +151,52 @@ function isNodeNearRegionalCenter(
 }
 
 /**
+ * Formats a NASA GIBS colorbar's min/mid/max/unit labels for the user's selected
+ * temperature unit (°C or °F), distinguishing absolute temperature vs. anomaly scales.
+ */
+export function formatGibsColorbarForUnit<
+  T extends {
+    minLabel: string;
+    midLabel?: string;
+    maxLabel: string;
+    unitLabel: string;
+  },
+>(colorbar: T, unit: TemperatureUnit): T {
+  const hasCelsius =
+    /°\s*c\b/i.test(colorbar.unitLabel) ||
+    /°\s*c\b/i.test(colorbar.minLabel) ||
+    /°\s*c\b/i.test(colorbar.maxLabel);
+  if (unit !== "F" || !hasCelsius) {
+    return colorbar;
+  }
+  const isAnom = /anom/i.test(colorbar.unitLabel);
+  const convertEndpoint = (raw: string): string =>
+    raw.replace(
+      /([+-]?\d+(?:\.\d+)?)(\+?)\s*°\s*C\b/gi,
+      (_m, numStr: string, plusSuffix: string) => {
+        const val = Number.parseFloat(numStr);
+        if (!Number.isFinite(val)) return _m;
+        if (isAnom) {
+          const scaled = val * 1.8;
+          const formatted = Number.isInteger(scaled) ? `${scaled}` : scaled.toFixed(1);
+          const sign = numStr.startsWith("+") && scaled > 0 ? "+" : "";
+          return `${sign}${formatted}${plusSuffix} °F`;
+        }
+        const fahr = Math.round(val * 1.8 + 32);
+        return `${fahr}${plusSuffix} °F`;
+      }
+    );
+
+  return {
+    ...colorbar,
+    minLabel: convertEndpoint(colorbar.minLabel),
+    midLabel: colorbar.midLabel ? convertEndpoint(colorbar.midLabel) : colorbar.midLabel,
+    maxLabel: convertEndpoint(colorbar.maxLabel),
+    unitLabel: colorbar.unitLabel.replace(/°\s*c\b/gi, "°F"),
+  };
+}
+
+/**
  * Selects a clean, legible subset of great-circle arcs to render on the 3D globe
  * so unfocused views stay crisp and focused relations stand out without clutter.
  */
@@ -2910,7 +2956,7 @@ export function EarthGlobe3D({
     resizeObs.observe(container);
 
     let animId = 0;
-    const clock = new THREE.Clock();
+    const startTimeMs = performance.now();
     let lastLabelSync = -1;
     let lastLabelSignature = "";
     let lastProbeLabelSignature = "";
@@ -2922,7 +2968,7 @@ export function EarthGlobe3D({
     const nodePosVec = new THREE.Vector3();
     const animate = () => {
       animId = requestAnimationFrame(animate);
-      const elapsed = clock.getElapsedTime();
+      const elapsed = (performance.now() - startTimeMs) * 0.001;
 
       if (cloudMesh.visible) {
         cloudMesh.rotation.y += 0.00018;
@@ -4252,7 +4298,7 @@ export function EarthGlobe3D({
       {!isRegionalZoom && (isMultiSliceFilter || activeGlobalMeta !== null) && (
         <section
           aria-label="Global NASA GIBS scientific Earth filter"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
+          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:left-[4.75rem] max-sm:w-[calc(100dvw-5.5rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -4358,26 +4404,28 @@ export function EarthGlobe3D({
               </div>
             </div>
           ) : (
-            activeGlobalMeta?.colorbar && (
-              <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
-                <div
-                  className="etg-colorbar-track h-2 w-full rounded-xs"
-                  style={{ background: activeGlobalMeta.colorbar.gradientCss }}
-                />
-                <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
-                  <span>{activeGlobalMeta.colorbar.minLabel}</span>
-                  {activeGlobalMeta.colorbar.midLabel && (
-                    <span className="text-text-subtle">{activeGlobalMeta.colorbar.midLabel}</span>
-                  )}
-                  <span>
-                    {activeGlobalMeta.colorbar.maxLabel}{" "}
-                    <span className="text-text-subtle">
-                      ({activeGlobalMeta.colorbar.unitLabel})
+            activeGlobalMeta?.colorbar &&
+            (() => {
+              const cb = formatGibsColorbarForUnit(activeGlobalMeta.colorbar, tempUnit);
+              return (
+                <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
+                  <div
+                    className="etg-colorbar-track h-2 w-full rounded-xs"
+                    style={{ background: cb.gradientCss }}
+                  />
+                  <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
+                    <span>{cb.minLabel}</span>
+                    {cb.midLabel && (
+                      <span className="text-text-subtle">{cb.midLabel}</span>
+                    )}
+                    <span>
+                      {cb.maxLabel}{" "}
+                      <span className="text-text-subtle">({cb.unitLabel})</span>
                     </span>
-                  </span>
+                  </div>
                 </div>
-              </div>
-            )
+              );
+            })()
           )}
 
           <div className={`flex flex-wrap gap-1 border-t border-border pt-1.5 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
@@ -4406,7 +4454,7 @@ export function EarthGlobe3D({
       {isRegionalZoom && (
         <section
           aria-label="Regional NASA GIBS satellite overlay"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
+          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:left-[4.75rem] max-sm:w-[calc(100dvw-5.5rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -4468,26 +4516,28 @@ export function EarthGlobe3D({
             <span>{regionalHud.dateIso}</span>
           </div>
 
-          {activeRegionalColorbar && (
-            <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
-              <div
-                className="etg-colorbar-track h-2 w-full rounded-xs"
-                style={{ background: activeRegionalColorbar.gradientCss }}
-              />
-              <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
-                <span>{activeRegionalColorbar.minLabel}</span>
-                {activeRegionalColorbar.midLabel && (
-                  <span className="text-text-subtle">{activeRegionalColorbar.midLabel}</span>
-                )}
-                <span>
-                  {activeRegionalColorbar.maxLabel}{" "}
-                  <span className="text-text-subtle">
-                    ({activeRegionalColorbar.unitLabel})
-                  </span>
-                </span>
-              </div>
-            </div>
-          )}
+          {activeRegionalColorbar &&
+            (() => {
+              const cb = formatGibsColorbarForUnit(activeRegionalColorbar, tempUnit);
+              return (
+                <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
+                  <div
+                    className="etg-colorbar-track h-2 w-full rounded-xs"
+                    style={{ background: cb.gradientCss }}
+                  />
+                  <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
+                    <span>{cb.minLabel}</span>
+                    {cb.midLabel && (
+                      <span className="text-text-subtle">{cb.midLabel}</span>
+                    )}
+                    <span>
+                      {cb.maxLabel}{" "}
+                      <span className="text-text-subtle">({cb.unitLabel})</span>
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
 
           <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-subtle ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
             <span className="inline-flex items-center gap-1">
@@ -4565,7 +4615,13 @@ export function EarthGlobe3D({
       <div
         className={`pointer-events-none absolute bottom-2 left-2 right-2 z-10 flex flex-wrap items-end justify-between gap-2 sm:bottom-3 sm:left-14 sm:right-4 ${
           inspectorOpen ? "sm:right-[25.75rem] lg:right-[26.25rem]" : ""
-        } ${mobileSheetExpanded ? "max-sm:hidden" : ""}`}
+        } ${
+          mobileSheetExpanded
+            ? "max-sm:hidden"
+            : inspectorOpen
+              ? "max-sm:bottom-[7.75rem]"
+              : ""
+        }`}
       >
         <div className="pointer-events-auto relative flex flex-col items-start gap-1.5">
           {(() => {

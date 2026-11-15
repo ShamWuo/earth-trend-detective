@@ -18,7 +18,7 @@ export function VariableGuidePopoverButton({
   const [guideOpen, setGuideOpen] = useState(false);
 
   return (
-    <>
+    <span className="etg-guide-scope inline-flex">
       <button
         type="button"
         popoverTarget={guideId}
@@ -88,7 +88,7 @@ export function VariableGuidePopoverButton({
           ))}
         </dl>
       </div>
-    </>
+    </span>
   );
 }
 

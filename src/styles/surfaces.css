@@ -16,6 +16,10 @@
 }
 
 /* Native Popover API + CSS Anchor Positioning (progressive enhancement per MDN / web.dev) */
+.etg-guide-scope {
+  anchor-scope: --etg-guide-anchor;
+}
+
 .etg-guide-trigger {
   anchor-name: --etg-guide-anchor;
 }

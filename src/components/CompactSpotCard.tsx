@@ -103,6 +103,10 @@ export interface GuidedCaseStudyItem {
   title: string;
   subtitle: string;
   dataset: ETGDatasetId;
+  spotAName?: string;
+  spotBName?: string;
+  spotACoord?: { lat: number; lng: number };
+  spotBCoord?: { lat: number; lng: number };
 }
 
 interface CompactSpotCardProps {
@@ -129,6 +133,7 @@ interface CompactSpotCardProps {
   onToggleMobileCollapse?: () => void;
   enabledRelationCategories?: ReadonlyArray<RelationCategory>;
   compareMode: boolean;
+  comparePending?: boolean;
   activeTopics: ETGDatasetId[];
   loading: boolean;
   error: string | null;
@@ -578,6 +583,7 @@ export function CompactSpotCard({
   onToggleMobileCollapse,
   enabledRelationCategories,
   compareMode,
+  comparePending = false,
   activeTopics,
   loading,
   error,
@@ -914,15 +920,26 @@ export function CompactSpotCard({
   }, [selectedNode, allEdges, nodeMap]);
 
   // Header title & labels
+  const activeGuidedCase = useMemo(
+    () => (activeCaseStudyId ? guidedCases?.find((c) => c.id === activeCaseStudyId) ?? null : null),
+    [activeCaseStudyId, guidedCases]
+  );
   const isComparingTwoSpots = Boolean(comparison && primary && secondary);
-  const labelA =
+  const isCompareHeader = isComparingTwoSpots || Boolean(comparePending && loading);
+  const rawLabelA =
+    activeGuidedCase?.spotAName ||
     (sourceNode?.properties.region && !sourceNode.properties.region.includes("°")
       ? sourceNode.properties.region
       : sourceNode
         ? humanizeNodeText(sourceNode.properties.name)
         : null) ||
-    (primary ? describeGeographicZone(primary.lat, primary.lng, nearbyMatching[0]?.node) : "Spot A");
-  const labelB =
+    (primary
+      ? describeGeographicZone(primary.lat, primary.lng, nearbyMatching[0]?.node)
+      : coord
+        ? describeGeographicZone(coord.lat, coord.lng, nearbyMatching[0]?.node)
+        : "Spot A");
+  const rawLabelB =
+    activeGuidedCase?.spotBName ||
     (targetNode?.properties.region && !targetNode.properties.region.includes("°")
       ? targetNode.properties.region
       : targetNode
@@ -930,7 +947,18 @@ export function CompactSpotCard({
         : null) ||
     (secondary ? describeGeographicZone(secondary.lat, secondary.lng, null) : "Spot B");
 
-  const cardTitle = isComparingTwoSpots
+  const needZoneDisambiguation =
+    isComparingTwoSpots && rawLabelA === rawLabelB && Boolean(primary && secondary);
+  const labelA =
+    needZoneDisambiguation && primary
+      ? `${rawLabelA} (${formatCoordShort(primary.lat, primary.lng)})`
+      : rawLabelA;
+  const labelB =
+    needZoneDisambiguation && secondary
+      ? `${rawLabelB} (${formatCoordShort(secondary.lat, secondary.lng)})`
+      : rawLabelB;
+
+  const cardTitle = isCompareHeader
     ? `${labelA} ↔ ${labelB}`
     : selectedNode
       ? humanizeNodeText(selectedNode.properties.name)
@@ -1338,7 +1366,7 @@ export function CompactSpotCard({
           role="group"
           aria-label="Toggle spot card sections"
         >
-          {(isComparingTwoSpots
+          {(isCompareHeader
             ? ([
                 { key: "showChart", label: "Chart" },
                 { key: "showScience", label: "Stats" },
@@ -1578,7 +1606,9 @@ export function CompactSpotCard({
               <div className="space-y-1.5 rounded-sm border border-border bg-surface-inset p-2">
                 <div className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-text-subtle">
                   <span>Guided Opposite-Trend Case Studies</span>
-                  <span className="font-mono text-[9px] text-accent-fg">3 NASA Cases</span>
+                  <span className="font-mono text-[9px] text-accent-fg">
+                    {guidedCases.length} NASA Cases
+                  </span>
                 </div>
                 <div className="flex flex-wrap gap-1" role="group" aria-label="Switch guided Earth case study">
                   {guidedCases.map((c) => {
@@ -2284,29 +2314,56 @@ export function CompactSpotCard({
                   </div>
 
                   <div className="ws-numeric grid grid-cols-2 gap-1.5 font-mono text-[11px]">
-                    {selectedNode.properties.value !== undefined && (
-                      <div className="rounded-sm border border-border-subtle bg-surface px-2 py-1">
-                        <span className="block font-sans text-[10px] text-text-subtle">
-                          Latest Value
-                        </span>
-                        <span className="font-semibold text-text-primary">
-                          {selectedNode.properties.value.toFixed(2)}
-                          {selectedNode.properties.unit ? ` ${selectedNode.properties.unit}` : ""}
-                        </span>
-                      </div>
-                    )}
-                    {selectedNode.properties.theil_sen_slope !== undefined && (
-                      <div className="rounded-sm border border-border-subtle bg-surface px-2 py-1">
-                        <span className="block font-sans text-[10px] text-text-subtle">
-                          Theil-Sen Slope
-                        </span>
-                        <span className="font-semibold text-text-primary">
-                          {selectedNode.properties.theil_sen_slope >= 0 ? "+" : ""}
-                          {selectedNode.properties.theil_sen_slope.toFixed(3)}{" "}
-                          {selectedNode.properties.slope_unit ?? "/ yr"}
-                        </span>
-                      </div>
-                    )}
+                    {selectedNode.properties.value !== undefined &&
+                      (() => {
+                        const rawUnit = selectedNode.properties.unit ?? "";
+                        const convVal = isTemperatureUnitString(rawUnit)
+                          ? convertTemperatureDisplayValue(
+                              selectedNode.properties.value,
+                              rawUnit,
+                              tempUnit
+                            )
+                          : selectedNode.properties.value;
+                        const convUnit = isTemperatureUnitString(rawUnit)
+                          ? convertTemperatureUnitLabel(rawUnit, tempUnit)
+                          : rawUnit;
+                        return (
+                          <div className="rounded-sm border border-border-subtle bg-surface px-2 py-1">
+                            <span className="block font-sans text-[10px] text-text-subtle">
+                              Latest Value
+                            </span>
+                            <span className="font-semibold text-text-primary">
+                              {convVal.toFixed(2)}
+                              {convUnit ? ` ${convUnit}` : ""}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    {selectedNode.properties.theil_sen_slope !== undefined &&
+                      (() => {
+                        const rawSlope = selectedNode.properties.theil_sen_slope;
+                        const rawSlopeUnit = selectedNode.properties.slope_unit ?? "/ yr";
+                        const isC = /(?:°\s*c|deg\s*c|celsius)/i.test(rawSlopeUnit);
+                        const isF = /(?:°\s*f|deg\s*f|fahrenheit)/i.test(rawSlopeUnit);
+                        const factor =
+                          tempUnit === "F" && isC ? 1.8 : tempUnit === "C" && isF ? 1 / 1.8 : 1;
+                        const convSlope = rawSlope * factor;
+                        const convSlopeUnit =
+                          isC || isF
+                            ? convertSlopeUnitLabel(rawSlopeUnit, tempUnit)
+                            : rawSlopeUnit;
+                        return (
+                          <div className="rounded-sm border border-border-subtle bg-surface px-2 py-1">
+                            <span className="block font-sans text-[10px] text-text-subtle">
+                              Theil-Sen Slope
+                            </span>
+                            <span className="font-semibold text-text-primary">
+                              {convSlope >= 0 ? "+" : ""}
+                              {convSlope.toFixed(3)} {convSlopeUnit}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     {selectedNode.properties.p_value !== undefined && (
                       <div className="rounded-sm border border-border-subtle bg-surface px-2 py-1">
                         <span className="block font-sans text-[10px] text-text-subtle">
@@ -2979,11 +3036,22 @@ export function CompactSpotCard({
                   <p className="text-[11px] text-rose-300">{spotPredError}</p>
                 )}
 
-                {spotPrediction && (
+                {spotPrediction &&
+                  (() => {
+                    const predIsTemp = isTemperatureUnitString(spotPrediction.unit);
+                    const predUnit = predIsTemp
+                      ? convertTemperatureUnitLabel(spotPrediction.unit, tempUnit)
+                      : spotPrediction.unit;
+                    const fmtPred = (v: number) =>
+                      (predIsTemp
+                        ? convertTemperatureDisplayValue(v, spotPrediction.unit, tempUnit)
+                        : v
+                      ).toFixed(2);
+                    return (
                   <div className="space-y-1.5 border-t border-sky-800 pt-2">
                     <div className="flex flex-wrap items-baseline justify-between gap-1.5">
                       <span className="font-mono text-sm font-bold text-text-primary">
-                        {spotPrediction.recommendedForecastValue.toFixed(2)} {spotPrediction.unit}
+                        {fmtPred(spotPrediction.recommendedForecastValue)} {predUnit}
                         <span className="ml-1.5 text-[10px] font-normal text-text-muted">
                           ({spotPrediction.nextForecast.nextPeriodLabel})
                         </span>
@@ -2996,9 +3064,9 @@ export function CompactSpotCard({
 
                     {spotPrediction.quantiles && (
                       <div className="font-mono text-[10px] text-sky-200">
-                        P10 {spotPrediction.quantiles.p10.toFixed(2)} · P50{" "}
-                        {spotPrediction.quantiles.p50.toFixed(2)} · P90{" "}
-                        {spotPrediction.quantiles.p90.toFixed(2)} {spotPrediction.unit}
+                        P10 {fmtPred(spotPrediction.quantiles.p10)} · P50{" "}
+                        {fmtPred(spotPrediction.quantiles.p50)} · P90{" "}
+                        {fmtPred(spotPrediction.quantiles.p90)} {predUnit}
                       </div>
                     )}
 
@@ -3028,7 +3096,8 @@ export function CompactSpotCard({
                         )}
                     </div>
                   </div>
-                )}
+                    );
+                  })()}
               </div>
             )}
 

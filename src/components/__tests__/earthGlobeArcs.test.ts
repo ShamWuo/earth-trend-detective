@@ -4,6 +4,7 @@ import {
   buildElevatedGreatCircleCurve,
   createDynamicTextureTracker,
   disposeGroupResources,
+  formatGibsColorbarForUnit,
   resolveComparisonArcVisuals,
   selectVisibleGlobeArcs,
 } from "@/components/EarthGlobe3D";
@@ -349,6 +350,9 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
       expect(
         Math.hypot(item.spotA.lat - item.spotB.lat, item.spotA.lng - item.spotB.lng)
       ).toBeGreaterThan(0.1);
+      expect(item.spotA.name.trim().length).toBeGreaterThan(0);
+      expect(item.spotB.name.trim().length).toBeGreaterThan(0);
+      expect(item.spotA.name).not.toBe(item.spotB.name);
     }
   });
 
@@ -455,5 +459,42 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
     expect(sharedDisposeSpy).not.toHaveBeenCalled();
 
     sharedTex.dispose();
+  });
+
+  it("formats GIBS thermal & anomaly colorbars cleanly in Celsius and Fahrenheit", () => {
+    const absCb = {
+      minLabel: "-2 °C",
+      midLabel: "18 °C",
+      maxLabel: "38+ °C",
+      unitLabel: "Sea Surface Temp (°C)",
+    };
+    expect(formatGibsColorbarForUnit(absCb, "C")).toEqual(absCb);
+    expect(formatGibsColorbarForUnit(absCb, "F")).toEqual({
+      minLabel: "28 °F",
+      midLabel: "64 °F",
+      maxLabel: "100+ °F",
+      unitLabel: "Sea Surface Temp (°F)",
+    });
+
+    const anomCb = {
+      minLabel: "-4 °C",
+      midLabel: "0 °C",
+      maxLabel: "+4 °C",
+      unitLabel: "SST Anomaly (°C)",
+    };
+    expect(formatGibsColorbarForUnit(anomCb, "F")).toEqual({
+      minLabel: "-7.2 °F",
+      midLabel: "0 °F",
+      maxLabel: "+7.2 °F",
+      unitLabel: "SST Anomaly (°F)",
+    });
+
+    const ndviCb = {
+      minLabel: "0.0",
+      midLabel: "0.45",
+      maxLabel: "0.9",
+      unitLabel: "NDVI",
+    };
+    expect(formatGibsColorbarForUnit(ndviCb, "F")).toEqual(ndviCb);
   });
 });
