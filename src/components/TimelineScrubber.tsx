@@ -30,6 +30,11 @@ export function TimelineScrubber({
   const safeMax = Math.max(maxMs, safeMin + 86_400_000);
   const clampedCutoff = Math.max(safeMin, Math.min(safeMax, cutoffMs));
 
+  const cutoffRef = useRef(clampedCutoff);
+  cutoffRef.current = clampedCutoff;
+  const onChangeCutoffRef = useRef(onChangeCutoff);
+  onChangeCutoffRef.current = onChangeCutoff;
+
   // Sync CSS custom properties on the range input for WebKit/Blink & fallback browsers
   useEffect(() => {
     const el = rangeRef.current;
@@ -44,15 +49,18 @@ export function TimelineScrubber({
     const span = safeMax - safeMin;
     const stepMs = (span / 65) * speedMultiplier;
     const timer = window.setInterval(() => {
-      onChangeCutoff(
-        clampedCutoff + stepMs >= safeMax ? safeMax : clampedCutoff + stepMs
-      );
-      if (clampedCutoff + stepMs >= safeMax) {
+      const next = cutoffRef.current + stepMs;
+      if (next >= safeMax) {
+        cutoffRef.current = safeMax;
+        onChangeCutoffRef.current(safeMax);
         setIsPlaying(false);
+      } else {
+        cutoffRef.current = next;
+        onChangeCutoffRef.current(next);
       }
     }, 110);
     return () => window.clearInterval(timer);
-  }, [isPlaying, clampedCutoff, safeMin, safeMax, speedMultiplier, onChangeCutoff]);
+  }, [isPlaying, safeMin, safeMax, speedMultiplier]);
 
   const togglePlay = () => {
     if (!isPlaying && clampedCutoff >= safeMax - 3_600_000) {
@@ -141,6 +149,10 @@ export function TimelineScrubber({
             step={86_400_000}
             value={clampedCutoff}
             aria-valuetext={`Cutoff date: ${formattedDate} — ${visibleCount} of ${nodes.length} nodes active`}
+            onInput={(e) => {
+              const inputEl = e.currentTarget;
+              inputEl.style.setProperty("--control-value", inputEl.value);
+            }}
             onChange={(e) => {
               setIsPlaying(false);
               onChangeCutoff(Number(e.target.value));

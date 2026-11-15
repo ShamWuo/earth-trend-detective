@@ -279,6 +279,12 @@ export interface TrendAnalysisSummary {
   ols: OlsRegressionResult;
   changePoint: PettittChangePointResult | null;
   seasonalAnalysis?: SeasonalMannKendallResult | null;
+  seasonalPoints?: Array<{
+    date: string;
+    t: number;
+    value: number;
+    anomalyValue: number;
+  }>;
   verdict:
     | "Statistically Significant Increasing Trend"
     | "Statistically Significant Decreasing Trend"

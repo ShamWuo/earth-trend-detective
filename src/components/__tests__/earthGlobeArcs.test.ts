@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
   buildElevatedGreatCircleCurve,
+  createDynamicTextureTracker,
+  disposeGroupResources,
+  resolveComparisonArcVisuals,
   selectVisibleGlobeArcs,
 } from "@/components/EarthGlobe3D";
-import { computeDipoleFramingTarget } from "@/components/DetectiveWorkspace";
+import {
+  GUIDED_DIPOLE_CASES,
+  computeDipoleFramingTarget,
+} from "@/components/DetectiveWorkspace";
 import type { ETGEdge, ETGNode, ETGRelationshipType } from "@/types/etg";
 
 function makeGeoNode(uuid: string, lat: number, lng: number): ETGNode {
@@ -328,5 +334,126 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
     expect(target.lng < -130 || target.lng > 160).toBe(true);
     expect(target.radius).toBeGreaterThanOrEqual(248);
     expect(target.radius).toBeLessThanOrEqual(295);
+  });
+
+  it("includes guided Space Apps case studies with distinct opposite-trend endpoints", () => {
+    const ids = GUIDED_DIPOLE_CASES.map((c) => c.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        "enso-pacific-dipole",
+        "arctic-north-atlantic",
+        "western-us-aridity-east-hydro",
+      ])
+    );
+    for (const item of GUIDED_DIPOLE_CASES) {
+      expect(
+        Math.hypot(item.spotA.lat - item.spotB.lat, item.spotA.lng - item.spotB.lng)
+      ).toBeGreaterThan(0.1);
+    }
+  });
+
+  it("resolves distinct comparison arc visual styles by category and significance", () => {
+    const sigOpposite = resolveComparisonArcVisuals({
+      category: "opposite",
+      badgeText: "Drives Opposite",
+      pairLabel: "Lima ↔ Darwin",
+      statText: "r = -0.78 · p = 0.004",
+      isSignificant: true,
+    });
+    const weakOpposite = resolveComparisonArcVisuals({
+      category: "opposite",
+      badgeText: "Drives Opposite",
+      pairLabel: "A ↔ B",
+      statText: null,
+      isSignificant: false,
+    });
+    expect(sigOpposite.colorCss).toBe("#fb7185");
+    expect(sigOpposite.coreRadius).toBeGreaterThan(weakOpposite.coreRadius);
+    expect(sigOpposite.haloOpacity).toBeGreaterThan(weakOpposite.haloOpacity);
+
+    const causal = resolveComparisonArcVisuals({
+      category: "causal",
+      badgeText: "Drives",
+      pairLabel: "A → B",
+      statText: "r = +0.71",
+      isSignificant: true,
+    });
+    expect(causal.colorCss).toBe("#34d399");
+
+    const coupled = resolveComparisonArcVisuals({
+      category: "coupled",
+      badgeText: "Co-Trending",
+      pairLabel: "A ↔ B",
+      statText: null,
+    });
+    expect(coupled.colorCss).toBe("#38bdf8");
+
+    const fallback = resolveComparisonArcVisuals(null);
+    expect(fallback.colorCss).toBe("#22d3ee");
+  });
+
+  it("defers GPU disposal for uniform-bound evicted textures until unbound", () => {
+    const texA = { id: "a", dispose: vi.fn() };
+    const texB = { id: "b", dispose: vi.fn() };
+    const bound = new Set([texA]);
+
+    const tracker = createDynamicTextureTracker<typeof texA>((tex) => bound.has(tex));
+    tracker.register(texA);
+    tracker.register(texB);
+    expect(tracker.activeCount()).toBe(2);
+
+    // Evicting texA while still referenced by shader uniform queues deferred disposal
+    expect(tracker.evictFromCache(texA)).toBe(false);
+    expect(texA.dispose).not.toHaveBeenCalled();
+    expect(tracker.pendingCount()).toBe(1);
+
+    // Once uniform swaps away from texA, releaseUnbound() frees GPU texture
+    bound.delete(texA);
+    expect(tracker.releaseUnbound()).toBe(1);
+    expect(texA.dispose).toHaveBeenCalledTimes(1);
+    expect(tracker.pendingCount()).toBe(0);
+    expect(tracker.activeCount()).toBe(1);
+
+    // Unmount cleanup disposes remaining tracked textures
+    expect(tracker.disposeAll()).toBe(1);
+    expect(texB.dispose).toHaveBeenCalledTimes(1);
+    expect(tracker.activeCount()).toBe(0);
+  });
+
+  it("recursively disposes nested Group meshes and Points while preserving shared textures", () => {
+    const sharedTex = new THREE.Texture();
+    const ownedTex = new THREE.Texture();
+    const sharedDisposeSpy = vi.spyOn(sharedTex, "dispose");
+    const ownedDisposeSpy = vi.spyOn(ownedTex, "dispose");
+
+    const root = new THREE.Group();
+    const nested = new THREE.Group();
+
+    const meshGeo = new THREE.BufferGeometry();
+    const meshMat = new THREE.MeshBasicMaterial({ map: ownedTex });
+    const meshGeoSpy = vi.spyOn(meshGeo, "dispose");
+    const meshMatSpy = vi.spyOn(meshMat, "dispose");
+    nested.add(new THREE.Mesh(meshGeo, meshMat));
+
+    const ptsGeo = new THREE.BufferGeometry();
+    const ptsMat = new THREE.PointsMaterial({ map: sharedTex, size: 2 });
+    const ptsGeoSpy = vi.spyOn(ptsGeo, "dispose");
+    const ptsMatSpy = vi.spyOn(ptsMat, "dispose");
+    nested.add(new THREE.Points(ptsGeo, ptsMat));
+
+    root.add(nested);
+
+    disposeGroupResources(root, new Set([sharedTex]));
+
+    expect(root.children).toHaveLength(0);
+    expect(nested.children).toHaveLength(0);
+    expect(meshGeoSpy).toHaveBeenCalledTimes(1);
+    expect(meshMatSpy).toHaveBeenCalledTimes(1);
+    expect(ownedDisposeSpy).toHaveBeenCalledTimes(1);
+    expect(ptsGeoSpy).toHaveBeenCalledTimes(1);
+    expect(ptsMatSpy).toHaveBeenCalledTimes(1);
+    expect(sharedDisposeSpy).not.toHaveBeenCalled();
+
+    sharedTex.dispose();
   });
 });

@@ -13,9 +13,11 @@ import {
   computeGlobalWmtsMosaicSpec,
   computeRegionalTileSpec,
   estimateRegionalSwathKm,
+  getGibsLayerColorbar,
   resolveActiveGibsLayer,
   resolveGibsDateIso,
   resolveGlobalFilterLayer,
+  resolveGlobalSyncSignature,
   type ActiveGibsLayerId,
 } from "@/lib/earth/nasaGibsRegional";
 
@@ -281,5 +283,57 @@ describe("nasaGibsRegional", () => {
       expect(q.proxyUrl).toContain("width=2048");
       expect(q.proxyUrl).toContain("height=1024");
     }
+  });
+
+  it("exposes legible colorbar metadata for every GIBS layer including night_viirs", () => {
+    expect(getGibsLayerColorbar(null)).toBeNull();
+
+    const colorbarLayers: ActiveGibsLayerId[] = [
+      "winds",
+      "precip",
+      "thermal",
+      "sst_anomaly",
+      "air_temp",
+      "aerosols",
+      "ndvi",
+      "night_viirs",
+    ];
+    for (const id of colorbarLayers) {
+      const cb = getGibsLayerColorbar(id);
+      expect(cb).not.toBeNull();
+      expect(cb!.gradientCss).toContain("linear-gradient(");
+      expect(cb!.unitLabel.length).toBeGreaterThan(0);
+      expect(cb!.minLabel.length).toBeGreaterThan(0);
+      expect(cb!.midLabel.length).toBeGreaterThan(0);
+      expect(cb!.maxLabel.length).toBeGreaterThan(0);
+    }
+
+    const nightBar = getGibsLayerColorbar("night_viirs");
+    expect(nightBar!.unitLabel).toBe("nW/cm²·sr");
+    expect(nightBar!.maxLabel).toBe("100+");
+  });
+
+  it("deduplicates intra-month timeline scrub ticks while tracking daily multi_slice steps", () => {
+    const nowMs = Date.UTC(2026, 10, 15, 12, 0, 0);
+
+    expect(resolveGlobalSyncSignature("off", [], Date.UTC(2024, 5, 10), nowMs)).toBe("off");
+
+    // Monthly MERRA-2 winds stay invariant within the same UTC month
+    const julyEarly = Date.UTC(2024, 6, 3);
+    const julyLate = Date.UTC(2024, 6, 28);
+    const augMid = Date.UTC(2024, 7, 15);
+    const sigEarly = resolveGlobalSyncSignature("winds", [], julyEarly, nowMs);
+    const sigLate = resolveGlobalSyncSignature("winds", [], julyLate, nowMs);
+    const sigAug = resolveGlobalSyncSignature("winds", [], augMid, nowMs);
+    expect(sigEarly).toBe(sigLate);
+    expect(sigAug).not.toBe(sigEarly);
+
+    // multi_slice tracks daily updates across precip and cloud layers
+    const dayOne = Date.UTC(2025, 2, 10);
+    const dayTwo = Date.UTC(2025, 2, 11);
+    const sliceOne = resolveGlobalSyncSignature("multi_slice", [], dayOne, nowMs);
+    const sliceTwo = resolveGlobalSyncSignature("multi_slice", [], dayTwo, nowMs);
+    expect(sliceOne).toMatch(/^multi_slice:/);
+    expect(sliceTwo).not.toBe(sliceOne);
   });
 });

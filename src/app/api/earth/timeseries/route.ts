@@ -5,6 +5,7 @@ import {
 } from "@/lib/earth/currentConditionsClient";
 import { getEtgStore } from "@/lib/graph/etgStore";
 import {
+  enrichSummaryWithMonthlySeasonality,
   fetchEarthTimeSeries,
   fetchMultiDatasetSummariesDetailed,
   isTelemetryUnavailableError,
@@ -44,7 +45,7 @@ function analyzeEmbeddedNodeSeries(
     node.properties.provenance_source || "Empirical Dataset (Imported)";
   const { unit, slopeUnit } = inferEmbeddedSeriesUnits(node.properties);
 
-  return analyzeTimeSeries(series, {
+  const summary = analyzeTimeSeries(series, {
     lat: node.properties.lat,
     lng: node.properties.lng,
     dataset: node.properties.dataset || "nasa_power",
@@ -53,6 +54,14 @@ function analyzeEmbeddedNodeSeries(
     slopeUnit,
     provenance,
   });
+
+  if (!summary.seasonalAnalysis) {
+    const monthSeries = store.getNodeMultiScaleSeries(node.uuid, "month");
+    if (monthSeries && monthSeries.length >= 18) {
+      return enrichSummaryWithMonthlySeasonality(summary, monthSeries);
+    }
+  }
+  return summary;
 }
 
 export async function GET(req: NextRequest) {

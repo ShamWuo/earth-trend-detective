@@ -579,6 +579,11 @@ input[type="range"].etg-slider:focus-visible {
   background: radial-gradient(circle at 50% 48%, #1e3a5f 0%, #102038 62%, #0a1424 100%);
 }
 
+.etg-colorbar-track {
+  border: 1px solid color-mix(in srgb, var(--text-primary) 18%, transparent);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+
 /* ─── Animated Causal Flow Lines (Respecting Reduced Motion) ─── */
 @media (prefers-reduced-motion: no-preference) {
   @keyframes etg-causal-dash {

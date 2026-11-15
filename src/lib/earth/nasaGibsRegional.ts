@@ -397,6 +397,13 @@ export const GIBS_LAYERS: Record<ActiveGibsLayerId, GibsLayerDescriptor> = {
     minEpochMs: Date.UTC(2012, 1, 1),
     isDataLayer: true,
     shaderMode: 9,
+    colorbar: {
+      gradientCss: "linear-gradient(90deg, #050814, #1d3557, #fbbf24, #fef3c7)",
+      minLabel: "0",
+      midLabel: "25",
+      maxLabel: "100+",
+      unitLabel: "nW/cm²·sr",
+    },
     wmtsZoom: 3,
     wmtsSubLayers: [
       {
@@ -803,4 +810,46 @@ export function estimateRegionalSwathKm(cameraRadius: number): number {
     (clamped - MIN_GLOBE_CAMERA_RADIUS) /
     (REGIONAL_ZOOM_EXIT_RADIUS - MIN_GLOBE_CAMERA_RADIUS);
   return Math.round(420 + frac * 1480);
+}
+
+/**
+ * Returns the physical colorbar metadata for a NASA GIBS layer, or null for pure RGB layers.
+ */
+export function getGibsLayerColorbar(
+  layerId: ActiveGibsLayerId | null
+): GibsLayerColorbar | null {
+  if (!layerId) return null;
+  return GIBS_LAYERS[layerId]?.colorbar ?? null;
+}
+
+/**
+ * Computes a deduplication key for global GIBS/atmospheric layer updates so intra-day or
+ * intra-month timeline scrubbing ticks do not trigger redundant global texture fetches.
+ */
+export function resolveGlobalSyncSignature(
+  mode: RegionalSatelliteMode,
+  activeTopics?: readonly ETGDatasetId[],
+  cutoffMs?: number,
+  nowMs: number = Date.now()
+): string {
+  if (mode === "off") return "off";
+  if (mode === "multi_slice") {
+    const windsDate = resolveGibsDateIso("winds", cutoffMs, nowMs);
+    const precipDate = resolveGibsDateIso("precip", cutoffMs, nowMs);
+    const cloudsDate = resolveGibsDateIso("true_color", cutoffMs, nowMs);
+    return `multi_slice:${windsDate}|${precipDate}|${cloudsDate}`;
+  }
+  const layerId = resolveGlobalFilterLayer(mode, activeTopics);
+  if (!layerId) {
+    return `${mode}:none`;
+  }
+  const layer = GIBS_LAYERS[layerId];
+  const dateIso = resolveGibsDateIsoWithOptions(
+    layer,
+    cutoffMs,
+    nowMs,
+    layer.globalLagDays ?? layer.lagDays,
+    Boolean(layer.globalMonthly ?? layer.monthly)
+  );
+  return `${mode}:${layerId}:${dateIso}`;
 }

@@ -3,6 +3,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
+  ChevronDown,
+  ChevronUp,
   Cloud,
   GitBranch,
   GitCompare,
@@ -30,9 +32,11 @@ import {
   computeGlobalWmtsMosaicSpec,
   computeRegionalTileSpec,
   estimateRegionalSwathKm,
+  getGibsLayerColorbar,
   resolveActiveGibsLayer,
   resolveGibsDateIso,
   resolveGlobalFilterLayer,
+  resolveGlobalSyncSignature,
   type ActiveGibsLayerId,
   type GlobalLayerSpec,
   type GlobalWmtsMosaicSpec,
@@ -94,7 +98,9 @@ interface EarthGlobe3DProps {
   probedCoord: { lat: number; lng: number } | null;
   comparePinB?: { lat: number; lng: number } | null;
   compareMode?: boolean;
+  comparisonArcMeta?: ComparisonArcVisualMeta | null;
   inspectorOpen?: boolean;
+  mobileSheetExpanded?: boolean;
   enabledCategories?: ReadonlyArray<RelationCategory>;
   onChangeEnabledCategories?: (cats: RelationCategory[]) => void;
   tempUnit?: TemperatureUnit;
@@ -501,16 +507,169 @@ export function buildElevatedGreatCircleCurve(
   return pts;
 }
 
-function disposeGroupResources(group: THREE.Group, skipTextures: Set<THREE.Texture>) {
+export interface ComparisonArcVisualMeta {
+  category: RelationCategory;
+  badgeText: string;
+  pairLabel: string;
+  statText: string | null;
+  isSignificant?: boolean;
+}
+
+export interface ResolvedComparisonArcVisuals {
+  colorHex: number;
+  colorCss: string;
+  haloOpacity: number;
+  coreRadius: number;
+  haloRadius: number;
+  pulseSpeed: number;
+  pulseColorHex: number;
+}
+
+/**
+ * Resolves 3D tube, additive halo, and traveling pulse styling for active 2-spot or case-study arcs.
+ */
+export function resolveComparisonArcVisuals(
+  meta?: ComparisonArcVisualMeta | null
+): ResolvedComparisonArcVisuals {
+  if (!meta) {
+    return {
+      colorHex: 0x22d3ee,
+      colorCss: "#22d3ee",
+      haloOpacity: 0.16,
+      coreRadius: 0.34,
+      haloRadius: 0.64,
+      pulseSpeed: 0.28,
+      pulseColorHex: 0x67e8f9,
+    };
+  }
+  if (meta.category === "opposite") {
+    return {
+      colorHex: 0xfb7185,
+      colorCss: "#fb7185",
+      haloOpacity: meta.isSignificant ? 0.26 : 0.18,
+      coreRadius: meta.isSignificant ? 0.44 : 0.36,
+      haloRadius: meta.isSignificant ? 0.86 : 0.68,
+      pulseSpeed: 0.34,
+      pulseColorHex: 0xfda4af,
+    };
+  }
+  if (meta.category === "causal") {
+    return {
+      colorHex: 0x34d399,
+      colorCss: "#34d399",
+      haloOpacity: meta.isSignificant ? 0.24 : 0.16,
+      coreRadius: meta.isSignificant ? 0.42 : 0.34,
+      haloRadius: meta.isSignificant ? 0.82 : 0.64,
+      pulseSpeed: 0.34,
+      pulseColorHex: 0x6ee7b7,
+    };
+  }
+  return {
+    colorHex: 0x38bdf8,
+    colorCss: "#38bdf8",
+    haloOpacity: meta.isSignificant ? 0.22 : 0.14,
+    coreRadius: meta.isSignificant ? 0.38 : 0.32,
+    haloRadius: meta.isSignificant ? 0.72 : 0.6,
+    pulseSpeed: 0.26,
+    pulseColorHex: 0x7dd3fc,
+  };
+}
+
+export interface DisposableTexture {
+  dispose: () => void;
+}
+
+export interface DynamicTextureTracker<T extends DisposableTexture> {
+  register: (tex: T | null | undefined) => void;
+  evictFromCache: (tex: T | null | undefined) => boolean;
+  releaseUnbound: () => number;
+  disposeAll: () => number;
+  pendingCount: () => number;
+  activeCount: () => number;
+}
+
+/**
+ * Tracks GPU textures so LRU evictions wait cleanly until unbound from active shader uniforms,
+ * and ensures complete disposal on WebGL unmount without double-disposing bound textures prematurely.
+ */
+export function createDynamicTextureTracker<T extends DisposableTexture>(
+  isBoundToScene: (tex: T) => boolean
+): DynamicTextureTracker<T> {
+  const tracked = new Set<T>();
+  const pendingDisposal = new Set<T>();
+
+  const tryDispose = (tex: T): boolean => {
+    if (isBoundToScene(tex)) {
+      pendingDisposal.add(tex);
+      return false;
+    }
+    pendingDisposal.delete(tex);
+    tracked.delete(tex);
+    tex.dispose();
+    return true;
+  };
+
+  return {
+    register(tex) {
+      if (!tex) return;
+      tracked.add(tex);
+      pendingDisposal.delete(tex);
+    },
+    evictFromCache(tex) {
+      if (!tex) return false;
+      return tryDispose(tex);
+    },
+    releaseUnbound() {
+      let count = 0;
+      for (const tex of Array.from(pendingDisposal)) {
+        if (tryDispose(tex)) count += 1;
+      }
+      return count;
+    },
+    disposeAll() {
+      const all = new Set<T>([...tracked, ...pendingDisposal]);
+      tracked.clear();
+      pendingDisposal.clear();
+      for (const tex of all) {
+        tex.dispose();
+      }
+      return all.size;
+    },
+    pendingCount: () => pendingDisposal.size,
+    activeCount: () => tracked.size,
+  };
+}
+
+export function disposeGroupResources(group: THREE.Group, skipTextures: Set<THREE.Texture>) {
   while (group.children.length > 0) {
     const obj = group.children[0];
     group.remove(obj);
-    if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+    if (obj instanceof THREE.Group) {
+      disposeGroupResources(obj, skipTextures);
+      continue;
+    }
+    if (obj.children.length > 0) {
+      for (const child of [...obj.children]) {
+        obj.remove(child);
+        if (child instanceof THREE.Group) {
+          disposeGroupResources(child, skipTextures);
+        }
+      }
+    }
+    if (
+      obj instanceof THREE.Mesh ||
+      obj instanceof THREE.Line ||
+      obj instanceof THREE.Points
+    ) {
       obj.geometry?.dispose();
-      if (Array.isArray(obj.material)) {
-        obj.material.forEach((m) => m.dispose());
-      } else {
-        obj.material?.dispose();
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const mat of materials) {
+        if (!mat) continue;
+        const map = (mat as THREE.MeshBasicMaterial).map;
+        if (map && !skipTextures.has(map)) {
+          map.dispose();
+        }
+        mat.dispose();
       }
     } else if (obj instanceof THREE.Sprite) {
       const mat = obj.material as THREE.SpriteMaterial;
@@ -601,7 +760,9 @@ export function EarthGlobe3D({
   probedCoord,
   comparePinB = null,
   compareMode = false,
+  comparisonArcMeta = null,
   inspectorOpen = false,
+  mobileSheetExpanded = false,
   enabledCategories,
   onChangeEnabledCategories,
   tempUnit = "C",
@@ -654,7 +815,16 @@ export function EarthGlobe3D({
     centerLng: -104.99,
   }));
   const [prefsHydrated, setPrefsHydrated] = useState(false);
+  const [mobileHudExpanded, setMobileHudExpanded] = useState(false);
   const [projectedArcLabels, setProjectedArcLabels] = useState<ProjectedArcLabel[]>([]);
+  const [projectedProbeLabel, setProjectedProbeLabel] = useState<{
+    x: number;
+    y: number;
+    badgeText: string;
+    pairLabel: string;
+    statText: string | null;
+    colorCss: string;
+  } | null>(null);
   const [projectedNodeLabels, setProjectedNodeLabels] = useState<ProjectedRegionalNodeLabel[]>([]);
   const [hoveredInfo, setHoveredInfo] = useState<{
     name: string;
@@ -884,6 +1054,14 @@ export function EarthGlobe3D({
     isSelected: boolean;
   }
 
+  interface ComparisonArcMidpointMeta {
+    midpoint: THREE.Vector3;
+    badgeText: string;
+    pairLabel: string;
+    statText: string | null;
+    colorCss: string;
+  }
+
   const sceneRefs = useRef<{
     scene: THREE.Scene;
     earthMesh: THREE.Mesh;
@@ -903,6 +1081,8 @@ export function EarthGlobe3D({
     sharedTextures: Set<THREE.Texture>;
     arcTravelers: PulseTraveler[];
     arcMidpoints: ArcMidpointMeta[];
+    probeTravelers: PulseTraveler[];
+    probeMidpoint: ComparisonArcMidpointMeta | null;
     forceRegionalTileSync: () => void;
     syncGlobalMode: (
       mode: RegionalSatelliteMode,
@@ -1664,6 +1844,25 @@ export function EarthGlobe3D({
     const globalWmtsCache = new Map<string, THREE.CanvasTexture>();
     const failedTileUntil = new Map<string, number>();
     const failedGlobalUntil = new Map<string, number>();
+    const isTextureBoundToUniform = (tex: THREE.Texture) =>
+      tex === earthMat.uniforms.uRegionalMap.value ||
+      tex === earthMat.uniforms.uGlobalLayerMap.value ||
+      tex === earthMat.uniforms.uSliceWindsMap.value ||
+      tex === earthMat.uniforms.uSlicePrecipMap.value ||
+      tex === earthMat.uniforms.uSliceCloudsMap.value ||
+      tex === earthMat.uniforms.uBordersMap.value;
+    const textureTracker = createDynamicTextureTracker<THREE.Texture>(
+      isTextureBoundToUniform
+    );
+    const inFlightTileImages = new Set<HTMLImageElement>();
+    const abortInFlightTileImages = () => {
+      for (const img of inFlightTileImages) {
+        img.onload = null;
+        img.onerror = null;
+        img.src = "";
+      }
+      inFlightTileImages.clear();
+    };
     let disposed = false;
     let gibsReqSeq = 0;
     let globalReqSeq = 0;
@@ -1698,9 +1897,11 @@ export function EarthGlobe3D({
             tex.magFilter = THREE.LinearFilter;
             tex.generateMipmaps = true;
             tex.anisotropy = maxAnisotropy;
+            textureTracker.register(tex);
             bordersTex = tex;
             earthMat.uniforms.uBordersMap.value = tex;
             earthMat.uniforms.uBordersLoaded.value = 1.0;
+            textureTracker.releaseUnbound();
           },
           undefined,
           () => {
@@ -1718,8 +1919,15 @@ export function EarthGlobe3D({
               new Promise<{ img: HTMLImageElement; dx: number; dy: number }>((resolve, reject) => {
                 const img = new Image();
                 img.crossOrigin = "anonymous";
-                img.onload = () => resolve({ img, dx: q.dx, dy: q.dy });
-                img.onerror = () => reject(new Error(`Border quadrant failed: ${q.bbox}`));
+                inFlightTileImages.add(img);
+                img.onload = () => {
+                  inFlightTileImages.delete(img);
+                  resolve({ img, dx: q.dx, dy: q.dy });
+                };
+                img.onerror = () => {
+                  inFlightTileImages.delete(img);
+                  reject(new Error(`Border quadrant failed: ${q.bbox}`));
+                };
                 img.src = q.proxyUrl;
               })
           )
@@ -1753,14 +1961,16 @@ export function EarthGlobe3D({
             tex4k.magFilter = THREE.LinearFilter;
             tex4k.generateMipmaps = true;
             tex4k.anisotropy = maxAnisotropy;
+            textureTracker.register(tex4k);
             const oldBorders = bordersTex;
             bordersTex = tex4k;
             borders4kLoaded = true;
             earthMat.uniforms.uBordersMap.value = tex4k;
             earthMat.uniforms.uBordersLoaded.value = 1.0;
             if (oldBorders && oldBorders !== tex4k) {
-              oldBorders.dispose();
+              textureTracker.evictFromCache(oldBorders);
             }
+            textureTracker.releaseUnbound();
           })
           .catch(() => {
             borders4kLoading = false;
@@ -1772,8 +1982,15 @@ export function EarthGlobe3D({
       new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = "anonymous";
-        img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error(`WMTS tile failed: ${url}`));
+        inFlightTileImages.add(img);
+        img.onload = () => {
+          inFlightTileImages.delete(img);
+          resolve(img);
+        };
+        img.onerror = () => {
+          inFlightTileImages.delete(img);
+          reject(new Error(`WMTS tile failed: ${url}`));
+        };
         img.src = url;
       });
 
@@ -1886,20 +2103,15 @@ export function EarthGlobe3D({
       tex.generateMipmaps = true;
       tex.anisotropy = maxAnisotropy;
 
+      textureTracker.register(tex);
       globalWmtsCache.set(spec.key, tex);
       while (globalWmtsCache.size > 6) {
         const oldestKey = globalWmtsCache.keys().next().value;
         if (!oldestKey) break;
         const oldTex = globalWmtsCache.get(oldestKey);
         globalWmtsCache.delete(oldestKey);
-        if (
-          oldTex &&
-          oldTex !== earthMat.uniforms.uGlobalLayerMap.value &&
-          oldTex !== earthMat.uniforms.uSliceWindsMap.value &&
-          oldTex !== earthMat.uniforms.uSlicePrecipMap.value &&
-          oldTex !== earthMat.uniforms.uSliceCloudsMap.value
-        ) {
-          oldTex.dispose();
+        if (oldTex) {
+          textureTracker.evictFromCache(oldTex);
         }
       }
       return tex;
@@ -1933,20 +2145,15 @@ export function EarthGlobe3D({
             tex.generateMipmaps = true;
             tex.anisotropy = maxAnisotropy;
 
+            textureTracker.register(tex);
             globalGibsCache.set(spec.key, tex);
             while (globalGibsCache.size > 12) {
               const oldestKey = globalGibsCache.keys().next().value;
               if (!oldestKey) break;
               const oldTex = globalGibsCache.get(oldestKey);
               globalGibsCache.delete(oldestKey);
-              if (
-                oldTex &&
-                oldTex !== earthMat.uniforms.uGlobalLayerMap.value &&
-                oldTex !== earthMat.uniforms.uSliceWindsMap.value &&
-                oldTex !== earthMat.uniforms.uSlicePrecipMap.value &&
-                oldTex !== earthMat.uniforms.uSliceCloudsMap.value
-              ) {
-                oldTex.dispose();
+              if (oldTex) {
+                textureTracker.evictFromCache(oldTex);
               }
             }
             resolve(tex);
@@ -2002,6 +2209,7 @@ export function EarthGlobe3D({
           earthMat.uniforms.uGlobalFilterMode.value = 10.0;
           earthMat.uniforms.uGlobalDataMode.value = 1.0;
           globalTexLoaded = true;
+          textureTracker.releaseUnbound();
           setGlobalHud({
             loading: false,
             error: false,
@@ -2028,6 +2236,7 @@ export function EarthGlobe3D({
           earthMat.uniforms.uGlobalFilterMode.value = 10.0;
           earthMat.uniforms.uGlobalDataMode.value = 1.0;
           globalTexLoaded = true;
+          textureTracker.releaseUnbound();
           multiStage1Ready = true;
           setGlobalHud({
             loading: true,
@@ -2055,6 +2264,7 @@ export function EarthGlobe3D({
               earthMat.uniforms.uGlobalFilterMode.value = 10.0;
               earthMat.uniforms.uGlobalDataMode.value = 1.0;
               globalTexLoaded = true;
+              textureTracker.releaseUnbound();
               multiStage1Ready = true;
               setGlobalHud({
                 loading: !multiStage2Failed,
@@ -2092,6 +2302,7 @@ export function EarthGlobe3D({
             earthMat.uniforms.uGlobalFilterMode.value = 10.0;
             earthMat.uniforms.uGlobalDataMode.value = 1.0;
             globalTexLoaded = true;
+            textureTracker.releaseUnbound();
             setGlobalHud({
               loading: false,
               error: false,
@@ -2153,6 +2364,7 @@ export function EarthGlobe3D({
         earthMat.uniforms.uGlobalFilterMode.value = GIBS_LAYERS[layerId].shaderMode;
         earthMat.uniforms.uGlobalDataMode.value = GIBS_LAYERS[layerId].isDataLayer ? 1.0 : 0.0;
         globalTexLoaded = true;
+        textureTracker.releaseUnbound();
         setGlobalHud({
           loading: false,
           error: false,
@@ -2178,6 +2390,7 @@ export function EarthGlobe3D({
         earthMat.uniforms.uGlobalFilterMode.value = GIBS_LAYERS[layerId].shaderMode;
         earthMat.uniforms.uGlobalDataMode.value = GIBS_LAYERS[layerId].isDataLayer ? 1.0 : 0.0;
         globalTexLoaded = true;
+        textureTracker.releaseUnbound();
         stage1Ready = true;
         setGlobalHud({
           loading: true,
@@ -2200,6 +2413,7 @@ export function EarthGlobe3D({
             earthMat.uniforms.uGlobalFilterMode.value = GIBS_LAYERS[layerId].shaderMode;
             earthMat.uniforms.uGlobalDataMode.value = GIBS_LAYERS[layerId].isDataLayer ? 1.0 : 0.0;
             globalTexLoaded = true;
+            textureTracker.releaseUnbound();
             stage1Ready = true;
             setGlobalHud({
               loading: !stage2Failed,
@@ -2236,6 +2450,7 @@ export function EarthGlobe3D({
           earthMat.uniforms.uGlobalFilterMode.value = GIBS_LAYERS[layerId].shaderMode;
           earthMat.uniforms.uGlobalDataMode.value = GIBS_LAYERS[layerId].isDataLayer ? 1.0 : 0.0;
           globalTexLoaded = true;
+          textureTracker.releaseUnbound();
           setGlobalHud({
             loading: false,
             error: false,
@@ -2281,6 +2496,7 @@ export function EarthGlobe3D({
         ? 1.0
         : 0.0;
       regionalTexLoaded = true;
+      textureTracker.releaseUnbound();
     };
 
     const loadRegionalSpec = (spec: RegionalTileSpec, swathKm: number, centerLat: number, centerLng: number) => {
@@ -2348,14 +2564,15 @@ export function EarthGlobe3D({
           tex.generateMipmaps = false;
           tex.anisotropy = maxAnisotropy;
 
+          textureTracker.register(tex);
           gibsCache.set(spec.key, tex);
           while (gibsCache.size > 14) {
             const oldestKey = gibsCache.keys().next().value;
             if (!oldestKey) break;
             const oldTex = gibsCache.get(oldestKey);
             gibsCache.delete(oldestKey);
-            if (oldTex && oldTex !== earthMat.uniforms.uRegionalMap.value) {
-              oldTex.dispose();
+            if (oldTex) {
+              textureTracker.evictFromCache(oldTex);
             }
           }
 
@@ -2486,6 +2703,8 @@ export function EarthGlobe3D({
       sharedTextures,
       arcTravelers: [],
       arcMidpoints: [],
+      probeTravelers: [],
+      probeMidpoint: null,
       forceRegionalTileSync: () => syncRegionalTile(true),
       syncGlobalMode,
     };
@@ -2694,6 +2913,7 @@ export function EarthGlobe3D({
     const clock = new THREE.Clock();
     let lastLabelSync = -1;
     let lastLabelSignature = "";
+    let lastProbeLabelSignature = "";
     let lastNodeLabelSignature = "";
     const camUnitVec = new THREE.Vector3();
     const midUnitVec = new THREE.Vector3();
@@ -2811,9 +3031,18 @@ export function EarthGlobe3D({
         }
       }
 
-      // Animate traveling light pulses along teleconnection splines
+      // Animate traveling light pulses along teleconnection splines & active 2-spot comparison arc
       const travelers = sceneRefs.current?.arcTravelers ?? [];
       for (const tr of travelers) {
+        const u = (elapsed * tr.speed + tr.phase) % 1;
+        const fIdx = u * (tr.pts.length - 1);
+        const i0 = Math.floor(fIdx);
+        const i1 = Math.min(tr.pts.length - 1, i0 + 1);
+        const frac = fIdx - i0;
+        tr.sprite.position.lerpVectors(tr.pts[i0], tr.pts[i1], frac);
+      }
+      const probeTravelers = sceneRefs.current?.probeTravelers ?? [];
+      for (const tr of probeTravelers) {
         const u = (elapsed * tr.speed + tr.phase) % 1;
         const fIdx = u * (tr.pts.length - 1);
         const i0 = Math.floor(fIdx);
@@ -2939,7 +3168,45 @@ export function EarthGlobe3D({
           setProjectedNodeLabels([]);
         }
 
-        // 2. Project arc midpoint callouts, avoiding station labels and regional HUD
+        // 2. Project active 2-spot / case-study comparison arc callout & graph arc midpoints
+        const activeProbeMid = sceneRefs.current?.probeMidpoint ?? null;
+        let nextProbeSig = "";
+        if (activeProbeMid) {
+          midUnitVec.copy(activeProbeMid.midpoint).normalize();
+          if (camUnitVec.dot(midUnitVec) >= 0.1) {
+            projVec.copy(activeProbeMid.midpoint).project(camera);
+            if (projVec.z <= 1) {
+              const px = Math.round((projVec.x * 0.5 + 0.5) * currentW);
+              const py = Math.round((-projVec.y * 0.5 + 0.5) * currentH);
+              const inHudBox =
+                (px < 405 && py < 168) ||
+                px < 64 ||
+                px > rightCutoff ||
+                py < 52 ||
+                py > currentH - 86;
+              if (!inHudBox) {
+                occupiedBoxes.push({ x: px, y: py });
+                nextProbeSig = `${px}:${py}:${activeProbeMid.badgeText}:${activeProbeMid.statText ?? ""}`;
+                if (nextProbeSig !== lastProbeLabelSignature) {
+                  lastProbeLabelSignature = nextProbeSig;
+                  setProjectedProbeLabel({
+                    x: px,
+                    y: py,
+                    badgeText: activeProbeMid.badgeText,
+                    pairLabel: activeProbeMid.pairLabel,
+                    statText: activeProbeMid.statText,
+                    colorCss: activeProbeMid.colorCss,
+                  });
+                }
+              }
+            }
+          }
+        }
+        if (nextProbeSig === "" && lastProbeLabelSignature !== "") {
+          lastProbeLabelSignature = "";
+          setProjectedProbeLabel(null);
+        }
+
         if (!showArcLabelsRef.current) {
           if (lastLabelSignature !== "off") {
             lastLabelSignature = "off";
@@ -2999,6 +3266,7 @@ export function EarthGlobe3D({
 
     return () => {
       disposed = true;
+      abortInFlightTileImages();
       if (gibsDebounceTimer !== null) {
         window.clearTimeout(gibsDebounceTimer);
       }
@@ -3009,27 +3277,20 @@ export function EarthGlobe3D({
       window.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("wheel", onWheel);
       if (sceneRefs.current) {
+        sceneRefs.current.arcTravelers = [];
+        sceneRefs.current.arcMidpoints = [];
+        sceneRefs.current.probeTravelers = [];
+        sceneRefs.current.probeMidpoint = null;
         disposeGroupResources(markersGroup, sharedTextures);
         disposeGroupResources(arcsGroup, sharedTextures);
         disposeGroupResources(probeGroup, sharedTextures);
         disposeGroupResources(regionalGroup, sharedTextures);
       }
-      for (const tex of gibsCache.values()) {
-        tex.dispose();
-      }
       gibsCache.clear();
-      for (const tex of globalGibsCache.values()) {
-        tex.dispose();
-      }
       globalGibsCache.clear();
-      for (const tex of globalWmtsCache.values()) {
-        tex.dispose();
-      }
       globalWmtsCache.clear();
-      if (bordersTex) {
-        bordersTex.dispose();
-        bordersTex = null;
-      }
+      bordersTex = null;
+      textureTracker.disposeAll();
       placeholderRegionalTex.dispose();
       earthGeo.dispose();
       earthMat.dispose();
@@ -3050,6 +3311,7 @@ export function EarthGlobe3D({
       glowTex.dispose();
       ringTex.dispose();
       starTex.dispose();
+      renderer.renderLists.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);
@@ -3075,28 +3337,64 @@ export function EarthGlobe3D({
       ? { lat: probedCoord.lat, lng: probedCoord.lng }
       : { lat: regionalHud.centerLat, lng: regionalHud.centerLng };
 
+  const prevGlobalSyncInputsRef = useRef<{
+    satelliteMode: RegionalSatelliteMode;
+    activeTopics: ReadonlyArray<ETGDatasetId> | undefined;
+    prefsHydrated: boolean;
+    globalSig: string;
+  } | null>(null);
+
   // Sync GIBS global filter & regional spectral layer + timeline date to the globe shader
   useEffect(() => {
     const nextLayerId = resolveActiveGibsLayer(satelliteMode, activeTopics);
     activeGibsLayerRef.current = nextLayerId;
     cutoffMsRef.current = cutoffMs;
 
-    const refs = sceneRefs.current;
-    if (refs) {
-      refs.earthMat.uniforms.uRegionalDataMode.value =
-        nextLayerId && GIBS_LAYERS[nextLayerId].isDataLayer ? 1.0 : 0.0;
-      refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
-      if (isRegionalZoom) {
-        refs.forceRegionalTileSync();
-        return;
-      }
-    }
-
     setRegionalHud((prev) => ({
       ...prev,
       layerId: nextLayerId,
       dateIso: resolveGibsDateIso(nextLayerId ?? "true_color", cutoffMs),
     }));
+
+    const refs = sceneRefs.current;
+    if (!refs) return;
+
+    refs.earthMat.uniforms.uRegionalDataMode.value =
+      nextLayerId && GIBS_LAYERS[nextLayerId].isDataLayer ? 1.0 : 0.0;
+
+    const nextGlobalSig = resolveGlobalSyncSignature(satelliteMode, activeTopics, cutoffMs);
+    const prevInputs = prevGlobalSyncInputsRef.current;
+    const isCutoffOnlyChange =
+      prevInputs !== null &&
+      prevInputs.satelliteMode === satelliteMode &&
+      prevInputs.activeTopics === activeTopics &&
+      prevInputs.prefsHydrated === prefsHydrated;
+    const globalSigUnchanged =
+      prevInputs !== null && prevInputs.globalSig === nextGlobalSig;
+
+    prevGlobalSyncInputsRef.current = {
+      satelliteMode,
+      activeTopics,
+      prefsHydrated,
+      globalSig: nextGlobalSig,
+    };
+
+    if (isCutoffOnlyChange) {
+      const timer = window.setTimeout(() => {
+        if (!globalSigUnchanged) {
+          refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
+        }
+        if (isRegionalZoom) {
+          refs.forceRegionalTileSync();
+        }
+      }, 200);
+      return () => window.clearTimeout(timer);
+    }
+
+    refs.syncGlobalMode(satelliteMode, activeTopics, cutoffMs);
+    if (isRegionalZoom) {
+      refs.forceRegionalTileSync();
+    }
   }, [satelliteMode, activeTopics, cutoffMs, isRegionalZoom, prefsHydrated]);
 
   useEffect(() => {
@@ -3562,12 +3860,14 @@ export function EarthGlobe3D({
     regBucketLng,
   ]);
 
-  // Render Sleek Surface Probe Reticle(s) + Live Comparison Arc for 1-Pin / 2-Pin Earth Probe
+  // Render Sleek Surface Probe Reticle(s) + Volumetric Comparison Arc for 1-Pin / 2-Pin / Case-Study Earth Probe
   useEffect(() => {
     const refs = sceneRefs.current;
     if (!refs) return;
 
     disposeGroupResources(refs.probeGroup, refs.sharedTextures);
+    refs.probeTravelers = [];
+    refs.probeMidpoint = null;
 
     const addProbeReticle = (coord: { lat: number; lng: number }, hexColor: number) => {
       const unitNormal = latLngToVector3(coord.lat, coord.lng, 1).normalize();
@@ -3603,8 +3903,11 @@ export function EarthGlobe3D({
       refs.probeGroup.add(ring);
     };
 
+    const visuals = resolveComparisonArcVisuals(comparisonArcMeta);
     if (probedCoord) addProbeReticle(probedCoord, 0xfacc15);
-    if (comparePinB) addProbeReticle(comparePinB, 0x22d3ee);
+    if (comparePinB) {
+      addProbeReticle(comparePinB, comparisonArcMeta ? visuals.colorHex : 0x22d3ee);
+    }
 
     if (probedCoord && comparePinB && !selectedEdgeUuid) {
       const curvePts = buildElevatedGreatCircleCurve(
@@ -3620,18 +3923,57 @@ export function EarthGlobe3D({
           (p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)
         )
       ) {
-        const cmpGeo = new THREE.BufferGeometry().setFromPoints(curvePts);
-        const cmpMat = new THREE.LineBasicMaterial({
-          color: 0x22d3ee,
+        const curve = new THREE.CatmullRomCurve3(curvePts);
+        const tubeGeo = new THREE.TubeGeometry(curve, 64, visuals.coreRadius, 8, false);
+        const tubeMat = new THREE.MeshBasicMaterial({
+          color: visuals.colorHex,
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.96,
+          depthWrite: false,
+        });
+        refs.probeGroup.add(new THREE.Mesh(tubeGeo, tubeMat));
+
+        const haloGeo = new THREE.TubeGeometry(curve, 52, visuals.haloRadius, 8, false);
+        const haloMat = new THREE.MeshBasicMaterial({
+          color: visuals.colorHex,
+          transparent: true,
+          opacity: visuals.haloOpacity,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
         });
-        refs.probeGroup.add(new THREE.Line(cmpGeo, cmpMat));
+        refs.probeGroup.add(new THREE.Mesh(haloGeo, haloMat));
+
+        const pulseSpriteMat = new THREE.SpriteMaterial({
+          map: refs.glowTex,
+          color: visuals.pulseColorHex,
+          transparent: true,
+          opacity: 0.94,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        });
+        const pulseSprite = new THREE.Sprite(pulseSpriteMat);
+        pulseSprite.scale.setScalar(2.6);
+        pulseSprite.position.copy(curvePts[0]);
+        refs.probeGroup.add(pulseSprite);
+        refs.probeTravelers.push({
+          sprite: pulseSprite,
+          pts: curvePts,
+          speed: visuals.pulseSpeed,
+          phase: 0,
+        });
+
+        if (comparisonArcMeta) {
+          refs.probeMidpoint = {
+            midpoint: curve.getPoint(0.5),
+            badgeText: comparisonArcMeta.badgeText,
+            pairLabel: comparisonArcMeta.pairLabel,
+            statText: comparisonArcMeta.statText,
+            colorCss: visuals.colorCss,
+          };
+        }
       }
     }
-  }, [probedCoord, comparePinB, selectedEdgeUuid]);
+  }, [probedCoord, comparePinB, selectedEdgeUuid, comparisonArcMeta]);
 
   const resetCamera = () => {
     cameraTargetRef.current = { theta: 0.9, phi: Math.PI * 0.41, radius: 270 };
@@ -3782,6 +4124,7 @@ export function EarthGlobe3D({
   };
 
   const activeGibsMeta = regionalHud.layerId ? GIBS_LAYERS[regionalHud.layerId] : null;
+  const activeRegionalColorbar = getGibsLayerColorbar(regionalHud.layerId);
   const isMultiSliceFilter = satelliteMode === "multi_slice";
   const activeGlobalMeta = activeGlobalFilter ? GIBS_LAYERS[activeGlobalFilter] : null;
   const earthFilterButtonLabel = isMultiSliceFilter
@@ -3806,42 +4149,64 @@ export function EarthGlobe3D({
     <div className="etg-globe-void relative h-full w-full overflow-hidden select-none">
       <div ref={containerRef} className="h-full w-full" aria-label="Interactive 3D Earth Globe" />
 
-      {/* Front-Hemisphere Interactive Arc Relation Labels */}
-      {showArcLabels && projectedArcLabels.length > 0 && (
+      {/* Front-Hemisphere Interactive Arc Relation & Active Comparison Labels */}
+      {((showArcLabels && projectedArcLabels.length > 0) || projectedProbeLabel !== null) && (
         <div className="pointer-events-none absolute inset-0 z-[5] overflow-hidden">
-          {projectedArcLabels.map((lbl) => (
-            <button
-              key={lbl.uuid}
-              type="button"
-              onClick={() => onSelectEdge?.(lbl.edge)}
-              style={{ left: `${lbl.x}px`, top: `${lbl.y}px` }}
-              className={`pointer-events-auto -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
-                lbl.isSelected
-                  ? "border-amber-300 bg-amber-950 text-amber-100 ring-1 ring-amber-400"
-                  : "border-border bg-surface text-text-primary hover:border-text-muted hover:bg-surface-elevated"
-              }`}
-              title={`${lbl.badgeText}: ${lbl.pairLabel}${lbl.statText ? ` (${lbl.statText})` : ""}`}
+          {projectedProbeLabel && (
+            <div
+              style={{ left: `${projectedProbeLabel.x}px`, top: `${projectedProbeLabel.y}px` }}
+              className="pointer-events-none -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border border-rose-400 bg-rose-950/95 px-2.5 py-1 text-[11px] font-medium text-rose-100 shadow-lg backdrop-blur-sm"
             >
               <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: lbl.colorCss }}
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: projectedProbeLabel.colorCss }}
                 aria-hidden="true"
               />
-              <span className="font-semibold whitespace-nowrap">{lbl.badgeText}</span>
-              <span className="max-w-[130px] truncate text-text-muted hidden sm:inline">
-                {lbl.pairLabel}
+              <span className="font-semibold whitespace-nowrap">{projectedProbeLabel.badgeText}</span>
+              <span className="max-w-[160px] truncate text-rose-200 hidden sm:inline">
+                {projectedProbeLabel.pairLabel}
               </span>
-              {lbl.statText && (
-                <span
-                  className={`font-mono text-[9px] ws-numeric whitespace-nowrap ${
-                    lbl.isSelected ? "text-amber-200" : "etg-tone-warm"
-                  }`}
-                >
-                  {lbl.statText}
+              {projectedProbeLabel.statText && (
+                <span className="font-mono text-[10px] font-semibold ws-numeric whitespace-nowrap text-amber-300">
+                  {projectedProbeLabel.statText}
                 </span>
               )}
-            </button>
-          ))}
+            </div>
+          )}
+          {showArcLabels &&
+            projectedArcLabels.map((lbl) => (
+              <button
+                key={lbl.uuid}
+                type="button"
+                onClick={() => onSelectEdge?.(lbl.edge)}
+                style={{ left: `${lbl.x}px`, top: `${lbl.y}px` }}
+                className={`pointer-events-auto -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
+                  lbl.isSelected
+                    ? "border-amber-300 bg-amber-950 text-amber-300 ring-1 ring-amber-400"
+                    : "border-border bg-surface text-text-primary hover:border-text-muted hover:bg-surface-elevated"
+                }`}
+                title={`${lbl.badgeText}: ${lbl.pairLabel}${lbl.statText ? ` (${lbl.statText})` : ""}`}
+              >
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: lbl.colorCss }}
+                  aria-hidden="true"
+                />
+                <span className="font-semibold whitespace-nowrap">{lbl.badgeText}</span>
+                <span className="max-w-[130px] truncate text-text-muted hidden sm:inline">
+                  {lbl.pairLabel}
+                </span>
+                {lbl.statText && (
+                  <span
+                    className={`font-mono text-[9px] ws-numeric whitespace-nowrap ${
+                      lbl.isSelected ? "text-amber-300" : "etg-tone-warm"
+                    }`}
+                  >
+                    {lbl.statText}
+                  </span>
+                )}
+              </button>
+            ))}
         </div>
       )}
 
@@ -3856,7 +4221,7 @@ export function EarthGlobe3D({
               style={{ left: `${lbl.x}px`, top: `${lbl.y}px` }}
               className={`pointer-events-auto -translate-x-1/2 -translate-y-1/2 absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[10px] font-medium shadow-md transition-colors cursor-pointer ${
                 lbl.isSelected
-                  ? "border-amber-300 bg-amber-950 text-amber-100 ring-1 ring-amber-400"
+                  ? "border-amber-300 bg-amber-950 text-amber-300 ring-1 ring-amber-400"
                   : "border-border-strong bg-surface text-text-primary hover:border-accent-fg hover:bg-surface-elevated"
               }`}
               title={lbl.name}
@@ -3872,7 +4237,7 @@ export function EarthGlobe3D({
               {lbl.metricText && (
                 <span
                   className={`font-mono text-[9px] ws-numeric whitespace-nowrap ${
-                    lbl.isSelected ? "text-amber-200" : "etg-tone-warm"
+                    lbl.isSelected ? "text-amber-300" : "etg-tone-warm"
                   }`}
                 >
                   {lbl.metricText}
@@ -3887,7 +4252,7 @@ export function EarthGlobe3D({
       {!isRegionalZoom && (isMultiSliceFilter || activeGlobalMeta !== null) && (
         <section
           aria-label="Global NASA GIBS scientific Earth filter"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-14 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface p-2.5 text-xs shadow-lg"
+          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -3916,7 +4281,7 @@ export function EarthGlobe3D({
                 aria-pressed={filterSmooth}
                 onClick={() => setFilterSmooth((v) => !v)}
                 title="Smooth quantized satellite contours and 1 km speckles"
-                className="inline-flex items-center rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[10px] font-semibold text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+                className="hidden sm:inline-flex items-center rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[10px] font-semibold text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
               >
                 Smooth
               </button>
@@ -3924,16 +4289,29 @@ export function EarthGlobe3D({
                 type="button"
                 onClick={() => setSatelliteMode("off")}
                 aria-label="Clear global Earth filter"
-                className="inline-flex items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-200 cursor-pointer"
+                className="inline-flex items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
                 <span>Clear</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileHudExpanded((v) => !v)}
+                aria-expanded={mobileHudExpanded}
+                aria-label={mobileHudExpanded ? "Collapse Earth filter legend" : "Expand Earth filter legend"}
+                className="inline-flex sm:hidden items-center justify-center rounded-sm border border-border bg-surface-inset p-1 text-text-muted hover:text-text-primary cursor-pointer"
+              >
+                {mobileHudExpanded ? (
+                  <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                )}
               </button>
             </div>
           </div>
 
           <div className="ws-numeric flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] text-text-muted">
-            <span>
+            <span className="truncate">
               {isMultiSliceFilter
                 ? "MERRA-2 · IMERG · MODIS (Global + Borders)"
                 : activeGlobalMeta?.resolutionLabel}
@@ -3947,7 +4325,7 @@ export function EarthGlobe3D({
             {globalHud.resBadge && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="rounded-xs border border-sky-500/40 bg-sky-950/70 px-1 py-px text-[9px] font-semibold text-sky-300">
+                <span className="rounded-xs border border-sky-400/50 bg-sky-950/80 px-1 py-px text-[9px] font-semibold text-sky-300">
                   {globalHud.resBadge}
                 </span>
               </>
@@ -3961,21 +4339,21 @@ export function EarthGlobe3D({
           </div>
 
           {isMultiSliceFilter ? (
-            <div className="grid grid-cols-4 gap-1 rounded-xs border border-border bg-surface-inset p-1.5 text-[10px]">
+            <div className={`grid grid-cols-4 gap-1 rounded-xs border border-border bg-surface-inset p-1.5 text-[10px] ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
               <div className="space-y-1">
-                <div className="h-1.5 rounded-xs bg-gradient-to-r from-emerald-800 to-lime-500" />
+                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-emerald-800 to-lime-500" />
                 <div className="truncate font-medium text-text-primary">1. Canopy</div>
               </div>
               <div className="space-y-1">
-                <div className="h-1.5 rounded-xs bg-gradient-to-r from-blue-900 via-cyan-400 to-amber-300" />
+                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-blue-900 via-cyan-400 to-amber-300" />
                 <div className="truncate font-medium text-text-primary">2. Winds</div>
               </div>
               <div className="space-y-1">
-                <div className="h-1.5 rounded-xs bg-gradient-to-r from-lime-400 via-amber-400 to-red-600" />
+                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-lime-400 via-amber-400 to-red-600" />
                 <div className="truncate font-medium text-text-primary">3. Precip. Water</div>
               </div>
               <div className="space-y-1">
-                <div className="h-1.5 rounded-xs bg-gradient-to-r from-slate-600 to-slate-100" />
+                <div className="etg-colorbar-track h-1.5 rounded-xs bg-gradient-to-r from-slate-600 to-slate-100" />
                 <div className="truncate font-medium text-text-primary">4. Clouds</div>
               </div>
             </div>
@@ -3983,7 +4361,7 @@ export function EarthGlobe3D({
             activeGlobalMeta?.colorbar && (
               <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
                 <div
-                  className="h-2 w-full rounded-xs border border-border"
+                  className="etg-colorbar-track h-2 w-full rounded-xs"
                   style={{ background: activeGlobalMeta.colorbar.gradientCss }}
                 />
                 <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
@@ -4002,7 +4380,7 @@ export function EarthGlobe3D({
             )
           )}
 
-          <div className="flex flex-wrap gap-1 border-t border-border pt-1.5">
+          <div className={`flex flex-wrap gap-1 border-t border-border pt-1.5 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
             {quickGlobalFilterPills.map((pill) => {
               const pressed =
                 pill.id === "multi_slice"
@@ -4014,7 +4392,7 @@ export function EarthGlobe3D({
                   type="button"
                   aria-pressed={pressed}
                   onClick={() => setSatelliteMode(pill.id)}
-                  className="rounded-xs border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+                  className="rounded-xs border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
                 >
                   {pill.label}
                 </button>
@@ -4028,7 +4406,7 @@ export function EarthGlobe3D({
       {isRegionalZoom && (
         <section
           aria-label="Regional NASA GIBS satellite overlay"
-          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-14 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface p-2.5 text-xs shadow-lg"
+          className="etg-hud-pill pointer-events-auto absolute top-3 left-14 z-10 max-sm:w-[calc(100dvw-4.25rem)] sm:top-3 sm:w-[min(368px,calc(100dvw-5rem))] space-y-2 rounded-md border border-border bg-surface/95 p-2.5 text-xs shadow-lg backdrop-blur-md"
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -4055,18 +4433,33 @@ export function EarthGlobe3D({
                 />
               )}
             </div>
-            <button
-              type="button"
-              onClick={resetCamera}
-              className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-200 cursor-pointer"
-            >
-              <RotateCcw className="h-3 w-3" aria-hidden="true" />
-              <span>Global View</span>
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={resetCamera}
+                className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border-strong bg-surface-elevated px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
+              >
+                <RotateCcw className="h-3 w-3" aria-hidden="true" />
+                <span>Global View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileHudExpanded((v) => !v)}
+                aria-expanded={mobileHudExpanded}
+                aria-label={mobileHudExpanded ? "Collapse regional satellite legend" : "Expand regional satellite legend"}
+                className="inline-flex sm:hidden items-center justify-center rounded-sm border border-border bg-surface-inset p-1 text-text-muted hover:text-text-primary cursor-pointer"
+              >
+                {mobileHudExpanded ? (
+                  <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                )}
+              </button>
+            </div>
           </div>
 
           <div className="ws-numeric flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[10px] text-text-muted">
-            <span>
+            <span className="truncate">
               {activeGibsMeta ? activeGibsMeta.resolutionLabel : "50 / 150 km vector grid"}
             </span>
             <span aria-hidden="true">·</span>
@@ -4075,7 +4468,28 @@ export function EarthGlobe3D({
             <span>{regionalHud.dateIso}</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-subtle">
+          {activeRegionalColorbar && (
+            <div className="space-y-1 rounded-xs border border-border bg-surface-inset px-2 py-1.5">
+              <div
+                className="etg-colorbar-track h-2 w-full rounded-xs"
+                style={{ background: activeRegionalColorbar.gradientCss }}
+              />
+              <div className="ws-numeric flex items-center justify-between gap-2 font-mono text-[10px] text-text-muted">
+                <span>{activeRegionalColorbar.minLabel}</span>
+                {activeRegionalColorbar.midLabel && (
+                  <span className="text-text-subtle">{activeRegionalColorbar.midLabel}</span>
+                )}
+                <span>
+                  {activeRegionalColorbar.maxLabel}{" "}
+                  <span className="text-text-subtle">
+                    ({activeRegionalColorbar.unitLabel})
+                  </span>
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-text-subtle ${mobileHudExpanded ? "" : "max-sm:hidden"}`}>
             <span className="inline-flex items-center gap-1">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden="true" />
               <span>50 km MERRA-2</span>
@@ -4089,7 +4503,7 @@ export function EarthGlobe3D({
           {regionalHud.error && (
             <div
               role="alert"
-              className="flex items-center justify-between gap-2 rounded-xs border border-rose-400 bg-rose-950 px-2 py-1.5 text-[11px] text-rose-200"
+              className="flex items-center justify-between gap-2 rounded-xs border border-rose-400 bg-rose-950 px-2 py-1.5 text-[11px] text-rose-300"
             >
               <span>
                 Failed to fetch NASA GIBS satellite tile — showing Blue Marble + geodesic rings.
@@ -4114,14 +4528,18 @@ export function EarthGlobe3D({
               </div>
             )}
 
-          <div className="grid grid-cols-3 gap-1" role="group" aria-label="Satellite spectral band">
+          <div
+            className={`grid grid-cols-3 gap-1 ${mobileHudExpanded ? "" : "max-sm:hidden"}`}
+            role="group"
+            aria-label="Satellite spectral band"
+          >
             {regionalSatelliteOptions.map((opt) => (
               <button
                 key={opt.id}
                 type="button"
                 aria-pressed={satelliteMode === opt.id}
                 onClick={() => setSatelliteMode(opt.id)}
-                className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+                className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[10px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
               >
                 {opt.label}
               </button>
@@ -4146,8 +4564,8 @@ export function EarthGlobe3D({
       {/* Coordinated Bottom HUD Bar: Globe Display Controls (Left) + Timeline Scrubber (Right) */}
       <div
         className={`pointer-events-none absolute bottom-2 left-2 right-2 z-10 flex flex-wrap items-end justify-between gap-2 sm:bottom-3 sm:left-14 sm:right-4 ${
-          inspectorOpen ? "lg:right-[26.25rem]" : ""
-        }`}
+          inspectorOpen ? "sm:right-[25.75rem] lg:right-[26.25rem]" : ""
+        } ${mobileSheetExpanded ? "max-sm:hidden" : ""}`}
       >
         <div className="pointer-events-auto relative flex flex-col items-start gap-1.5">
           {(() => {
@@ -4183,10 +4601,10 @@ export function EarthGlobe3D({
                 title={microscopeScan?.aiPerceptionBrief || top.cue.aiCue}
                 className={`etg-hud-pill ws-numeric inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
                   isGlitch
-                    ? "border-rose-400 bg-rose-950 text-rose-200 hover:border-rose-300"
+                    ? "border-rose-400 bg-rose-950 text-rose-300 hover:border-rose-300"
                     : isCycle
-                      ? "border-violet-400 bg-purple-950 text-violet-200 hover:border-violet-300"
-                      : "border-amber-400 bg-amber-950 text-amber-200 hover:border-amber-300"
+                      ? "border-violet-400 bg-purple-950 text-violet-300 hover:border-violet-300"
+                      : "border-amber-400 bg-amber-950 text-amber-300 hover:border-amber-300"
                 }`}
               >
                 <ScanSearch className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -4309,7 +4727,7 @@ export function EarthGlobe3D({
               title="Global & regional NASA GIBS scientific Earth filters"
               className={`inline-flex items-center gap-1 whitespace-nowrap rounded-sm border px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
                 isRegionalZoom || isMultiSliceFilter || activeGlobalFilter !== null
-                  ? "border-sky-400 bg-sky-950 text-sky-200"
+                  ? "border-sky-400 bg-sky-950 text-sky-300"
                   : "border-transparent text-text-muted hover:bg-surface-band hover:text-text-primary"
               }`}
             >
@@ -4344,7 +4762,7 @@ export function EarthGlobe3D({
                     type="button"
                     aria-pressed={arcMode === mode.id}
                     onClick={() => setArcMode(mode.id)}
-                    className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[11px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+                    className="rounded-sm border border-border bg-surface-inset px-2 py-1 text-[11px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
                   >
                     {mode.label}
                   </button>
@@ -4544,7 +4962,7 @@ export function EarthGlobe3D({
                   resetCamera();
                   hideGibsPopover();
                 }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-border-strong bg-surface-inset px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-200 cursor-pointer"
+                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-border-strong bg-surface-inset px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:border-sky-400 hover:bg-sky-950 hover:text-sky-300 cursor-pointer"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Reset to Global View</span>
@@ -4556,7 +4974,7 @@ export function EarthGlobe3D({
                   zoomToRegion();
                   hideGibsPopover();
                 }}
-                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-900 cursor-pointer"
+                className="flex w-full items-center justify-center gap-1.5 rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-900 cursor-pointer"
               >
                 <ScanSearch className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Zoom into Region</span>
@@ -4570,7 +4988,7 @@ export function EarthGlobe3D({
                   type="button"
                   aria-pressed={satelliteMode === opt.id}
                   onClick={() => setSatelliteMode(opt.id)}
-                  className="flex w-full items-center justify-between rounded-sm border border-transparent px-2.5 py-1 text-left text-xs font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-200 cursor-pointer"
+                  className="flex w-full items-center justify-between rounded-sm border border-transparent px-2.5 py-1 text-left text-xs font-medium text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary aria-pressed:border-sky-400 aria-pressed:bg-sky-950 aria-pressed:text-sky-300 cursor-pointer"
                 >
                   <span>{opt.label}</span>
                   <span className="font-mono text-[10px] text-text-faint">{opt.detail}</span>
@@ -4602,12 +5020,12 @@ export function EarthGlobe3D({
             <div
               className={`mt-1 inline-flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${
                 hoveredInfo.radarBadge === "SENSOR_GLITCH_RISK"
-                  ? "border-rose-400 bg-rose-950 text-rose-200"
+                  ? "border-rose-400 bg-rose-950 text-rose-300"
                   : hoveredInfo.radarBadge === "FALSE_TREND_CYCLE"
-                    ? "border-violet-400 bg-purple-950 text-violet-200"
+                    ? "border-violet-400 bg-purple-950 text-violet-300"
                     : hoveredInfo.radarBadge === "EARLY_ONSET"
-                      ? "border-amber-400 bg-amber-950 text-amber-200"
-                      : "border-emerald-400 bg-emerald-950 text-emerald-200"
+                      ? "border-amber-400 bg-amber-950 text-amber-300"
+                      : "border-emerald-400 bg-emerald-950 text-emerald-300"
               }`}
             >
               <span>Microscope: {hoveredInfo.radarDetail}</span>

@@ -10,6 +10,11 @@ import {
   mannKendallTest,
   theilSenEstimator,
 } from "@/lib/stats/trendEngine";
+import {
+  enrichSummaryWithMonthlySeasonality,
+  extractMonthlySeriesFromPowerDict,
+  extractMonthlyVpdSeriesFromPowerDicts,
+} from "@/lib/nasa/nasaPowerClient";
 
 describe("Mann-Kendall & Theil-Sen Statistical Engine", () => {
   it("detects a statistically significant increasing trend with tie correction", () => {
@@ -406,5 +411,67 @@ describe("Mann-Kendall & Theil-Sen Statistical Engine", () => {
     expect(summary.seasonalAnalysis!.pValue).toBeLessThan(0.001);
     expect(summary.seasonalAnalysis!.seasonalTheilSenSlope).toBeCloseTo(0.08, 2);
     expect(summary.points[0].anomalyValue).toBeDefined();
+  });
+
+  it("extracts monthly NASA POWER series skipping M13 aggregates and fill values, and enriches annual summaries", () => {
+    const powerT2m: Record<string, number> = {};
+    const powerTmax: Record<string, number> = {};
+    const powerRh: Record<string, number> = {};
+    const annualPoints: Array<{ date: string; t: number; value: number }> = [];
+
+    // 8 full years (96 monthly points) with seasonal cycle + +0.25 C/yr shift
+    for (let y = 2016; y <= 2023; y++) {
+      let sum = 0;
+      for (let m = 1; m <= 12; m++) {
+        const ym = `${y}${String(m).padStart(2, "0")}`;
+        const seasonal = 8 * Math.sin(((m - 4) * Math.PI) / 6);
+        const val = 12 + seasonal + 0.25 * (y - 2016);
+        powerT2m[ym] = Number(val.toFixed(3));
+        powerTmax[ym] = Number((val + 6).toFixed(3));
+        powerRh[ym] = 45;
+        sum += val;
+      }
+      // Annual aggregate M13 key and sentinel fills must be ignored by monthly extractors
+      powerT2m[`${y}13`] = Number((sum / 12).toFixed(3));
+      powerTmax[`${y}13`] = -999;
+      annualPoints.push({ date: String(y), t: y, value: sum / 12 });
+    }
+    powerT2m["202401"] = -999;
+    powerT2m["202414"] = 99;
+    powerRh["202401"] = -999;
+
+    const monthlyT2m = extractMonthlySeriesFromPowerDict(powerT2m);
+    expect(monthlyT2m).toHaveLength(96);
+    expect(monthlyT2m[0].date).toBe("2016-01");
+    expect(monthlyT2m[95].date).toBe("2023-12");
+
+    const monthlyVpd = extractMonthlyVpdSeriesFromPowerDicts(powerTmax, powerRh);
+    expect(monthlyVpd).toHaveLength(96);
+    expect(monthlyVpd.every((p) => p.value > 0 && Number.isFinite(p.value))).toBe(true);
+
+    const annualSummary = analyzeTimeSeries(annualPoints, {
+      lat: 40.0,
+      lng: -105.2,
+      dataset: "nasa_power",
+      parameter: "T2M",
+      unit: "°C",
+      slopeUnit: "°C/yr",
+      provenance: "NASA POWER MERRA-2 (Live)",
+    });
+    expect(annualSummary.points).toHaveLength(8);
+    expect(annualSummary.seasonalAnalysis).toBeNull();
+
+    const enriched = enrichSummaryWithMonthlySeasonality(annualSummary, monthlyT2m);
+    expect(enriched.points).toHaveLength(8);
+    expect(enriched.seasonalAnalysis).toBeDefined();
+    expect(enriched.seasonalAnalysis!.seasonsDetected).toBe(12);
+    expect(enriched.seasonalAnalysis!.significant).toBe(true);
+    expect(enriched.seasonalAnalysis!.pValue).toBeLessThan(0.001);
+    expect(enriched.seasonalPoints).toHaveLength(96);
+    expect(enriched.seasonalPoints![0].anomalyValue).toBeDefined();
+
+    // Too few monthly points (< 18) preserves original summary cleanly
+    const unchanged = enrichSummaryWithMonthlySeasonality(annualSummary, monthlyT2m.slice(0, 12));
+    expect(unchanged).toBe(annualSummary);
   });
 });

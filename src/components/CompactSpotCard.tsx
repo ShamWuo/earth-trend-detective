@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useId, useMemo, useState } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState } from "react";
+import { VariableGuidePopoverButton } from "@/components/DatasetSelector";
 import {
   Activity,
   AlertCircle,
@@ -86,7 +87,7 @@ const DEFAULT_SPOT_VIEW_PREFS: SpotViewPrefs = {
   showCurrent: true,
   showTrends: true,
   showRelations: true,
-  showChart: false,
+  showChart: true,
   showScience: false,
   trendLayout: "cards",
   showWindHumidity: true,
@@ -94,7 +95,15 @@ const DEFAULT_SPOT_VIEW_PREFS: SpotViewPrefs = {
   showPressureSolar: true,
 };
 
-const SPOT_VIEW_PREFS_KEY = "etg:spot-view-prefs:v1";
+const SPOT_VIEW_PREFS_KEY = "etg:spot-view-prefs:v2";
+
+export interface GuidedCaseStudyItem {
+  id: string;
+  badge: string;
+  title: string;
+  subtitle: string;
+  dataset: ETGDatasetId;
+}
 
 interface CompactSpotCardProps {
   selectedNode: ETGNode | null;
@@ -127,6 +136,9 @@ interface CompactSpotCardProps {
   failureKind?: TelemetryFailureKind | null;
   onRetry?: () => void;
   discoverBusy?: boolean;
+  guidedCases?: ReadonlyArray<GuidedCaseStudyItem>;
+  activeCaseStudyId?: string | null;
+  onSelectCaseStudy?: (caseId: string) => void;
   onToggleTopic: (ds: ETGDatasetId) => void;
   onResetTopics: () => void;
   onFocusSummaryDataset: (ds: ETGDatasetId) => void;
@@ -229,12 +241,14 @@ function MiniSparkline({
 
 function SpotTrendChart({
   summary,
+  secondarySummary = null,
   comparison,
   labelA,
   labelB,
   tempUnit,
 }: {
   summary: TrendAnalysisSummary | null;
+  secondarySummary?: TrendAnalysisSummary | null;
   comparison: CrossRegionComparison | null;
   labelA: string;
   labelB: string;
@@ -242,7 +256,9 @@ function SpotTrendChart({
 }) {
   const chartDescId = useId();
   const [chartMode, setChartMode] = useState<"raw" | "anomaly">("raw");
-  const showOverlay = Boolean(comparison && comparison.alignedPoints.length >= 3);
+  const [seriesFocus, setSeriesFocus] = useState<"both" | "a" | "b">("both");
+  const hasOverlay = Boolean(comparison && comparison.alignedPoints.length >= 3);
+  const effectiveFocus = hasOverlay ? seriesFocus : "a";
   const w = 320;
   const h = 132;
   const padX = 16;
@@ -250,7 +266,53 @@ function SpotTrendChart({
   const plotW = w - padX * 2;
   const plotH = h - padY * 2;
 
-  if (showOverlay && comparison) {
+  const focusSwitcher =
+    hasOverlay && (summary || secondarySummary) ? (
+      <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Chart series focus">
+        <button
+          type="button"
+          aria-pressed={effectiveFocus === "both"}
+          onClick={() => setSeriesFocus("both")}
+          className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+            effectiveFocus === "both"
+              ? "border-accent-fg bg-amber-950 text-amber-300"
+              : "border-border bg-surface text-text-muted hover:text-text-primary"
+          }`}
+        >
+          Both (Z-Score)
+        </button>
+        {summary && (
+          <button
+            type="button"
+            aria-pressed={effectiveFocus === "a"}
+            onClick={() => setSeriesFocus("a")}
+            className={`max-w-[110px] truncate rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+              effectiveFocus === "a"
+                ? "border-amber-400 bg-amber-950 text-amber-300"
+                : "border-border bg-surface text-text-muted hover:text-text-primary"
+            }`}
+          >
+            A: {labelA}
+          </button>
+        )}
+        {secondarySummary && (
+          <button
+            type="button"
+            aria-pressed={effectiveFocus === "b"}
+            onClick={() => setSeriesFocus("b")}
+            className={`max-w-[110px] truncate rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+              effectiveFocus === "b"
+                ? "border-sky-400 bg-sky-950 text-sky-300"
+                : "border-border bg-surface text-text-muted hover:text-text-primary"
+            }`}
+          >
+            B: {labelB}
+          </button>
+        )}
+      </div>
+    ) : null;
+
+  if (hasOverlay && comparison && effectiveFocus === "both") {
     const pts = comparison.alignedPoints;
     const allZ = pts.flatMap((p) => [p.zA, p.zB]);
     const minY = Math.min(-2, ...allZ);
@@ -274,6 +336,7 @@ function SpotTrendChart({
             {pts[0]?.date}–{pts[pts.length - 1]?.date}
           </span>
         </div>
+        {focusSwitcher}
         <svg viewBox={`0 0 ${w} ${h}`} className="h-[118px] w-full" aria-describedby={chartDescId}>
           <line
             x1={padX}
@@ -289,51 +352,77 @@ function SpotTrendChart({
         <p id={chartDescId} className="sr-only">
           Comparison chart showing normalized changes over time for {labelA} and {labelB}.
         </p>
-        <div className="flex flex-wrap items-center gap-3 text-[11px] text-text-muted">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-amber-400" aria-hidden="true" />
-            <span className="max-w-[130px] truncate">{labelA}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-sky-400" aria-hidden="true" />
-            <span className="max-w-[130px] truncate">{labelB}</span>
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-400" aria-hidden="true" />
+              <span className="max-w-[130px] truncate">{labelA}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-sky-400" aria-hidden="true" />
+              <span className="max-w-[130px] truncate">{labelB}</span>
+            </span>
+          </div>
+          {(summary?.seasonalAnalysis || secondarySummary?.seasonalAnalysis) && (
+            <span className="font-mono text-[10px] text-text-subtle">
+              Select A or B for Seasonal MK (p_s)
+            </span>
+          )}
         </div>
       </div>
     );
   }
 
-  if (!summary || summary.points.length < 2) return null;
+  const activeChartSummary =
+    effectiveFocus === "b" && secondarySummary ? secondarySummary : summary;
 
-  const pts = summary.points;
+  if (!activeChartSummary || activeChartSummary.points.length < 2) return null;
+
+  const usingMonthlyPoints = Boolean(
+    activeChartSummary.seasonalPoints && activeChartSummary.seasonalPoints.length >= 18
+  );
+  const rawOrMonthlyPts = usingMonthlyPoints
+    ? activeChartSummary.seasonalPoints!
+    : activeChartSummary.points;
   const hasAnomalyView = Boolean(
-    summary.seasonalAnalysis && pts.some((p) => typeof p.anomalyValue === "number")
+    activeChartSummary.seasonalAnalysis &&
+      (usingMonthlyPoints ||
+        activeChartSummary.points.some((p) => typeof p.anomalyValue === "number"))
   );
   const effectiveMode = hasAnomalyView && chartMode === "anomaly" ? "anomaly" : "raw";
 
-  const hasTempUnit = isTemperatureUnitString(summary.unit);
+  const hasTempUnit = isTemperatureUnitString(activeChartSummary.unit);
   const toDisplay = (v: number) =>
-    hasTempUnit ? convertTemperatureDisplayValue(v, summary.unit, tempUnit) : v;
+    hasTempUnit ? convertTemperatureDisplayValue(v, activeChartSummary.unit, tempUnit) : v;
   const toDisplayDelta = (v: number) =>
-    hasTempUnit && tempUnit === "F" && !/(?:°\s*f|deg\s*f|fahrenheit)/i.test(summary.unit)
+    hasTempUnit && tempUnit === "F" && !/(?:°\s*f|deg\s*f|fahrenheit)/i.test(activeChartSummary.unit)
       ? v * 1.8
       : v;
   const displayUnit = hasTempUnit
-    ? convertTemperatureUnitLabel(summary.unit, tempUnit)
-    : summary.unit;
+    ? convertTemperatureUnitLabel(activeChartSummary.unit, tempUnit)
+    : activeChartSummary.unit;
+  const displaySlopeUnit = hasTempUnit
+    ? convertSlopeUnitLabel(activeChartSummary.slopeUnit, tempUnit)
+    : activeChartSummary.slopeUnit;
 
-  const seriesValues = pts.map((p) =>
+  const seriesValues = rawOrMonthlyPts.map((p) =>
     effectiveMode === "anomaly" ? toDisplayDelta(p.anomalyValue ?? 0) : toDisplay(p.value)
   );
   const trendValues =
-    effectiveMode === "anomaly" && summary.seasonalAnalysis
+    effectiveMode === "anomaly" && activeChartSummary.seasonalAnalysis
       ? (() => {
-          const sa = summary.seasonalAnalysis;
-          const midT = (pts[0].t + pts[pts.length - 1].t) / 2;
+          const sa = activeChartSummary.seasonalAnalysis;
+          const midT = (rawOrMonthlyPts[0].t + rawOrMonthlyPts[rawOrMonthlyPts.length - 1].t) / 2;
           const meanAnom = seriesValues.reduce((s, v) => s + v, 0) / seriesValues.length;
-          return pts.map((p) => meanAnom + toDisplayDelta(sa.seasonalTheilSenSlope * (p.t - midT)));
+          return rawOrMonthlyPts.map(
+            (p) => meanAnom + toDisplayDelta(sa.seasonalTheilSenSlope * (p.t - midT))
+          );
         })()
-      : pts.map((p) => toDisplay(p.theilSenFit));
+      : usingMonthlyPoints
+        ? rawOrMonthlyPts.map((p) =>
+            toDisplay(activeChartSummary.theilSen.slope * p.t + activeChartSummary.theilSen.intercept)
+          )
+        : activeChartSummary.points.map((p) => toDisplay(p.theilSenFit));
 
   const minY = Math.min(
     effectiveMode === "anomaly" ? 0 : Infinity,
@@ -346,7 +435,8 @@ function SpotTrendChart({
     ...trendValues
   );
   const span = Math.max(1e-6, maxY - minY);
-  const xAt = (i: number) => padX + (i / Math.max(1, pts.length - 1)) * plotW;
+  const xAt = (i: number) =>
+    padX + (i / Math.max(1, rawOrMonthlyPts.length - 1)) * plotW;
   const yAt = (v: number) => padY + plotH - ((v - minY) / span) * plotH;
 
   const rawPath = seriesValues
@@ -356,46 +446,60 @@ function SpotTrendChart({
     .map((v, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(v).toFixed(1)}`)
     .join(" ");
 
-  const dsMeta = DATASET_BY_ID[summary.dataset];
-  const lineColor = dsMeta?.color ?? "#e2a856";
-  const digest = describeTrendPlainly(summary, tempUnit);
+  const dsMeta = DATASET_BY_ID[activeChartSummary.dataset];
+  const lineColor =
+    effectiveFocus === "b" ? "#38bdf8" : (dsMeta?.color ?? "#e2a856");
+  const digest = describeTrendPlainly(activeChartSummary, tempUnit);
+  const sa = activeChartSummary.seasonalAnalysis;
+  const dispSeasonalSlope = sa ? toDisplayDelta(sa.seasonalTheilSenSlope) : null;
 
   return (
     <div className="ws-inset space-y-2 rounded-md p-3">
       <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-text-subtle">
         <span className="font-medium text-text-primary">
+          {hasOverlay ? `${effectiveFocus === "b" ? labelB : labelA} · ` : ""}
           {digest.topicLabel} · {digest.parameterShort}
         </span>
         <span className="ws-numeric">
-          {pts[0]?.date}–{pts[pts.length - 1]?.date}
+          {rawOrMonthlyPts[0]?.date}–{rawOrMonthlyPts[rawOrMonthlyPts.length - 1]?.date}
         </span>
       </div>
+      {focusSwitcher}
       {hasAnomalyView && (
-        <div className="flex items-center gap-1" role="group" aria-label="Time series display mode">
-          <button
-            type="button"
-            aria-pressed={effectiveMode === "raw"}
-            onClick={() => setChartMode("raw")}
-            className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-              effectiveMode === "raw"
-                ? "border-accent-fg bg-amber-950 text-amber-300"
-                : "border-border bg-surface text-text-muted hover:text-text-primary"
-            }`}
-          >
-            Raw Values
-          </button>
-          <button
-            type="button"
-            aria-pressed={effectiveMode === "anomaly"}
-            onClick={() => setChartMode("anomaly")}
-            className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-              effectiveMode === "anomaly"
-                ? "border-accent-fg bg-amber-950 text-amber-300"
-                : "border-border bg-surface text-text-muted hover:text-text-primary"
-            }`}
-          >
-            Seasonal Cycle Removed
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1" role="group" aria-label="Time series display mode">
+            <button
+              type="button"
+              aria-pressed={effectiveMode === "raw"}
+              onClick={() => setChartMode("raw")}
+              className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                effectiveMode === "raw"
+                  ? "border-accent-fg bg-amber-950 text-amber-300"
+                  : "border-border bg-surface text-text-muted hover:text-text-primary"
+              }`}
+            >
+              Raw Values
+            </button>
+            <button
+              type="button"
+              aria-pressed={effectiveMode === "anomaly"}
+              onClick={() => setChartMode("anomaly")}
+              className={`rounded-sm border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                effectiveMode === "anomaly"
+                  ? "border-accent-fg bg-amber-950 text-amber-300"
+                  : "border-border bg-surface text-text-muted hover:text-text-primary"
+              }`}
+            >
+              Seasonal Cycle Removed
+            </button>
+          </div>
+          {sa && dispSeasonalSlope !== null && (
+            <span className="ws-numeric rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+              p_s={sa.pValue < 0.0001 ? "< 0.0001" : sa.pValue.toFixed(4)} ·{" "}
+              {dispSeasonalSlope >= 0 ? "+" : ""}
+              {dispSeasonalSlope.toFixed(3)} {displaySlopeUnit}
+            </span>
+          )}
         </div>
       )}
       <svg viewBox={`0 0 ${w} ${h}`} className="h-[118px] w-full" aria-describedby={chartDescId}>
@@ -409,18 +513,18 @@ function SpotTrendChart({
             strokeDasharray="2 3"
           />
         )}
-        <path d={rawPath} fill="none" stroke={lineColor} strokeWidth={2} strokeLinecap="round" />
+        <path d={rawPath} fill="none" stroke={lineColor} strokeWidth={usingMonthlyPoints ? 1.5 : 2} strokeLinecap="round" />
         <path
           d={trendPath}
           fill="none"
           stroke="var(--text-primary)"
-          strokeOpacity={0.75}
+          strokeOpacity={0.78}
           strokeDasharray="4 4"
           strokeWidth={1.6}
         />
       </svg>
       <p id={chartDescId} className="sr-only">
-        {digest.topicLabel} {effectiveMode === "anomaly" ? "deseasonalized anomaly" : "yearly"} values from {pts[0]?.date} to {pts[pts.length - 1]?.date} showing{" "}
+        {digest.topicLabel} {effectiveMode === "anomaly" ? "deseasonalized anomaly" : usingMonthlyPoints ? "monthly raw" : "yearly"} values from {rawOrMonthlyPts[0]?.date} to {rawOrMonthlyPts[rawOrMonthlyPts.length - 1]?.date} showing{" "}
         {digest.headline}.
       </p>
       <div className="flex items-center justify-between text-[11px] text-text-muted">
@@ -433,7 +537,9 @@ function SpotTrendChart({
           <span>
             {effectiveMode === "anomaly"
               ? `Anomaly Δ (${displayUnit})`
-              : `Observed (${displayUnit})`}
+              : usingMonthlyPoints
+                ? `Monthly Raw (${displayUnit})`
+                : `Observed (${displayUnit})`}
           </span>
         </span>
         <span className="inline-flex items-center gap-1.5">
@@ -479,6 +585,9 @@ export function CompactSpotCard({
   failureKind = null,
   onRetry,
   discoverBusy = false,
+  guidedCases,
+  activeCaseStudyId = null,
+  onSelectCaseStudy,
   onToggleTopic,
   onResetTopics,
   onFocusSummaryDataset,
@@ -514,6 +623,13 @@ export function CompactSpotCard({
   const [spotPrediction, setSpotPrediction] = useState<GraphPredictionResult | null>(null);
   const [spotPredLoading, setSpotPredLoading] = useState(false);
   const [spotPredError, setSpotPredError] = useState<string | null>(null);
+  const forecastAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      forecastAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -574,10 +690,13 @@ export function CompactSpotCard({
 
   // Only reset transient mutation banners/forms on spot switches; keep user-chosen view toggles persistent!
   useEffect(() => {
+    forecastAbortRef.current?.abort();
+    forecastAbortRef.current = null;
     setActionMsg(null);
     setShowReviseForm(false);
     setSpotPrediction(null);
     setSpotPredError(null);
+    setSpotPredLoading(false);
     setFocusedSummaryKey(null);
   }, [selectionKey]);
 
@@ -638,6 +757,9 @@ export function CompactSpotCard({
     activeSummary?.dataset ?? selectedNode?.properties.dataset ?? activeTopics[0] ?? "nasa_power";
 
   const handleRunRegionalForecast = async () => {
+    forecastAbortRef.current?.abort();
+    const controller = new AbortController();
+    forecastAbortRef.current = controller;
     setSpotPredLoading(true);
     setSpotPredError(null);
     try {
@@ -654,14 +776,26 @@ export function CompactSpotCard({
       } else {
         throw new Error("Select a pin or click a coordinate on Earth to run a regional forecast.");
       }
-      const res = await fetch(`/api/graph/predict?${qs.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/graph/predict?${qs.toString()}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const data = (await res.json()) as GraphPredictionResult & { error?: string };
+      if (controller.signal.aborted) return;
       if (!res.ok) throw new Error(data.error || "Regional forecast failed");
       setSpotPrediction(data);
     } catch (err) {
+      if (
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError")
+      ) {
+        return;
+      }
       setSpotPredError(err instanceof Error ? err.message : "Regional forecast failed");
     } finally {
-      setSpotPredLoading(false);
+      if (!controller.signal.aborted) {
+        setSpotPredLoading(false);
+      }
     }
   };
 
@@ -1025,6 +1159,7 @@ export function CompactSpotCard({
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
+            <VariableGuidePopoverButton compact label="Guide" />
             {onChangeTempUnit && (
               <div
                 className="inline-flex rounded-sm border border-border bg-surface-inset p-0.5"
@@ -1198,14 +1333,17 @@ export function CompactSpotCard({
         </div>
 
         {/* Section Quick-Toggle Bar ("Choose What You See" in 1 click) */}
-        {!isComparingTwoSpots && (
-          <div
-            className={`flex flex-wrap items-center gap-1 ${mobileCollapsed ? "max-sm:hidden" : ""}`}
-            role="group"
-            aria-label="Toggle spot card sections"
-          >
-            {(
-              [
+        <div
+          className={`flex flex-wrap items-center gap-1 ${mobileCollapsed ? "max-sm:hidden" : ""}`}
+          role="group"
+          aria-label="Toggle spot card sections"
+        >
+          {(isComparingTwoSpots
+            ? ([
+                { key: "showChart", label: "Chart" },
+                { key: "showScience", label: "Stats" },
+              ] as const)
+            : ([
                 { key: "showCurrent", label: "Now" },
                 {
                   key: "showTrends",
@@ -1223,27 +1361,26 @@ export function CompactSpotCard({
                 },
                 { key: "showChart", label: "Chart" },
                 { key: "showScience", label: "Stats" },
-              ] as const
-            ).map((btn) => {
-              const active = prefs[btn.key];
-              return (
-                <button
-                  key={btn.key}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => updatePref(btn.key, !active)}
-                  className={`rounded-sm border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
-                    active
-                      ? "border-accent-fg bg-amber-950 text-amber-300"
-                      : "border-border bg-surface-inset text-text-muted hover:text-text-primary"
-                  }`}
-                >
-                  {btn.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
+              ] as const)
+          ).map((btn) => {
+            const active = prefs[btn.key];
+            return (
+              <button
+                key={btn.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => updatePref(btn.key, !active)}
+                className={`rounded-sm border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                  active
+                    ? "border-accent-fg bg-amber-950 text-amber-300"
+                    : "border-border bg-surface-inset text-text-muted hover:text-text-primary"
+                }`}
+              >
+                {btn.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* 2. Scrollable Structured Body */}
@@ -1436,6 +1573,36 @@ export function CompactSpotCard({
                 );
               })}
             </div>
+
+            {guidedCases && guidedCases.length > 0 && onSelectCaseStudy && (
+              <div className="space-y-1.5 rounded-sm border border-border bg-surface-inset p-2">
+                <div className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-text-subtle">
+                  <span>Guided Opposite-Trend Case Studies</span>
+                  <span className="font-mono text-[9px] text-accent-fg">3 NASA Cases</span>
+                </div>
+                <div className="flex flex-wrap gap-1" role="group" aria-label="Switch guided Earth case study">
+                  {guidedCases.map((c) => {
+                    const isActive = activeCaseStudyId === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        aria-pressed={isActive}
+                        onClick={() => onSelectCaseStudy(c.id)}
+                        title={c.subtitle}
+                        className={`rounded-xs border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+                          isActive
+                            ? "border-rose-400 bg-rose-950 text-rose-200 font-semibold"
+                            : "border-border bg-surface text-text-muted hover:border-border-strong hover:text-text-primary"
+                        }`}
+                      >
+                        {c.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2601,6 +2768,7 @@ export function CompactSpotCard({
           <div className="border-t border-border pt-2.5">
             <SpotTrendChart
               summary={activeSummary}
+              secondarySummary={secondary}
               comparison={comparison}
               labelA={labelA}
               labelB={labelB}
@@ -2983,17 +3151,6 @@ export function CompactSpotCard({
                       </span>
                     </div>
                   )}
-                  <div className="mt-1 space-y-1 rounded-sm border border-border bg-surface-inset p-2 font-sans text-[11px] leading-relaxed text-text-muted">
-                    <div>
-                      <strong className="text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
-                    </div>
-                    <div>
-                      <strong className="text-text-primary">Theil-Sen Slope:</strong> Median yearly rate of change (ignores one-off outlier storms).
-                    </div>
-                    <div>
-                      <strong className="text-text-primary">Seasonal MK (p_s):</strong> Compares matching calendar months year-to-year so winter/summer swings never bias the trend.
-                    </div>
-                  </div>
                 </div>
               </details>
             )}
@@ -3006,6 +3163,24 @@ export function CompactSpotCard({
             )}
           </div>
         )}
+
+        {(prefs.showChart || prefs.showTrends || prefs.showScience || isComparingTwoSpots) &&
+          (activeSummary || comparison || selectedNode?.properties.p_value !== undefined) && (
+            <div
+              aria-label="Statistics key for students and judges"
+              className="space-y-1 rounded-sm border border-border bg-surface-inset p-2.5 font-sans text-[11px] leading-relaxed text-text-muted"
+            >
+              <div>
+                <strong className="text-text-primary">p-value &lt; 0.05:</strong> Less than a 5% chance the trend is random weather luck.
+              </div>
+              <div>
+                <strong className="text-text-primary">Theil-Sen Slope:</strong> Median yearly rate of change (ignores one-off outlier storms).
+              </div>
+              <div>
+                <strong className="text-text-primary">Seasonal MK (p_s):</strong> Compares matching calendar months year-to-year so winter/summer swings never bias the trend.
+              </div>
+            </div>
+          )}
       </div>
     </div>
   );

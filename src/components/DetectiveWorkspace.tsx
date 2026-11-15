@@ -57,13 +57,17 @@ import { assignNodeRegions, extractRegionOptions } from "@/lib/graph/regionalSub
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { DatasetSelector } from "@/components/DatasetSelector";
 import { TimelineScrubber } from "@/components/TimelineScrubber";
-import { EarthGlobe3D, type RegionalFocusRequest } from "@/components/EarthGlobe3D";
+import {
+  EarthGlobe3D,
+  type ComparisonArcVisualMeta,
+  type RegionalFocusRequest,
+} from "@/components/EarthGlobe3D";
 import {
   EarthTrendGraphView,
   type TraversalFilterState,
 } from "@/components/EarthTrendGraphView";
 import { GraphNodeWorkbenchPanel } from "@/components/GraphNodeWorkbenchPanel";
-import { CompactSpotCard } from "@/components/CompactSpotCard";
+import { CompactSpotCard, type GuidedCaseStudyItem } from "@/components/CompactSpotCard";
 import { IngestionModal, type IngestionTabId } from "@/components/IngestionModal";
 import { SolarMicrogridPanel } from "@/components/SolarMicrogridPanel";
 import { AiGraphChatPanel } from "@/components/AiGraphChatPanel";
@@ -158,7 +162,7 @@ function hidePopoverById(id: string) {
   }
 }
 
-interface GuidedDipoleCase {
+export interface GuidedDipoleCase {
   id: string;
   shortLabel: string;
   title: string;
@@ -167,7 +171,7 @@ interface GuidedDipoleCase {
   spotB: { lat: number; lng: number; dataset: ETGDatasetId; name: string };
 }
 
-const GUIDED_DIPOLE_CASES: readonly GuidedDipoleCase[] = [
+export const GUIDED_DIPOLE_CASES: readonly GuidedDipoleCase[] = [
   {
     id: "enso-pacific-dipole",
     shortLabel: "ENSO Rainfall Seesaw",
@@ -291,9 +295,10 @@ export function DetectiveWorkspace({
     targetUuid?: string;
   } | null>(null);
   const [activeCascade, setActiveCascade] = useState<EarthCascadeChain | null>(null);
+  const [activeCaseStudyId, setActiveCaseStudyId] = useState<string | null>(null);
   const [solarGraphOpen, setSolarGraphOpen] = useState(false);
   const [aiStudioOpen, setAiStudioOpen] = useState<boolean>(
-    () => initialDemoMode !== "veritas"
+    () => initialDemoMode !== "veritas" && initialDemoMode !== "spaceapps"
   );
   const [regionalFocusRequest, setRegionalFocusRequest] =
     useState<RegionalFocusRequest | null>(null);
@@ -427,6 +432,12 @@ export function DetectiveWorkspace({
   const telemetryLoadingRef = useRef(false);
   telemetryLoadingRef.current = telemetryLoading;
   const telemetryReqSeqRef = useRef(0);
+  const telemetryAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => {
+      telemetryAbortRef.current?.abort();
+    };
+  }, []);
   const lastTelemetryArgsRef = useRef<{
     lat: number;
     lng: number;
@@ -502,6 +513,7 @@ export function DetectiveWorkspace({
     }
 
     let cancelled = false;
+    const controller = new AbortController();
     const params = new URLSearchParams({
       mode: "subgraph",
       rootUuid: selectedNodeUuid,
@@ -513,19 +525,26 @@ export function DetectiveWorkspace({
       params.set("edgeTypes", allowedEdgeTypes.join(","));
     }
 
-    fetch(`/api/graph/traverse?${params.toString()}`, { cache: "no-store" })
+    fetch(`/api/graph/traverse?${params.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled && data && Array.isArray(data.nodes)) {
+        if (!cancelled && !controller.signal.aborted && data && Array.isArray(data.nodes)) {
           setTraversalSubgraph(data as SubgraphTraversalResult);
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+          return;
+        }
         if (!cancelled) setTraversalSubgraph(null);
       });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [
     viewMode,
@@ -547,21 +566,29 @@ export function DetectiveWorkspace({
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const focusParam = selectedNodeUuid
       ? `&focusUuid=${encodeURIComponent(selectedNodeUuid)}`
       : "";
-    fetch(`/api/graph/microscope?topK=8${focusParam}`, { cache: "no-store" })
+    fetch(`/api/graph/microscope?topK=8${focusParam}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled && data && Array.isArray(data.nodes)) {
+        if (!cancelled && !controller.signal.aborted && data && Array.isArray(data.nodes)) {
           setMicroscopeScan(data as TrendMicroscopeScanResult);
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+          return;
+        }
         if (!cancelled) setMicroscopeScan(null);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [snapshot.nodes.length, snapshot.edges.length, selectedNodeUuid]);
 
@@ -618,6 +645,9 @@ export function DetectiveWorkspace({
       datasetsList?: ETGDatasetId[]
     ) => {
       const reqId = ++telemetryReqSeqRef.current;
+      telemetryAbortRef.current?.abort();
+      const controller = new AbortController();
+      telemetryAbortRef.current = controller;
       lastTelemetryArgsRef.current = {
         lat,
         lng,
@@ -650,9 +680,10 @@ export function DetectiveWorkspace({
         }
         const res = await fetch(`/api/earth/timeseries?${params.toString()}`, {
           cache: "no-store",
+          signal: controller.signal,
         });
         const data = await res.json().catch(() => null);
-        if (reqId !== telemetryReqSeqRef.current) return;
+        if (controller.signal.aborted || reqId !== telemetryReqSeqRef.current) return;
 
         if (res.ok && data) {
           const incomingPrimary: TrendAnalysisSummary | null = data.primary ?? null;
@@ -720,6 +751,9 @@ export function DetectiveWorkspace({
           );
         }
       } catch (err) {
+        if (controller.signal.aborted || (err instanceof Error && err.name === "AbortError")) {
+          return;
+        }
         if (reqId !== telemetryReqSeqRef.current) return;
         const rawMsg =
           err instanceof Error ? err.message : "Failed to fetch live Earth data.";
@@ -731,7 +765,10 @@ export function DetectiveWorkspace({
         setTelemetryFailureKind("failed_to_fetch");
         setTelemetryError(friendlyMsg);
       } finally {
-        if (reqId === telemetryReqSeqRef.current) {
+        if (telemetryAbortRef.current === controller) {
+          telemetryAbortRef.current = null;
+        }
+        if (!controller.signal.aborted && reqId === telemetryReqSeqRef.current) {
           setTelemetryLoading(false);
         }
       }
@@ -1016,6 +1053,7 @@ export function DetectiveWorkspace({
       setSelectedEdgeUuid(null);
       setComparePinB(null);
       setCompareMode(false);
+      setActiveCaseStudyId(null);
       setRelationNodePair(null);
       setFocusedSummaryDataset(null);
       setQuickAddNodeOpen(false);
@@ -1075,6 +1113,8 @@ export function DetectiveWorkspace({
         );
       } else {
         telemetryReqSeqRef.current += 1;
+        telemetryAbortRef.current?.abort();
+        telemetryAbortRef.current = null;
         setProbedCoord(null);
         setTelemetryPrimary(embedded);
         setTelemetrySecondary(null);
@@ -1117,9 +1157,12 @@ export function DetectiveWorkspace({
 
   const handleClearSelection = useCallback(() => {
     telemetryReqSeqRef.current += 1;
+    telemetryAbortRef.current?.abort();
+    telemetryAbortRef.current = null;
     setSelectedNodeUuid(null);
     setSelectedEdgeUuid(null);
     setActiveCascade(null);
+    setActiveCaseStudyId(null);
     setCompareMode(false);
     setComparePinB(null);
     setRelationNodePair(null);
@@ -1287,6 +1330,7 @@ export function DetectiveWorkspace({
       setSelectedEdgeUuid(edge.properties.uuid);
       setSelectedNodeUuid(null);
       setCompareMode(false);
+      setActiveCaseStudyId(null);
       setFocusedSummaryDataset(null);
       setInspectorOpen(true);
       setRelationNodePair({
@@ -1328,6 +1372,8 @@ export function DetectiveWorkspace({
         );
       } else {
         telemetryReqSeqRef.current += 1;
+        telemetryAbortRef.current?.abort();
+        telemetryAbortRef.current = null;
         setComparePinB(null);
         setComparison(null);
         setTelemetryPrimary(null);
@@ -1354,6 +1400,7 @@ export function DetectiveWorkspace({
         setComparePinB({ lat, lng });
         setSelectedNodeUuid(null);
         setSelectedEdgeUuid(null);
+        setActiveCaseStudyId(null);
         setRelationNodePair(null);
         setCompareMode(false);
         setFocusedSummaryDataset(null);
@@ -1377,6 +1424,7 @@ export function DetectiveWorkspace({
 
       setSelectedNodeUuid(null);
       setSelectedEdgeUuid(null);
+      setActiveCaseStudyId(null);
       setProbedCoord({ lat, lng });
       setComparePinB(null);
       setComparison(null);
@@ -1407,6 +1455,8 @@ export function DetectiveWorkspace({
         );
       } else {
         telemetryReqSeqRef.current += 1;
+        telemetryAbortRef.current?.abort();
+        telemetryAbortRef.current = null;
         setTelemetryPrimary(null);
         setTelemetryCurrent(null);
         setTelemetrySummaries([]);
@@ -1435,6 +1485,7 @@ export function DetectiveWorkspace({
       );
       setSelectedEdgeUuid(matchingEdge?.properties.uuid ?? null);
       setSelectedNodeUuid(nodeA.uuid);
+      setActiveCaseStudyId(null);
       setRelationNodePair({ sourceUuid: nodeA.uuid, targetUuid: nodeB.uuid });
       setCompareMode(false);
       setFocusedSummaryDataset(null);
@@ -1693,6 +1744,7 @@ export function DetectiveWorkspace({
     (preset: GuidedDipoleCase) => {
       hidePopoverById("etg-dipoles-popover");
       setViewMode("globe");
+      setActiveCaseStudyId(preset.id);
       setTelemetryPrimary(null);
       setTelemetrySecondary(null);
       setTelemetryCurrent(null);
@@ -1721,6 +1773,129 @@ export function DetectiveWorkspace({
     },
     [queryTimeSeries, requestRegionalFocus]
   );
+
+  const guidedCaseItems = useMemo<GuidedCaseStudyItem[]>(
+    () =>
+      GUIDED_DIPOLE_CASES.map((c) => ({
+        id: c.id,
+        badge: c.shortLabel,
+        title: c.title,
+        subtitle: c.subtitle,
+        dataset: c.spotA.dataset,
+      })),
+    []
+  );
+
+  const handleSelectCaseStudyById = useCallback(
+    (caseId: string) => {
+      const preset = GUIDED_DIPOLE_CASES.find((c) => c.id === caseId);
+      if (preset) {
+        handleRunCaseStudy(preset);
+      }
+    },
+    [handleRunCaseStudy]
+  );
+
+  const comparisonArcMeta = useMemo<ComparisonArcVisualMeta | null>(() => {
+    if (viewMode !== "globe" || !probedCoord || !comparePinB) return null;
+    const activeCase = activeCaseStudyId
+      ? (GUIDED_DIPOLE_CASES.find((c) => c.id === activeCaseStudyId) ?? null)
+      : null;
+
+    const pairLabel =
+      relationSourceNode && relationTargetNode
+        ? `${humanizeNodeText(relationSourceNode.properties.name)} ↔ ${humanizeNodeText(relationTargetNode.properties.name)}`
+        : activeCase
+          ? `${activeCase.spotA.name} ↔ ${activeCase.spotB.name}`
+          : `${probedCoord.lat.toFixed(1)}°, ${probedCoord.lng.toFixed(1)}° ↔ ${comparePinB.lat.toFixed(1)}°, ${comparePinB.lng.toFixed(1)}°`;
+
+    const statText = comparison
+      ? `r = ${comparison.pearsonR >= 0 ? "+" : ""}${comparison.pearsonR.toFixed(2)} · p = ${
+          comparison.pValue < 0.001 ? "<0.001" : comparison.pValue.toFixed(3)
+        }`
+      : activeCase
+        ? telemetryLoading
+          ? "Querying live NASA / NOAA series…"
+          : activeCase.title
+        : telemetryLoading
+          ? "Querying live NASA / NOAA series…"
+          : null;
+
+    const isSignificant = comparison
+      ? comparison.pValue < 0.05 || comparison.detrendedPValue < 0.05
+      : Boolean(activeCase);
+
+    if (selectedEdge) {
+      const category = classifyRelationCategory(selectedEdge.type);
+      const badgeText = relationTargetNode
+        ? formatRelationForDisplay(selectedEdge, relationSourceNode, relationTargetNode)
+            .badgeText
+        : RELATION_CATEGORY_META[category].shortLabel;
+      return {
+        category,
+        badgeText,
+        pairLabel,
+        statText,
+        isSignificant,
+      };
+    }
+
+    if (comparison) {
+      if (comparison.classification === "opposite_teleconnection") {
+        return {
+          category: "opposite",
+          badgeText: "Drives Opposite",
+          pairLabel,
+          statText,
+          isSignificant,
+        };
+      }
+      if (comparison.classification === "co_trending") {
+        return {
+          category: "coupled",
+          badgeText: "Co-Trending",
+          pairLabel,
+          statText,
+          isSignificant,
+        };
+      }
+      return {
+        category: activeCase ? "opposite" : "corroboration",
+        badgeText: activeCase ? activeCase.shortLabel : "Cross-Region Check",
+        pairLabel,
+        statText,
+        isSignificant,
+      };
+    }
+
+    if (activeCase) {
+      return {
+        category: "opposite",
+        badgeText: activeCase.shortLabel,
+        pairLabel,
+        statText,
+        isSignificant: true,
+      };
+    }
+
+    return {
+      category: "coupled",
+      badgeText: "2-Pin Comparison",
+      pairLabel,
+      statText,
+      isSignificant: false,
+    };
+  }, [
+    viewMode,
+    probedCoord,
+    comparePinB,
+    activeCaseStudyId,
+    relationSourceNode,
+    relationTargetNode,
+    comparison,
+    telemetryLoading,
+    selectedEdge,
+  ]);
 
   const demoBootedRef = useRef(false);
   useEffect(() => {
@@ -2510,52 +2685,6 @@ export function DetectiveWorkspace({
         </div>
       </div>
 
-      {/* Transient Feedback Toast (always positioned cleanly below the 48px header) */}
-      {statusMessage && (
-        <div
-          role="status"
-          className={`etg-hud-pill pointer-events-auto absolute top-14 z-30 flex items-center gap-2 rounded-md bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg ${
-            inspectorOpen
-              ? "left-2.5 max-w-[min(560px,calc(100dvw-1.25rem))] sm:left-4 sm:max-w-[min(560px,calc(100dvw-430px))]"
-              : "left-1/2 max-w-[min(680px,calc(100dvw-1.5rem))] -translate-x-1/2"
-          }`}
-        >
-          <span className="truncate">{statusMessage}</span>
-          <button
-            type="button"
-            onClick={() => setStatusMessage(null)}
-            aria-label="Dismiss notification"
-            className="text-text-subtle hover:text-text-primary cursor-pointer"
-          >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-        </div>
-      )}
-
-      {/* Active Compare Mode Banner (immediate feedback before second globe click) */}
-      {compareMode && !statusMessage && viewMode === "globe" && (
-        <div
-          role="status"
-          className={`etg-hud-pill pointer-events-auto absolute top-14 z-30 flex items-center gap-2 rounded-md border border-amber-400 bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg ${
-            inspectorOpen
-              ? "left-2.5 max-w-[calc(100dvw-1.25rem)] sm:left-4 sm:max-w-[min(520px,calc(100dvw-430px))]"
-              : "left-1/2 max-w-[calc(100dvw-1.5rem)] -translate-x-1/2"
-          }`}
-        >
-          <GitCompare className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
-          <span className="truncate">
-            Compare mode active — click a second point or pin on the 3D Earth
-          </span>
-          <button
-            type="button"
-            onClick={() => setCompareMode(false)}
-            className="shrink-0 rounded-xs border border-border bg-surface-elevated px-1.5 py-0.5 text-[11px] font-semibold text-text-muted hover:text-text-primary cursor-pointer"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-
       {/* Full-Bleed Center Canvas + Docked AI Graph Studio */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <AiGraphChatPanel
@@ -2577,6 +2706,57 @@ export function DetectiveWorkspace({
         <h2 ref={viewHeadingRef} tabIndex={-1} className="sr-only">
           {stageTitle}
         </h2>
+
+        {/* Transient Feedback Toast & Compare Banner (non-overlapping across 1280x800 and 390x844) */}
+        {(statusMessage || (compareMode && viewMode === "globe")) && (
+          <div
+            className={`pointer-events-none absolute z-30 flex justify-center max-sm:inset-x-2.5 max-sm:top-16 ${
+              viewMode === "globe"
+                ? aiStudioOpen
+                  ? "sm:bottom-20 sm:left-4 sm:right-auto sm:top-auto sm:justify-start"
+                  : inspectorOpen
+                    ? "sm:top-16 sm:inset-x-4 min-[1160px]:top-3 min-[1160px]:left-[428px] min-[1160px]:right-[418px]"
+                    : "sm:top-3 sm:left-[428px] sm:right-4"
+                : inspectorOpen
+                  ? "sm:top-3 sm:left-4 sm:right-[426px]"
+                  : "sm:top-3 sm:inset-x-4"
+            }`}
+          >
+            {statusMessage ? (
+              <div
+                role="status"
+                className="etg-hud-pill pointer-events-auto flex max-w-[min(520px,100%)] items-center gap-2 rounded-md bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg"
+              >
+                <span className="truncate">{statusMessage}</span>
+                <button
+                  type="button"
+                  onClick={() => setStatusMessage(null)}
+                  aria-label="Dismiss notification"
+                  className="shrink-0 text-text-subtle hover:text-text-primary cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            ) : (
+              <div
+                role="status"
+                className="etg-hud-pill pointer-events-auto flex max-w-[min(520px,100%)] items-center gap-2 rounded-md border border-amber-400 bg-surface px-3.5 py-1.5 text-xs font-medium text-text-primary shadow-lg"
+              >
+                <GitCompare className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+                <span className="truncate">
+                  Compare mode active — click a second point or pin on the 3D Earth
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCompareMode(false)}
+                  className="shrink-0 rounded-xs border border-border bg-surface-elevated px-1.5 py-0.5 text-[11px] font-semibold text-text-muted hover:text-text-primary cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {viewMode === "graph" ? (
           <EarthTrendGraphView
@@ -2634,8 +2814,10 @@ export function DetectiveWorkspace({
             microscopeByNode={microscopeByNode}
             probedCoord={probedCoord}
             comparePinB={comparePinB}
+            comparisonArcMeta={comparisonArcMeta}
             compareMode={compareMode}
             inspectorOpen={inspectorOpen}
+            mobileSheetExpanded={inspectorOpen && !mobileSheetCollapsed}
             enabledCategories={enabledRelationCategories}
             onChangeEnabledCategories={setEnabledRelationCategories}
             tempUnit={tempUnit}
@@ -2822,6 +3004,9 @@ export function DetectiveWorkspace({
                 onToggleMobileCollapse={() => setMobileSheetCollapsed((v) => !v)}
                 enabledRelationCategories={enabledRelationCategories}
                 compareMode={compareMode}
+                guidedCases={guidedCaseItems}
+                activeCaseStudyId={activeCaseStudyId}
+                onSelectCaseStudy={handleSelectCaseStudyById}
                 activeTopics={activeTopics}
                 loading={telemetryLoading}
                 error={telemetryError}
@@ -2838,6 +3023,7 @@ export function DetectiveWorkspace({
                 onToggleCompareMode={() => setCompareMode((v) => !v)}
                 onSwapPins={handleSwapPins}
                 onClearComparison={() => {
+                  setActiveCaseStudyId(null);
                   setComparison(null);
                   setTelemetrySecondary(null);
                   setTelemetrySecondaryCurrent(null);

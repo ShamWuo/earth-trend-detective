@@ -4,7 +4,10 @@ import {
   fetchGlofasDischargeSeries,
   fetchNearestUsgsGaugeAnnualSeries,
 } from "@/lib/earth/openFeedsClient";
-import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
+import {
+  analyzeTimeSeries,
+  computeSeasonalMannKendall,
+} from "@/lib/stats/trendEngine";
 import type {
   DatasetTelemetryDiagnostic,
   ETGDatasetId,
@@ -138,6 +141,87 @@ export function computeMonthlyVpdSeries(
       t: year,
       value: Number((vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(4)),
     }));
+}
+
+/**
+ * Extracts individual `YYYY-MM` monthly points from a NASA POWER monthly dictionary,
+ * strictly skipping M13 annual summary keys and missing-value sentinels (`<= -900`).
+ */
+export function extractMonthlySeriesFromPowerDict(
+  rawSeries: Record<string, unknown>
+): TimeSeriesPoint[] {
+  const points: TimeSeriesPoint[] = [];
+  for (const [ym, rawVal] of Object.entries(rawSeries)) {
+    if (!/^\d{6}$/.test(ym) || ym.endsWith("13")) continue;
+    const val = typeof rawVal === "number" ? rawVal : Number(rawVal);
+    if (!Number.isFinite(val) || val <= -900) continue;
+    const year = Number(ym.slice(0, 4));
+    const month = Number(ym.slice(4, 6));
+    if (month < 1 || month > 12) continue;
+    points.push({
+      date: `${year}-${String(month).padStart(2, "0")}`,
+      t: Number((year + (month - 0.5) / 12).toFixed(4)),
+      value: Number(val.toFixed(4)),
+    });
+  }
+  return points.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Extracts individual `YYYY-MM` Vapor Pressure Deficit (kPa) points from NASA POWER
+ * monthly `T2M_MAX` and `RH2M` dictionaries for Seasonal Mann-Kendall analysis.
+ */
+export function extractMonthlyVpdSeriesFromPowerDicts(
+  tMaxMonthly: Record<string, unknown>,
+  rhMonthly: Record<string, unknown>
+): TimeSeriesPoint[] {
+  const points: TimeSeriesPoint[] = [];
+  for (const [ym, rawT] of Object.entries(tMaxMonthly)) {
+    if (!/^\d{6}$/.test(ym) || ym.endsWith("13")) continue;
+    const rawRh = rhMonthly[ym];
+    const tMax = typeof rawT === "number" ? rawT : Number(rawT);
+    const rh = typeof rawRh === "number" ? rawRh : Number(rawRh);
+    if (!Number.isFinite(tMax) || tMax <= -900 || !Number.isFinite(rh) || rh < 0 || rh > 105) {
+      continue;
+    }
+    const year = Number(ym.slice(0, 4));
+    const month = Number(ym.slice(4, 6));
+    if (month < 1 || month > 12) continue;
+    const es = 0.61078 * Math.exp((17.27 * tMax) / (tMax + 237.3));
+    const vpd = Math.max(0, es * (1 - Math.min(100, rh) / 100));
+    points.push({
+      date: `${year}-${String(month).padStart(2, "0")}`,
+      t: Number((year + (month - 0.5) / 12).toFixed(4)),
+      value: Number(vpd.toFixed(4)),
+    });
+  }
+  return points.sort((a, b) => a.t - b.t);
+}
+
+/**
+ * Attaches Seasonal Mann-Kendall results (`p_s`) and deseasonalized monthly points
+ * onto an annual `TrendAnalysisSummary` when monthly observations are available.
+ */
+export function enrichSummaryWithMonthlySeasonality(
+  summary: TrendAnalysisSummary,
+  monthlyPoints: readonly TimeSeriesPoint[]
+): TrendAnalysisSummary {
+  if (monthlyPoints.length < 18) return summary;
+  const sortedMonthly = [...monthlyPoints]
+    .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value))
+    .sort((a, b) => a.t - b.t);
+  const seasonalAnalysis = computeSeasonalMannKendall(sortedMonthly);
+  if (!seasonalAnalysis) return summary;
+  return {
+    ...summary,
+    seasonalAnalysis,
+    seasonalPoints: sortedMonthly.map((p, idx) => ({
+      date: p.date,
+      t: p.t,
+      value: p.value,
+      anomalyValue: Number((seasonalAnalysis.deseasonalizedValues[idx] ?? 0).toFixed(4)),
+    })),
+  };
 }
 
 const USER_AGENT = "EarthTrendDetective/1.0 (NASA-Space-Apps; Scientific-Observatory)";
@@ -304,17 +388,24 @@ export async function fetchEarthTimeSeries(
           ? parseNasaPowerMonthlyPayload(rawHydro)
           : [];
       if (hydroPts.length >= 5) {
+        const hydroMonthly =
+          rawHydro && typeof rawHydro === "object"
+            ? extractMonthlySeriesFromPowerDict(rawHydro)
+            : [];
         const hydroSummary = attachMeasurementMetadata(
           "hydrology",
-          analyzeTimeSeries(hydroPts, {
-            lat: clampedLat,
-            lng: clampedLng,
-            dataset: "hydrology",
-            parameter: "GWETROOT (NASA Land Hydrology)",
-            unit: "0–1 wet",
-            slopeUnit: "/yr",
-            provenance: "NASA GES DISC / POWER Hydrology (Live)",
-          }),
+          enrichSummaryWithMonthlySeasonality(
+            analyzeTimeSeries(hydroPts, {
+              lat: clampedLat,
+              lng: clampedLng,
+              dataset: "hydrology",
+              parameter: "GWETROOT (NASA Land Hydrology)",
+              unit: "0–1 wet",
+              slopeUnit: "/yr",
+              provenance: "NASA GES DISC / POWER Hydrology (Live)",
+            }),
+            hydroMonthly
+          ),
           "reanalysis_physical"
         );
         SERIES_CACHE.set(key, {
@@ -351,6 +442,10 @@ export async function fetchEarthTimeSeries(
       const aodPts =
         rawAod && typeof rawAod === "object" ? parseNasaPowerMonthlyPayload(rawAod) : [];
       if (aodPts.length >= 5) {
+        const aodMonthly =
+          rawAod && typeof rawAod === "object"
+            ? extractMonthlySeriesFromPowerDict(rawAod)
+            : [];
         const latestPm25 =
           camsSnapshot?.points[camsSnapshot.points.length - 1];
         const note = latestPm25
@@ -358,15 +453,18 @@ export async function fetchEarthTimeSeries(
           : undefined;
         const aodSummary = attachMeasurementMetadata(
           "air_quality",
-          analyzeTimeSeries(aodPts, {
-            lat: clampedLat,
-            lng: clampedLng,
-            dataset: "air_quality",
-            parameter: "AOD_55 (Aerosol Optical Depth 550nm)",
-            unit: "AOD",
-            slopeUnit: "/yr",
-            provenance: "NASA POWER AOD_55 (Live)",
-          }),
+          enrichSummaryWithMonthlySeasonality(
+            analyzeTimeSeries(aodPts, {
+              lat: clampedLat,
+              lng: clampedLng,
+              dataset: "air_quality",
+              parameter: "AOD_55 (Aerosol Optical Depth 550nm)",
+              unit: "AOD",
+              slopeUnit: "/yr",
+              provenance: "NASA POWER AOD_55 (Live)",
+            }),
+            aodMonthly
+          ),
           "reanalysis_physical",
           note
         );
@@ -376,17 +474,20 @@ export async function fetchEarthTimeSeries(
     }
 
     if (camsSnapshot && camsSnapshot.points.length >= 6) {
+      const camsBase = analyzeTimeSeries(camsSnapshot.points, {
+        lat: clampedLat,
+        lng: clampedLng,
+        dataset: "air_quality",
+        parameter: camsSnapshot.metricName,
+        unit: camsSnapshot.unit,
+        slopeUnit: "μg/m³/yr",
+        provenance: camsSnapshot.provenanceSource,
+      });
       const camsSummary = attachMeasurementMetadata(
         "air_quality",
-        analyzeTimeSeries(camsSnapshot.points, {
-          lat: clampedLat,
-          lng: clampedLng,
-          dataset: "air_quality",
-          parameter: camsSnapshot.metricName,
-          unit: camsSnapshot.unit,
-          slopeUnit: "μg/m³/yr",
-          provenance: camsSnapshot.provenanceSource,
-        }),
+        camsBase.seasonalAnalysis
+          ? camsBase
+          : enrichSummaryWithMonthlySeasonality(camsBase, camsSnapshot.points),
         "reanalysis_physical"
       );
       SERIES_CACHE.set(key, { expiresAt: Date.now() + 1000 * 60 * 15, summary: camsSummary });
@@ -408,17 +509,24 @@ export async function fetchEarthTimeSeries(
           ? parseNasaPowerMonthlyPayload(rawEvap)
           : [];
       if (evapPts.length >= 5) {
+        const evapMonthly =
+          rawEvap && typeof rawEvap === "object"
+            ? extractMonthlySeriesFromPowerDict(rawEvap)
+            : [];
         const evapSummary = attachMeasurementMetadata(
           "deforestation",
-          analyzeTimeSeries(evapPts, {
-            lat: clampedLat,
-            lng: clampedLng,
-            dataset: "deforestation",
-            parameter: "EVPTRNS (Canopy Evapotranspiration Flux)",
-            unit: "MJ/m²/d",
-            slopeUnit: "MJ/m²/d/yr",
-            provenance: "NASA POWER Evapotranspiration (Live)",
-          }),
+          enrichSummaryWithMonthlySeasonality(
+            analyzeTimeSeries(evapPts, {
+              lat: clampedLat,
+              lng: clampedLng,
+              dataset: "deforestation",
+              parameter: "EVPTRNS (Canopy Evapotranspiration Flux)",
+              unit: "MJ/m²/d",
+              slopeUnit: "MJ/m²/d/yr",
+              provenance: "NASA POWER Evapotranspiration (Live)",
+            }),
+            evapMonthly
+          ),
           "reanalysis_physical"
         );
         SERIES_CACHE.set(key, { expiresAt: Date.now() + 1000 * 60 * 15, summary: evapSummary });
@@ -442,17 +550,24 @@ export async function fetchEarthTimeSeries(
   if (dataset === "wildfire" && allParams.T2M_MAX && allParams.RH2M) {
     const vpdPoints = computeMonthlyVpdSeries(allParams.T2M_MAX, allParams.RH2M);
     if (vpdPoints.length >= 5) {
+      const vpdMonthly = extractMonthlyVpdSeriesFromPowerDicts(
+        allParams.T2M_MAX,
+        allParams.RH2M
+      );
       const vpdSummary = attachMeasurementMetadata(
         "wildfire",
-        analyzeTimeSeries(vpdPoints, {
-          lat: clampedLat,
-          lng: clampedLng,
-          dataset: "wildfire",
-          parameter: "VPD (Vapor Pressure Deficit)",
-          unit: "kPa",
-          slopeUnit: "kPa/yr",
-          provenance: "NASA POWER MERRA-2 (Live)",
-        })
+        enrichSummaryWithMonthlySeasonality(
+          analyzeTimeSeries(vpdPoints, {
+            lat: clampedLat,
+            lng: clampedLng,
+            dataset: "wildfire",
+            parameter: "VPD (Vapor Pressure Deficit)",
+            unit: "kPa",
+            slopeUnit: "kPa/yr",
+            provenance: "NASA POWER MERRA-2 (Live)",
+          }),
+          vpdMonthly
+        )
       );
       SERIES_CACHE.set(key, {
         expiresAt: Date.now() + 1000 * 60 * 15,
@@ -475,17 +590,25 @@ export async function fetchEarthTimeSeries(
     );
   }
 
+  const monthlyRawPoints =
+    rawParamSeries && typeof rawParamSeries === "object"
+      ? extractMonthlySeriesFromPowerDict(rawParamSeries)
+      : [];
+
   const summary = attachMeasurementMetadata(
     dataset,
-    analyzeTimeSeries(points, {
-      lat: clampedLat,
-      lng: clampedLng,
-      dataset,
-      parameter: `${config.parameter} (${datasetMeta.shortLabel})`,
-      unit: config.unit,
-      slopeUnit: config.slopeUnit,
-      provenance: "NASA POWER MERRA-2 (Live)",
-    })
+    enrichSummaryWithMonthlySeasonality(
+      analyzeTimeSeries(points, {
+        lat: clampedLat,
+        lng: clampedLng,
+        dataset,
+        parameter: `${config.parameter} (${datasetMeta.shortLabel})`,
+        unit: config.unit,
+        slopeUnit: config.slopeUnit,
+        provenance: "NASA POWER MERRA-2 (Live)",
+      }),
+      monthlyRawPoints
+    )
   );
 
   SERIES_CACHE.set(key, {
@@ -538,27 +661,30 @@ export async function fetchMultiParamNasaPower(
     rh2m: params.RH2M ? parseNasaPowerMonthlyMultiChannel(params, "RH2M") : [],
   };
 
-  const cacheEntries: Array<[ETGDatasetId, TimeSeriesPoint[]]> = [
-    ["nasa_power", t2m],
-    ["ocean_temp", ts],
-    ["hydrology", precip],
-    ["deforestation", rh2m],
+  const cacheEntries: Array<[ETGDatasetId, TimeSeriesPoint[], TimeSeriesPoint[]]> = [
+    ["nasa_power", t2m, monthly.t2m],
+    ["ocean_temp", ts, monthly.ts],
+    ["hydrology", precip, monthly.precip],
+    ["deforestation", rh2m, monthly.rh2m],
   ];
-  for (const [ds, pts] of cacheEntries) {
+  for (const [ds, pts, monthlyPts] of cacheEntries) {
     if (pts.length >= 5) {
       const config = POWER_PARAM_MAP[ds];
       const meta = DATASET_BY_ID[ds];
       SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
         expiresAt: Date.now() + 1000 * 60 * 15,
-        summary: analyzeTimeSeries(pts, {
-          lat: clampedLat,
-          lng: clampedLng,
-          dataset: ds,
-          parameter: `${config.parameter} (${meta.shortLabel})`,
-          unit: config.unit,
-          slopeUnit: config.slopeUnit,
-          provenance: "NASA POWER MERRA-2 (Live)",
-        }),
+        summary: enrichSummaryWithMonthlySeasonality(
+          analyzeTimeSeries(pts, {
+            lat: clampedLat,
+            lng: clampedLng,
+            dataset: ds,
+            parameter: `${config.parameter} (${meta.shortLabel})`,
+            unit: config.unit,
+            slopeUnit: config.slopeUnit,
+            provenance: "NASA POWER MERRA-2 (Live)",
+          }),
+          monthlyPts
+        ),
       });
     }
   }
@@ -744,17 +870,24 @@ export async function fetchMultiDatasetSummariesDetailed(
         if (ds === "wildfire" && params.T2M_MAX && params.RH2M) {
           const vpdPoints = computeMonthlyVpdSeries(params.T2M_MAX, params.RH2M);
           if (vpdPoints.length >= 5) {
+            const vpdMonthly = extractMonthlyVpdSeriesFromPowerDicts(
+              params.T2M_MAX,
+              params.RH2M
+            );
             const vpdSummary = attachMeasurementMetadata(
               "wildfire",
-              analyzeTimeSeries(vpdPoints, {
-                lat: clampedLat,
-                lng: clampedLng,
-                dataset: "wildfire",
-                parameter: "VPD (Vapor Pressure Deficit)",
-                unit: "kPa",
-                slopeUnit: "kPa/yr",
-                provenance: "NASA POWER MERRA-2 (Live)",
-              })
+              enrichSummaryWithMonthlySeasonality(
+                analyzeTimeSeries(vpdPoints, {
+                  lat: clampedLat,
+                  lng: clampedLng,
+                  dataset: "wildfire",
+                  parameter: "VPD (Vapor Pressure Deficit)",
+                  unit: "kPa",
+                  slopeUnit: "kPa/yr",
+                  provenance: "NASA POWER MERRA-2 (Live)",
+                }),
+                vpdMonthly
+              )
             );
             SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
               expiresAt: Date.now() + 1000 * 60 * 15,
@@ -779,17 +912,24 @@ export async function fetchMultiDatasetSummariesDetailed(
           continue;
         }
 
+        const monthlyRawPoints =
+          rawParamSeries && typeof rawParamSeries === "object"
+            ? extractMonthlySeriesFromPowerDict(rawParamSeries)
+            : [];
         const summary = attachMeasurementMetadata(
           ds,
-          analyzeTimeSeries(points, {
-            lat: clampedLat,
-            lng: clampedLng,
-            dataset: ds,
-            parameter: `${config.parameter} (${meta.shortLabel})`,
-            unit: config.unit,
-            slopeUnit: config.slopeUnit,
-            provenance: "NASA POWER MERRA-2 (Live)",
-          })
+          enrichSummaryWithMonthlySeasonality(
+            analyzeTimeSeries(points, {
+              lat: clampedLat,
+              lng: clampedLng,
+              dataset: ds,
+              parameter: `${config.parameter} (${meta.shortLabel})`,
+              unit: config.unit,
+              slopeUnit: config.slopeUnit,
+              provenance: "NASA POWER MERRA-2 (Live)",
+            }),
+            monthlyRawPoints
+          )
         );
         SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
           expiresAt: Date.now() + 1000 * 60 * 15,
