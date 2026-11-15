@@ -43,6 +43,7 @@ export interface ModelMetrics {
   lowSolarF1: number;
   lowSolarAccuracy: number;
   calibratedThreshold: number;
+  stormBrierScore: number;
 }
 
 export interface PolicyCostBreakdown {
@@ -56,14 +57,29 @@ export interface PolicyCostBreakdown {
   unnecessaryPrechargeDays: number;
 }
 
+export interface StormRiskAssessment {
+  probStormPct: number;
+  expectedShortfallKwh: number;
+  prechargeCycleCostUsd: number;
+  expectedFalsePrechargeCostUsd: number;
+  expectedShortfallPenaltyUsd: number;
+  bayesExpectedNetSavingsUsd: number;
+  bayesOptimalPrecharge: boolean;
+}
+
 export interface MicrogridEconomicSummary {
   schoolSpec: string;
   tariffSpec: string;
   persistencePolicy: PolicyCostBreakdown;
+  localDailyPolicy: PolicyCostBreakdown;
   localPolicy: PolicyCostBreakdown;
   graphPolicy: PolicyCostBreakdown;
+  probabilisticGraphPolicy: PolicyCostBreakdown;
   annualSavingsVsPersistenceUsd: number;
   annualSavingsVsLocalUsd: number;
+  bayesAnnualSavingsVsPersistenceUsd: number;
+  prechargeCycleCostUsd: number;
+  shortfallSpreadUsdPerKwh: number;
   disclaimer: string;
 }
 
@@ -88,10 +104,18 @@ export interface TomorrowDecision {
   latestObservedDate: string;
   latestAllsky: number;
   persistencePred: number;
+  localDailyPred: number;
   localPred: number;
   graphPred: number;
   lowSolarThreshold: number;
   chargeBatteryOvernight: boolean;
+  probStormPct: number;
+  localProbStormPct: number;
+  prechargeCycleCostUsd: number;
+  expectedFalsePrechargeCostUsd: number;
+  expectedShortfallPenaltyUsd: number;
+  bayesExpectedNetSavingsUsd: number;
+  bayesOptimalPrecharge: boolean;
   recommendedReservePct: number;
   dominantUpwindNode: string;
   windFromDeg: number;
@@ -117,6 +141,7 @@ export interface SolarGraphAnalysisResult {
   >;
   metrics: {
     persistence: ModelMetrics;
+    localDailyOnly: ModelMetrics;
     localOnly: ModelMetrics;
     graphAware: ModelMetrics;
     clearSkyPersistenceRmse: number;
@@ -133,6 +158,7 @@ export interface SolarGraphAnalysisResult {
     persistence: number;
     local: number;
     graph: number;
+    probStormPct: number;
   }>;
 }
 
@@ -336,11 +362,15 @@ const OFF_PEAK_RATE_USD = 0.075;
 const ON_PEAK_DEFICIT_RATE_USD = 0.28;
 const FALSE_POSITIVE_COST_USD = BATTERY_USABLE_KWH * OFF_PEAK_RATE_USD; // $26.25
 const DEFICIT_SPREAD_USD_PER_KWH = ON_PEAK_DEFICIT_RATE_USD - OFF_PEAK_RATE_USD; // $0.205/kWh
+export const PRECHARGE_CYCLE_COST_USD = FALSE_POSITIVE_COST_USD;
+export const SHORTFALL_SPREAD_USD_PER_KWH = DEFICIT_SPREAD_USD_PER_KWH;
 
-function computePolicyCost(
+const SHORTFALL_SATURATION_KWH = LOW_SOLAR_THRESHOLD_KWH - BATTERY_USABLE_KWH / SCHOOL_PV_KW; // 2.1
+
+function computePolicyCostFromDecisions(
   policyName: string,
   actuals: number[],
-  preds: number[],
+  prechargeDecisions: readonly boolean[],
   thresholdKwh: number
 ): PolicyCostBreakdown {
   let totalGridPenaltyUsd = 0;
@@ -350,9 +380,8 @@ function computePolicyCost(
 
   for (let i = 0; i < actuals.length; i++) {
     const actual = actuals[i];
-    const pred = preds[i];
     const actualLow = actual < LOW_SOLAR_THRESHOLD_KWH;
-    const precharge = pred < thresholdKwh;
+    const precharge = prechargeDecisions[i] === true;
 
     if (actualLow) {
       totalLowSolarDays += 1;
@@ -389,6 +418,20 @@ function computePolicyCost(
   };
 }
 
+function computePolicyCost(
+  policyName: string,
+  actuals: number[],
+  preds: number[],
+  thresholdKwh: number
+): PolicyCostBreakdown {
+  return computePolicyCostFromDecisions(
+    policyName,
+    actuals,
+    preds.map((p) => p < thresholdKwh),
+    thresholdKwh
+  );
+}
+
 function calibrateDecisionThreshold(actuals: number[], preds: number[]): number {
   let bestTau: number = LOW_SOLAR_THRESHOLD_KWH;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -402,12 +445,127 @@ function calibrateDecisionThreshold(actuals: number[], preds: number[]): number 
   return bestTau;
 }
 
+function normalPdf(z: number): number {
+  return Math.exp(-0.5 * z * z) / Math.sqrt(2 * Math.PI);
+}
+
+/**
+ * Calibrates a strictly monotonic probabilistic storm-day risk model
+ * `P(ALLSKY < 3.5 | forecast)` and Bayes expected-cost dispatch rule using
+ * strictly chronological inner-validation residuals (never touching unseen test
+ * targets). Compares expected `$0.205/kWh` unbuffered daytime shortfall penalty
+ * against expected `$26.25` false pre-charge cycle cost.
+ */
+export function calibrateStormRiskModel(
+  valActuals: readonly number[],
+  valPreds: readonly number[]
+): {
+  residualStd: number;
+  breakEvenIrradianceKwh: number;
+  assess: (predKwh: number) => StormRiskAssessment;
+} {
+  const residuals: number[] = [];
+  const count = Math.min(valActuals.length, valPreds.length);
+  for (let i = 0; i < count; i++) {
+    const a = valActuals[i];
+    const p = valPreds[i];
+    if (Number.isFinite(a) && Number.isFinite(p)) {
+      residuals.push(a - p);
+    }
+  }
+
+  const residualStd =
+    residuals.length > 0
+      ? Math.max(
+          0.25,
+          Math.sqrt(residuals.reduce((s, r) => s + r * r, 0) / residuals.length)
+        )
+      : 0.95;
+
+  const evalRisk = (predKwh: number): StormRiskAssessment => {
+    const mu = Number.isFinite(predKwh) ? predKwh : LOW_SOLAR_THRESHOLD_KWH;
+    const zT = (LOW_SOLAR_THRESHOLD_KWH - mu) / residualStd;
+    const zS = (SHORTFALL_SATURATION_KWH - mu) / residualStd;
+    const cdfT = normalCdf(zT);
+    const cdfS = normalCdf(zS);
+    const gaussProb = cdfT;
+    const gaussShortfallKwh = Math.max(
+      0,
+      Math.min(
+        BATTERY_USABLE_KWH,
+        BATTERY_USABLE_KWH * cdfS +
+          SCHOOL_PV_KW *
+            ((LOW_SOLAR_THRESHOLD_KWH - mu) * (cdfT - cdfS) +
+              residualStd * (normalPdf(zT) - normalPdf(zS)))
+      )
+    );
+
+    let probStorm = gaussProb;
+    let expectedShortfallKwh = gaussShortfallKwh;
+
+    if (residuals.length >= 10) {
+      let empStormCount = 0;
+      let empShortfallSum = 0;
+      for (const r of residuals) {
+        const yDraw = Math.max(0, mu + r);
+        if (yDraw < LOW_SOLAR_THRESHOLD_KWH) {
+          empStormCount += 1;
+          empShortfallSum += Math.min(
+            BATTERY_USABLE_KWH,
+            Math.max(0, (LOW_SOLAR_THRESHOLD_KWH - yDraw) * SCHOOL_PV_KW)
+          );
+        }
+      }
+      const empProb = empStormCount / residuals.length;
+      const empShortfallKwh = empShortfallSum / residuals.length;
+      probStorm = 0.5 * empProb + 0.5 * gaussProb;
+      expectedShortfallKwh = 0.5 * empShortfallKwh + 0.5 * gaussShortfallKwh;
+    }
+
+    const clampedProb = Math.max(0.002, Math.min(0.998, probStorm));
+    const expectedFalsePrechargeCostUsd = (1 - clampedProb) * FALSE_POSITIVE_COST_USD;
+    const expectedShortfallPenaltyUsd = expectedShortfallKwh * DEFICIT_SPREAD_USD_PER_KWH;
+    const bayesExpectedNetSavingsUsd =
+      expectedShortfallPenaltyUsd - expectedFalsePrechargeCostUsd;
+
+    return {
+      probStormPct: Number((clampedProb * 100).toFixed(1)),
+      expectedShortfallKwh: Number(expectedShortfallKwh.toFixed(1)),
+      prechargeCycleCostUsd: Number(FALSE_POSITIVE_COST_USD.toFixed(2)),
+      expectedFalsePrechargeCostUsd: Number(expectedFalsePrechargeCostUsd.toFixed(2)),
+      expectedShortfallPenaltyUsd: Number(expectedShortfallPenaltyUsd.toFixed(2)),
+      bayesExpectedNetSavingsUsd: Number(bayesExpectedNetSavingsUsd.toFixed(2)),
+      bayesOptimalPrecharge: expectedShortfallPenaltyUsd > expectedFalsePrechargeCostUsd,
+    };
+  };
+
+  // Bisect Bayes break-even irradiance where E[Shortfall Penalty] == E[False Pre-Charge Cost]
+  let lo = 2.0;
+  let hi = 5.5;
+  for (let iter = 0; iter < 24; iter++) {
+    const mid = 0.5 * (lo + hi);
+    if (evalRisk(mid).bayesExpectedNetSavingsUsd > 0) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  const breakEvenIrradianceKwh = Number((0.5 * (lo + hi)).toFixed(2));
+
+  return {
+    residualStd: Number(residualStd.toFixed(4)),
+    breakEvenIrradianceKwh,
+    assess: evalRisk,
+  };
+}
+
 function computeMetrics(
   name: string,
   actuals: number[],
   preds: number[],
   persistenceRmse: number,
-  calibratedThreshold = LOW_SOLAR_THRESHOLD_KWH
+  calibratedThreshold = LOW_SOLAR_THRESHOLD_KWH,
+  stormProbs?: readonly number[]
 ): ModelMetrics {
   const n = actuals.length;
   let sqErr = 0;
@@ -430,6 +588,7 @@ function computeMetrics(
   let fp = 0;
   let fn = 0;
   let tn = 0;
+  let brierSum = 0;
   for (let i = 0; i < n; i++) {
     const actLow = actuals[i] < LOW_SOLAR_THRESHOLD_KWH;
     const predLow = preds[i] < calibratedThreshold;
@@ -437,6 +596,12 @@ function computeMetrics(
     else if (!actLow && predLow) fp++;
     else if (actLow && !predLow) fn++;
     else tn++;
+    const pStorm = stormProbs
+      ? stormProbs[i]
+      : preds[i] < LOW_SOLAR_THRESHOLD_KWH
+        ? 1
+        : 0;
+    brierSum += (pStorm - (actLow ? 1 : 0)) ** 2;
   }
   const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
   const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
@@ -454,6 +619,7 @@ function computeMetrics(
     lowSolarF1: Number(f1.toFixed(3)),
     lowSolarAccuracy: Number(acc.toFixed(3)),
     calibratedThreshold: Number(calibratedThreshold.toFixed(2)),
+    stormBrierScore: Number((brierSum / Math.max(1, n)).toFixed(4)),
   };
 }
 
@@ -679,14 +845,26 @@ export function runThreeWaySolarEvaluation(
     throw new Error("Temporal split produced too few train or test samples.");
   }
 
-  // Leak-free inner chronological validation split (85% / 15%) for overnight threshold calibration
+  // Leak-free inner chronological validation split (85% / 15%) for overnight threshold & storm-risk calibration
   const valStartIdx = Math.floor(trainSamples.length * 0.85);
   const innerTrain = trainSamples.slice(0, valStartIdx);
   const innerVal = trainSamples.slice(valStartIdx);
 
+  let tauLocalDaily: number = LOW_SOLAR_THRESHOLD_KWH;
   let tauLocal: number = LOW_SOLAR_THRESHOLD_KWH;
   let tauGraph: number = LOW_SOLAR_THRESHOLD_KWH;
+  let valActuals: number[] = [];
+  let valPersistPreds: number[] = [];
+  let valLocalDailyPreds: number[] = [];
+  let valLocalPreds: number[] = [];
+  let valGraphPreds: number[] = [];
+
   if (innerTrain.length >= 25 && innerVal.length >= 10) {
+    const valLocalDailyWeights = fitRidgeRegression(
+      innerTrain.map((s) => s.localX.slice(0, 14)),
+      innerTrain.map((s) => s.yNext),
+      6.0
+    );
     const valLocalWeights = fitRidgeRegression(
       innerTrain.map((s) => s.localX),
       innerTrain.map((s) => s.yNext),
@@ -697,17 +875,21 @@ export function runThreeWaySolarEvaluation(
       innerTrain.map((s) => s.yNext),
       14.0
     );
-    const valActuals = innerVal.map((s) => s.yNext);
-    tauLocal = calibrateDecisionThreshold(
-      valActuals,
-      innerVal.map((s) => predictRidge(valLocalWeights, s.localX))
-    );
-    tauGraph = calibrateDecisionThreshold(
-      valActuals,
-      innerVal.map((s) => predictRidge(valGraphWeights, s.graphX))
-    );
+    valActuals = innerVal.map((s) => s.yNext);
+    valPersistPreds = innerVal.map((s) => s.yToday);
+    valLocalDailyPreds = innerVal.map((s) => predictRidge(valLocalDailyWeights, s.localX.slice(0, 14)));
+    valLocalPreds = innerVal.map((s) => predictRidge(valLocalWeights, s.localX));
+    valGraphPreds = innerVal.map((s) => predictRidge(valGraphWeights, s.graphX));
+    tauLocalDaily = calibrateDecisionThreshold(valActuals, valLocalDailyPreds);
+    tauLocal = calibrateDecisionThreshold(valActuals, valLocalPreds);
+    tauGraph = calibrateDecisionThreshold(valActuals, valGraphPreds);
   }
 
+  const localDailyWeights = fitRidgeRegression(
+    trainSamples.map((s) => s.localX.slice(0, 14)),
+    trainSamples.map((s) => s.yNext),
+    6.0
+  );
   const localWeights = fitRidgeRegression(
     trainSamples.map((s) => s.localX),
     trainSamples.map((s) => s.yNext),
@@ -719,13 +901,45 @@ export function runThreeWaySolarEvaluation(
     14.0
   );
 
+  // If innerVal had < 10 samples on a tiny synthetic series, fall back strictly to in-train residuals (still < splitYyyymmdd)
+  const riskActuals =
+    valActuals.length >= 10 ? valActuals : trainSamples.map((s) => s.yNext);
+  const persistRiskModel = calibrateStormRiskModel(
+    riskActuals,
+    valActuals.length >= 10 ? valPersistPreds : trainSamples.map((s) => s.yToday)
+  );
+  const localDailyRiskModel = calibrateStormRiskModel(
+    riskActuals,
+    valActuals.length >= 10
+      ? valLocalDailyPreds
+      : trainSamples.map((s) => predictRidge(localDailyWeights, s.localX.slice(0, 14)))
+  );
+  const localRiskModel = calibrateStormRiskModel(
+    riskActuals,
+    valActuals.length >= 10
+      ? valLocalPreds
+      : trainSamples.map((s) => predictRidge(localWeights, s.localX))
+  );
+  const graphRiskModel = calibrateStormRiskModel(
+    riskActuals,
+    valActuals.length >= 10
+      ? valGraphPreds
+      : trainSamples.map((s) => predictRidge(graphWeights, s.graphX))
+  );
+
   const actuals = testSamples.map((s) => s.yNext);
   const persistPreds = testSamples.map((s) => s.yToday);
   const clearSkyPersistPreds = testSamples.map(
     (s) => s.localX[3] * s.localX[2] // today.kt * next.clrsky
   );
+  const localDailyPreds = testSamples.map((s) => predictRidge(localDailyWeights, s.localX.slice(0, 14)));
   const localPreds = testSamples.map((s) => predictRidge(localWeights, s.localX));
   const graphPreds = testSamples.map((s) => predictRidge(graphWeights, s.graphX));
+
+  const persistStormRisks = persistPreds.map((p) => persistRiskModel.assess(p));
+  const localDailyStormRisks = localDailyPreds.map((p) => localDailyRiskModel.assess(p));
+  const localStormRisks = localPreds.map((p) => localRiskModel.assess(p));
+  const graphStormRisks = graphPreds.map((p) => graphRiskModel.assess(p));
 
   const persistMetricsTemp = computeMetrics(
     "Persistence (Tomorrow = Today)",
@@ -749,21 +963,32 @@ export function runThreeWaySolarEvaluation(
       actuals,
       persistPreds,
       persistRmse,
-      LOW_SOLAR_THRESHOLD_KWH
+      LOW_SOLAR_THRESHOLD_KWH,
+      persistStormRisks.map((r) => r.probStormPct / 100)
+    ),
+    localDailyOnly: computeMetrics(
+      "Local-Only Daily (No Evening)",
+      actuals,
+      localDailyPreds,
+      persistRmse,
+      tauLocalDaily,
+      localDailyStormRisks.map((r) => r.probStormPct / 100)
     ),
     localOnly: computeMetrics(
       "Local-Only Model (Denver + Evening)",
       actuals,
       localPreds,
       persistRmse,
-      tauLocal
+      tauLocal,
+      localStormRisks.map((r) => r.probStormPct / 100)
     ),
     graphAware: computeMetrics(
       "Graph-Aware Model (7-Node + Evening)",
       actuals,
       graphPreds,
       persistRmse,
-      tauGraph
+      tauGraph,
+      graphStormRisks.map((r) => r.probStormPct / 100)
     ),
     clearSkyPersistenceRmse: clearSkyPersistMetrics.rmse,
     graphVsPersistPValue: pairedSquaredErrorPValue(actuals, persistPreds, graphPreds),
@@ -776,21 +1001,43 @@ export function runThreeWaySolarEvaluation(
     persistPreds,
     LOW_SOLAR_THRESHOLD_KWH
   );
+  const localDailyPolicy = computePolicyCost(
+    "Local-Only Daily (Ridge)",
+    actuals,
+    localDailyPreds,
+    tauLocalDaily
+  );
   const localPolicy = computePolicyCost("Local-Only + Evening (Ridge)", actuals, localPreds, tauLocal);
   const graphPolicy = computePolicyCost("Graph-Aware + Evening (7-Node)", actuals, graphPreds, tauGraph);
+  const probabilisticGraphPolicy = computePolicyCostFromDecisions(
+    "Graph+Eve Bayes Expected-Cost",
+    actuals,
+    graphStormRisks.map((r) => r.bayesOptimalPrecharge),
+    graphRiskModel.breakEvenIrradianceKwh
+  );
   const economics: MicrogridEconomicSummary = {
     schoolSpec: "250 kWdc rooftop PV + 350 kWh LFP microgrid battery (Colorado K-12 campus)",
     tariffSpec:
       "Off-peak $0.075/kWh overnight charge ($26.25/cycle) vs. $0.280/kWh daytime peak shortfall ($0.205/kWh spread)",
     persistencePolicy,
+    localDailyPolicy,
     localPolicy,
     graphPolicy,
+    probabilisticGraphPolicy,
     annualSavingsVsPersistenceUsd: Number(
       (persistencePolicy.annualizedPenaltyUsd - graphPolicy.annualizedPenaltyUsd).toFixed(2)
     ),
     annualSavingsVsLocalUsd: Number(
       (localPolicy.annualizedPenaltyUsd - graphPolicy.annualizedPenaltyUsd).toFixed(2)
     ),
+    bayesAnnualSavingsVsPersistenceUsd: Number(
+      (
+        persistencePolicy.annualizedPenaltyUsd -
+        probabilisticGraphPolicy.annualizedPenaltyUsd
+      ).toFixed(2)
+    ),
+    prechargeCycleCostUsd: Number(PRECHARGE_CYCLE_COST_USD.toFixed(2)),
+    shortfallSpreadUsdPerKwh: Number(SHORTFALL_SPREAD_USD_PER_KWH.toFixed(3)),
     disclaimer:
       "Operational prototype estimate: tariff penalties ($0.075/$0.280 per kWh) model a representative Colorado commercial TOU schedule for research comparison; live microgrid dispatch requires utility interconnection and site telemetry.",
   };
@@ -870,10 +1117,14 @@ export function runThreeWaySolarEvaluation(
     (nodeId) => latestNeighborMap.get(nodeId)
   );
 
+  const tmrLocalDaily = predictRidge(localDailyWeights, latestLocalX.slice(0, 14));
   const tmrLocal = predictRidge(localWeights, latestLocalX);
   const tmrGraph = predictRidge(graphWeights, latestGraphX);
+  const tmrGraphRisk = graphRiskModel.assess(tmrGraph);
+  const tmrLocalRisk = localRiskModel.assess(tmrLocal);
   const chargeBatteryOvernight = tmrGraph < tauGraph;
-  const recommendedReservePct = chargeBatteryOvernight
+  const shouldChargeAny = chargeBatteryOvernight || tmrGraphRisk.bayesOptimalPrecharge;
+  const recommendedReservePct = shouldChargeAny
     ? 90
     : tmrGraph < 5.0
       ? 60
@@ -884,17 +1135,25 @@ export function runThreeWaySolarEvaluation(
     latestObservedDate: formatIsoDate(latest.date),
     latestAllsky: Number(latest.allsky.toFixed(2)),
     persistencePred: Number(latest.allsky.toFixed(2)),
+    localDailyPred: Number(tmrLocalDaily.toFixed(2)),
     localPred: Number(tmrLocal.toFixed(2)),
     graphPred: Number(tmrGraph.toFixed(2)),
     lowSolarThreshold: tauGraph,
     chargeBatteryOvernight,
+    probStormPct: tmrGraphRisk.probStormPct,
+    localProbStormPct: tmrLocalRisk.probStormPct,
+    prechargeCycleCostUsd: tmrGraphRisk.prechargeCycleCostUsd,
+    expectedFalsePrechargeCostUsd: tmrGraphRisk.expectedFalsePrechargeCostUsd,
+    expectedShortfallPenaltyUsd: tmrGraphRisk.expectedShortfallPenaltyUsd,
+    bayesExpectedNetSavingsUsd: tmrGraphRisk.bayesExpectedNetSavingsUsd,
+    bayesOptimalPrecharge: tmrGraphRisk.bayesOptimalPrecharge,
     recommendedReservePct,
     dominantUpwindNode,
     windFromDeg: Number(latest.wd10m.toFixed(0)),
     windSpeedMs: Number(latest.ws10m.toFixed(1)),
     rationale: chargeBatteryOvernight
-      ? `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d) is below calibrated threshold ${tauGraph.toFixed(2)} kWh/m²/d (actual low-solar cutoff ${LOW_SOLAR_THRESHOLD_KWH}) with upwind flow from ${dominantUpwindNode}. Pre-charge microgrid battery to ${recommendedReservePct}% overnight.`
-      : `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d) clears the calibrated ${tauGraph.toFixed(2)} kWh/m²/d dispatch threshold. Keep overnight grid reserve at ${recommendedReservePct}% and rely on daytime solar.`,
+      ? `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d; P(ALLSKY < 3.5) = ${tmrGraphRisk.probStormPct.toFixed(1)}%) is below calibrated threshold ${tauGraph.toFixed(2)} kWh/m²/d with upwind flow from ${dominantUpwindNode}. Bayes expected shortfall penalty ($${tmrGraphRisk.expectedShortfallPenaltyUsd.toFixed(2)} at $0.205/kWh) vs. false-cycle risk ($${tmrGraphRisk.expectedFalsePrechargeCostUsd.toFixed(2)} from $26.25 cycle). Pre-charge to ${recommendedReservePct}% overnight.`
+      : `Graph-Aware forecast (${tmrGraph.toFixed(2)} kWh/m²/d; P(ALLSKY < 3.5) = ${tmrGraphRisk.probStormPct.toFixed(1)}%) clears the calibrated ${tauGraph.toFixed(2)} kWh/m²/d threshold. Bayes rule (${tmrGraphRisk.bayesOptimalPrecharge ? "PRE-CHARGE" : "HOLD"}) compares $${tmrGraphRisk.expectedShortfallPenaltyUsd.toFixed(2)} expected shortfall ($0.205/kWh) vs. $${tmrGraphRisk.expectedFalsePrechargeCostUsd.toFixed(2)} false-cycle cost ($26.25 cycle). Keep overnight reserve at ${recommendedReservePct}%.`,
   };
 
   const recentTestSeries = testSamples.slice(-45).map((s, idx) => {
@@ -905,6 +1164,7 @@ export function runThreeWaySolarEvaluation(
       persistence: Number(persistPreds[absIdx].toFixed(2)),
       local: Number(localPreds[absIdx].toFixed(2)),
       graph: Number(graphPreds[absIdx].toFixed(2)),
+      probStormPct: graphStormRisks[absIdx].probStormPct,
     };
   });
 
@@ -1326,7 +1586,7 @@ export async function fetchDenverSolarClimateGraph(
   endYear = new Date().getUTCFullYear(),
   options?: { forceRefresh?: boolean }
 ): Promise<SolarGraphAnalysisResult> {
-  const key = `v2:${startYear}:${endYear}`;
+  const key = `v3:${startYear}:${endYear}`;
   if (!options?.forceRefresh) {
     const cached = SOLAR_CACHE.get(key);
     if (cached && cached.expiresAt > Date.now()) {

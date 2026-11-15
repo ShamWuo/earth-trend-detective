@@ -271,7 +271,7 @@ function previousCoarsePeriodKey(
   return `${py}-${String(pm).padStart(2, "0")}`;
 }
 
-interface PortableInductiveWeightsV2 {
+export interface PortableInductiveWeightsV2 {
   schema_version: "etg-inductive-weights-v2";
   static_proj_w: number[][];
   static_proj_b: number[];
@@ -283,29 +283,99 @@ interface PortableInductiveWeightsV2 {
   trust_gate_b: number;
   head_w: number[];
   head_b: number;
+  residual_z_weight?: number;
 }
 
-let cachedWeightsV2: { mtimeMs: number; weights: PortableInductiveWeightsV2 } | null = null;
+let cachedWeightsV2: {
+  filePath: string;
+  mtimeMs: number;
+  weights: PortableInductiveWeightsV2;
+} | null = null;
 
-function loadLocalInductiveWeightsV2(): PortableInductiveWeightsV2 | null {
-  try {
-    const filePath = path.join(process.cwd(), ".data", "etg-inductive-weights-v2.json");
-    if (!fs.existsSync(filePath)) return null;
-    const stat = fs.statSync(filePath);
-    if (cachedWeightsV2 && cachedWeightsV2.mtimeMs === stat.mtimeMs) {
-      return cachedWeightsV2.weights;
+function parseInductiveWeightsV2(
+  filePath: string,
+  mtimeMs: number,
+  raw: string
+): PortableInductiveWeightsV2 | null {
+  const parsed = JSON.parse(raw) as PortableInductiveWeightsV2;
+  if (
+    parsed?.schema_version === "etg-inductive-weights-v2" &&
+    Array.isArray(parsed.static_proj_w) &&
+    Array.isArray(parsed.head_w)
+  ) {
+    cachedWeightsV2 = { filePath, mtimeMs, weights: parsed };
+    return parsed;
+  }
+  return null;
+}
+
+/**
+ * Loads portable `etg-inductive-weights-v2` weights from local runtime cache
+ * (`.data/etg-inductive-weights-v2.json`) first, automatically falling back to
+ * git-tracked bundled weights (`ml/weights/etg-inductive-weights-v2.json`) on
+ * fresh repository clones or zero-cold-start deployments.
+ */
+export function loadLocalInductiveWeightsV2(options?: {
+  rootDir?: string;
+}): PortableInductiveWeightsV2 | null {
+  if (!options?.rootDir) {
+    const dataPath = path.join(process.cwd(), ".data", "etg-inductive-weights-v2.json");
+    try {
+      if (fs.existsSync(dataPath)) {
+        const stat = fs.statSync(dataPath);
+        if (cachedWeightsV2?.filePath === dataPath && cachedWeightsV2.mtimeMs === stat.mtimeMs) {
+          return cachedWeightsV2.weights;
+        }
+        const hit = parseInductiveWeightsV2(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
+        if (hit) return hit;
+      }
+    } catch {
+      // Fall through to tracked weights bundle
     }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as PortableInductiveWeightsV2;
-    if (
-      parsed?.schema_version === "etg-inductive-weights-v2" &&
-      Array.isArray(parsed.static_proj_w) &&
-      Array.isArray(parsed.head_w)
-    ) {
-      cachedWeightsV2 = { mtimeMs: stat.mtimeMs, weights: parsed };
-      return parsed;
+
+    const trackedPath = path.join(process.cwd(), "ml", "weights", "etg-inductive-weights-v2.json");
+    try {
+      if (fs.existsSync(trackedPath)) {
+        const stat = fs.statSync(trackedPath);
+        if (
+          cachedWeightsV2?.filePath === trackedPath &&
+          cachedWeightsV2.mtimeMs === stat.mtimeMs
+        ) {
+          return cachedWeightsV2.weights;
+        }
+        const hit = parseInductiveWeightsV2(
+          trackedPath,
+          stat.mtimeMs,
+          fs.readFileSync(trackedPath, "utf8")
+        );
+        if (hit) return hit;
+      }
+    } catch {
+      // Optional tracked artifact not present or malformed
     }
-  } catch {
-    // Optional artifact not present or malformed
+    return null;
+  }
+
+  const customCandidates = [
+    path.join(options.rootDir, ".data", "etg-inductive-weights-v2.json"),
+    path.join(options.rootDir, "ml", "weights", "etg-inductive-weights-v2.json"),
+  ];
+  for (const filePath of customCandidates) {
+    try {
+      if (!fs.existsSync(/*turbopackIgnore: true*/ filePath)) continue;
+      const stat = fs.statSync(/*turbopackIgnore: true*/ filePath);
+      if (cachedWeightsV2?.filePath === filePath && cachedWeightsV2.mtimeMs === stat.mtimeMs) {
+        return cachedWeightsV2.weights;
+      }
+      const hit = parseInductiveWeightsV2(
+        filePath,
+        stat.mtimeMs,
+        fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf8")
+      );
+      if (hit) return hit;
+    } catch {
+      // Fall through to next candidate path
+    }
   }
   return null;
 }
@@ -360,7 +430,7 @@ function evalPortableInductiveV2ForNode(
     }
   }
 
-  let outZ = weights.head_b;
+  let outZ = weights.head_b + (weights.residual_z_weight ?? 0) * (tempFeat[1] ?? 0);
   const denom = Math.max(1e-6, weightSum);
   for (let h = 0; h < H; h++) {
     const act = Math.tanh(hidden[h] + (weightSum > 0 ? msgAgg[h] / denom : 0));
@@ -1087,10 +1157,18 @@ export function predictFromGraph(
     ? predictGraphRow(latestLinearX, latestNonlinearX)
     : selfPredNext;
 
-  // Optional portable inductive GNN v2 weights check
+  // Optional portable inductive GNN v2 weights check (only when inner chronological validation is available)
   let usedLocalInductiveGnn = false;
   const localWeightsV2 = loadLocalInductiveWeightsV2();
-  if (localWeightsV2 && store.exportMlGraphDatasetV2 && activeNeighbors.length > 0) {
+  const activeInnerZ =
+    Math.min(linearFit.valRmse, nonlinFit.valRmse) * yStd;
+  if (
+    localWeightsV2 &&
+    store.exportMlGraphDatasetV2 &&
+    activeNeighbors.length > 0 &&
+    trainCount >= 16 &&
+    Number.isFinite(activeInnerZ)
+  ) {
     try {
       const mlV2 = store.exportMlGraphDatasetV2({
         rootUuid: targetNode.uuid,
@@ -1101,8 +1179,10 @@ export function predictFromGraph(
       const nodeIdx = mlV2.node_ids.indexOf(targetNode.uuid);
       if (nodeIdx >= 0 && mlV2.time_index.length >= 10) {
         const idxByDate = new Map(mlV2.time_index.map((d, i) => [d, i]));
-        const valStart = Math.max(0, trainCount - Math.max(3, Math.floor(trainCount * 0.25)));
+        const innerValSize = Math.max(4, Math.floor(trainCount * 0.25));
+        const valStart = Math.max(0, trainCount - innerValSize);
         let innerSqGnn = 0;
+        let innerSqBlend = 0;
         let innerCount = 0;
         for (let i = valStart; i < trainCount; i++) {
           const tKey = targetEntries[originIndices[i]].date;
@@ -1110,14 +1190,25 @@ export function predictFromGraph(
           if (mlT === undefined) continue;
           const gnnPred = evalPortableInductiveV2ForNode(localWeightsV2, mlV2, nodeIdx, mlT);
           if (gnnPred !== null && Number.isFinite(gnnPred)) {
+            const innerRidgePred =
+              activeGraphArchitecture === "nonlinear_interaction"
+                ? yUnnorm(dot(nonlinFit.innerWeights, nonlinearXAll[i]))
+                : activeGraphArchitecture === "stacked_ensemble"
+                  ? yUnnorm(
+                      0.5 * dot(linearFit.innerWeights, linearXAll[i]) +
+                        0.5 * dot(nonlinFit.innerWeights, nonlinearXAll[i])
+                    )
+                  : yUnnorm(dot(linearFit.innerWeights, linearXAll[i]));
             const err = gnnPred - yAllActual[i];
+            const blendErr = 0.5 * gnnPred + 0.5 * innerRidgePred - yAllActual[i];
             innerSqGnn += err * err;
+            innerSqBlend += blendErr * blendErr;
             innerCount++;
           }
         }
         const gnnInnerRmse = innerCount >= 3 ? Math.sqrt(innerSqGnn / innerCount) : Infinity;
-        const activeInnerZ = Math.min(linearFit.valRmse, nonlinFit.valRmse) * yStd;
-        if (gnnInnerRmse < activeInnerZ * 0.99) {
+        const blendInnerRmse = innerCount >= 3 ? Math.sqrt(innerSqBlend / innerCount) : Infinity;
+        if (gnnInnerRmse < activeInnerZ * 0.99 && blendInnerRmse < activeInnerZ * 0.99) {
           const gnnNext = evalPortableInductiveV2ForNode(
             localWeightsV2,
             mlV2,

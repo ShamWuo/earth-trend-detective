@@ -1,7 +1,14 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { EtgStore, getEtgStore } from "@/lib/graph/etgStore";
-import { predictFromGraph, predictRegion } from "@/lib/graph/graphPredictor";
+import {
+  loadLocalInductiveWeightsV2,
+  predictFromGraph,
+  predictRegion,
+} from "@/lib/graph/graphPredictor";
 import { parseKnmiMonthlyIndexDat } from "@/lib/agencies/challengeSourcesClient";
 import { parseNasaPowerMonthlyMultiChannel } from "@/lib/nasa/nasaPowerClient";
 import { GET as predictGET, POST as predictPOST } from "@/app/api/graph/predict/route";
@@ -361,5 +368,46 @@ describe("Global Multi-Scale ETG v2, Community Trust Gate & Regional Prediction"
     const jsonSync = await resSync.json();
     expect(jsonSync.synced).toBe(false);
     expect(jsonSync.mode).toBe("local_fallback");
+  });
+
+  it("loads bundled ml/weights/etg-inductive-weights-v2.json automatically when .data is absent and prefers .data when present", () => {
+    const repoWeightsPath = path.join(
+      process.cwd(),
+      "ml",
+      "weights",
+      "etg-inductive-weights-v2.json"
+    );
+    expect(fs.existsSync(repoWeightsPath)).toBe(true);
+
+    const repoWeights = loadLocalInductiveWeightsV2();
+    expect(repoWeights?.schema_version).toBe("etg-inductive-weights-v2");
+    expect(repoWeights?.residual_z_weight).toBeDefined();
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "etg-v2-fallback-"));
+    try {
+      const mlWeightsDir = path.join(tempRoot, "ml", "weights");
+      fs.mkdirSync(mlWeightsDir, { recursive: true });
+      const trackedFallback = path.join(mlWeightsDir, "etg-inductive-weights-v2.json");
+      fs.copyFileSync(repoWeightsPath, trackedFallback);
+
+      // Fresh clone simulation: only ml/weights exists, .data does not
+      const loadedFallback = loadLocalInductiveWeightsV2({ rootDir: tempRoot });
+      expect(loadedFallback?.schema_version).toBe("etg-inductive-weights-v2");
+      expect(loadedFallback?.head_b).toBeCloseTo(repoWeights!.head_b, 6);
+
+      // Local runtime .data override should take precedence over tracked ml/weights
+      const dataDir = path.join(tempRoot, ".data");
+      fs.mkdirSync(dataDir, { recursive: true });
+      const overridePayload = { ...loadedFallback!, head_b: 0.424242 };
+      fs.writeFileSync(
+        path.join(dataDir, "etg-inductive-weights-v2.json"),
+        JSON.stringify(overridePayload),
+        "utf8"
+      );
+      const loadedOverride = loadLocalInductiveWeightsV2({ rootDir: tempRoot });
+      expect(loadedOverride?.head_b).toBeCloseTo(0.424242, 6);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

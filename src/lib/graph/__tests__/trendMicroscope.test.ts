@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { TrendMicroscopeStoreLike } from "@/lib/graph/trendMicroscope";
 import { analyzeTimeSeries } from "@/lib/stats/trendEngine";
@@ -29,7 +32,10 @@ vi.mock("@/lib/nasa/nasaPowerClient", async (importOriginal) => {
   };
 });
 
-import { scanTrendMicroscopeAsync } from "@/lib/graph/trendMicroscope";
+import {
+  loadLocalTrendMicroscopeWeights,
+  scanTrendMicroscopeAsync,
+} from "@/lib/graph/trendMicroscope";
 
 describe("scanTrendMicroscopeAsync coordinate probing", () => {
   it("reads fetched.month from fetchRegionalMultiScaleSeries when probing remote coordinates", async () => {
@@ -83,5 +89,46 @@ describe("scanTrendMicroscopeAsync coordinate probing", () => {
     expect(mockFetchRegionalMultiScaleSeries).toHaveBeenCalledWith(45.0, -120.0, "nasa_power");
     expect(result.nodeCount).toBeGreaterThanOrEqual(2);
     expect(result.nodes.some((n) => n.uuid === "probe-45.00--120.00")).toBe(true);
+  });
+
+  it("loads bundled ml/weights/etg-trend-microscope-v1.json automatically when .data is absent and prefers .data when present", () => {
+    const repoWeightsPath = path.join(
+      process.cwd(),
+      "ml",
+      "weights",
+      "etg-trend-microscope-v1.json"
+    );
+    expect(fs.existsSync(repoWeightsPath)).toBe(true);
+
+    const repoWeights = loadLocalTrendMicroscopeWeights();
+    expect(repoWeights?.schema_version).toBe("etg-trend-microscope-v1");
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "etg-tm-fallback-"));
+    try {
+      const mlWeightsDir = path.join(tempRoot, "ml", "weights");
+      fs.mkdirSync(mlWeightsDir, { recursive: true });
+      const trackedFallback = path.join(mlWeightsDir, "etg-trend-microscope-v1.json");
+      fs.copyFileSync(repoWeightsPath, trackedFallback);
+
+      const loadedFallback = loadLocalTrendMicroscopeWeights({ rootDir: tempRoot });
+      expect(loadedFallback?.schema_version).toBe("etg-trend-microscope-v1");
+      expect(loadedFallback?.hidden_dim).toBe(repoWeights!.hidden_dim);
+
+      const dataDir = path.join(tempRoot, ".data");
+      fs.mkdirSync(dataDir, { recursive: true });
+      const overridePayload = {
+        ...loadedFallback!,
+        trust_gate: { ...loadedFallback!.trust_gate, bias: -2.12345 },
+      };
+      fs.writeFileSync(
+        path.join(dataDir, "etg-trend-microscope-v1.json"),
+        JSON.stringify(overridePayload),
+        "utf8"
+      );
+      const loadedOverride = loadLocalTrendMicroscopeWeights({ rootDir: tempRoot });
+      expect(loadedOverride?.trust_gate.bias).toBeCloseTo(-2.12345, 5);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 });

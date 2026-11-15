@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  calibrateStormRiskModel,
   computeUpwindWeight,
   DENVER_CLIMATE_NODES,
   fetchDenverSolarClimateGraph,
+  PRECHARGE_CYCLE_COST_USD,
   runThreeWaySolarEvaluation,
+  SHORTFALL_SPREAD_USD_PER_KWH,
   type DailyWeatherRow,
 } from "@/lib/solar/denverClimateGraph";
 
@@ -240,5 +243,75 @@ describe("Denver Local Climate Graph", () => {
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it("calibrates monotonic probabilistic P(ALLSKY < 3.5) and Bayes expected-cost dispatch without test leakage", () => {
+    const valActuals = [2.4, 3.1, 3.4, 3.8, 4.1, 4.5, 4.9, 5.2, 5.6, 6.1, 2.8, 4.3];
+    const valPreds = [2.6, 3.0, 3.6, 3.7, 4.0, 4.4, 4.7, 5.4, 5.5, 5.9, 2.9, 4.4];
+    const cal = calibrateStormRiskModel(valActuals, valPreds);
+
+    expect(PRECHARGE_CYCLE_COST_USD).toBeCloseTo(26.25, 4);
+    expect(SHORTFALL_SPREAD_USD_PER_KWH).toBeCloseTo(0.205, 4);
+    expect(cal.residualStd).toBeGreaterThanOrEqual(0.25);
+
+    const lowForecast = cal.assess(2.0);
+    const midForecast = cal.assess(3.5);
+    const highForecast = cal.assess(6.2);
+
+    expect(lowForecast.probStormPct).toBeGreaterThanOrEqual(0);
+    expect(lowForecast.probStormPct).toBeLessThanOrEqual(100);
+    expect(lowForecast.probStormPct).toBeGreaterThan(midForecast.probStormPct);
+    expect(midForecast.probStormPct).toBeGreaterThan(highForecast.probStormPct);
+
+    // Bayes expected-cost decision: storm forecast triggers pre-charge, clear sky holds
+    expect(lowForecast.prechargeCycleCostUsd).toBeCloseTo(26.25, 2);
+    expect(lowForecast.expectedShortfallPenaltyUsd).toBeGreaterThan(
+      lowForecast.expectedFalsePrechargeCostUsd
+    );
+    expect(lowForecast.bayesOptimalPrecharge).toBe(true);
+    expect(highForecast.bayesOptimalPrecharge).toBe(false);
+    expect(highForecast.expectedShortfallPenaltyUsd).toBeLessThan(
+      highForecast.expectedFalsePrechargeCostUsd
+    );
+
+    // End-to-end 4-way evaluation & leak-free invariance under unseen test-target mutations
+    const baseSeries: Record<string, DailyWeatherRow[]> = {};
+    baseSeries["denver-target"] = makeSyntheticSeries(1150, 0, 3);
+    for (const [idx, node] of DENVER_CLIMATE_NODES.entries()) {
+      if (node.id === "denver-target") continue;
+      const lead = node.id === "silverthorne-w" ? 1 : idx;
+      baseSeries[node.id] = makeSyntheticSeries(1150, lead, idx + 2);
+    }
+
+    const resBefore = runThreeWaySolarEvaluation(baseSeries, "20240901");
+    expect(resBefore.metrics.localDailyOnly.name).toContain("Daily");
+    expect(resBefore.metrics.graphAware.stormBrierScore).toBeGreaterThanOrEqual(0);
+    expect(resBefore.metrics.graphAware.stormBrierScore).toBeLessThanOrEqual(1);
+    expect(resBefore.economics.probabilisticGraphPolicy.policyName).toContain("Bayes");
+    expect(resBefore.economics.prechargeCycleCostUsd).toBeCloseTo(26.25, 2);
+    expect(resBefore.economics.shortfallSpreadUsdPerKwh).toBeCloseTo(0.205, 3);
+    expect(resBefore.tomorrow.probStormPct).toBeGreaterThanOrEqual(0);
+    expect(resBefore.tomorrow.probStormPct).toBeLessThanOrEqual(100);
+    expect(typeof resBefore.tomorrow.bayesOptimalPrecharge).toBe("boolean");
+    expect(resBefore.recentTestSeries.every((r) => typeof r.probStormPct === "number")).toBe(true);
+
+    // Mutate only test target days (>= 20240901) without touching latest feature rows
+    const mutatedSeries: Record<string, DailyWeatherRow[]> = {
+      ...baseSeries,
+      "denver-target": baseSeries["denver-target"].map((row, idx, arr) =>
+        row.date >= "20240901" && idx < arr.length - 10
+          ? { ...row, allsky: 0.4, kt: 0.08 }
+          : row
+      ),
+    };
+    const resAfter = runThreeWaySolarEvaluation(mutatedSeries, "20240901");
+    // Calibration parameters (`calibratedThreshold`, Bayes break-even threshold, tomorrow risk) must be unchanged
+    expect(resAfter.metrics.graphAware.calibratedThreshold).toBe(
+      resBefore.metrics.graphAware.calibratedThreshold
+    );
+    expect(resAfter.economics.probabilisticGraphPolicy.thresholdKwh).toBe(
+      resBefore.economics.probabilisticGraphPolicy.thresholdKwh
+    );
+    expect(resAfter.tomorrow.probStormPct).toBe(resBefore.tomorrow.probStormPct);
   });
 });

@@ -556,32 +556,103 @@ export function extractPairMicroscopeFeatures(
 }
 
 let cachedMicroscopeWeights: {
+  filePath: string;
   mtimeMs: number;
   weights: PortableTrendMicroscopeWeightsV1;
 } | null = null;
 
-export function loadLocalTrendMicroscopeWeights(): PortableTrendMicroscopeWeightsV1 | null {
-  try {
-    const filePath = path.join(process.cwd(), ".data", "etg-trend-microscope-v1.json");
-    if (!fs.existsSync(filePath)) return null;
-    const stat = fs.statSync(filePath);
-    if (cachedMicroscopeWeights && cachedMicroscopeWeights.mtimeMs === stat.mtimeMs) {
-      return cachedMicroscopeWeights.weights;
+function parseMicroscopeWeightsV1(
+  filePath: string,
+  mtimeMs: number,
+  raw: string
+): PortableTrendMicroscopeWeightsV1 | null {
+  const parsed = JSON.parse(raw) as PortableTrendMicroscopeWeightsV1;
+  if (
+    parsed?.schema_version === "etg-trend-microscope-v1" &&
+    parsed.node_enc1?.weight &&
+    parsed.edge_enc1?.weight &&
+    parsed.inflection_head?.weight &&
+    parsed.dealias_head?.weight &&
+    parsed.coupling_head?.weight
+  ) {
+    cachedMicroscopeWeights = { filePath, mtimeMs, weights: parsed };
+    return parsed;
+  }
+  return null;
+}
+
+/**
+ * Loads portable `etg-trend-microscope-v1` weights from `.data/` first and
+ * falls back automatically to tracked `ml/weights/etg-trend-microscope-v1.json`
+ * on fresh clones or cold deployments.
+ */
+export function loadLocalTrendMicroscopeWeights(options?: {
+  rootDir?: string;
+}): PortableTrendMicroscopeWeightsV1 | null {
+  if (!options?.rootDir) {
+    const dataPath = path.join(process.cwd(), ".data", "etg-trend-microscope-v1.json");
+    try {
+      if (fs.existsSync(dataPath)) {
+        const stat = fs.statSync(dataPath);
+        if (
+          cachedMicroscopeWeights?.filePath === dataPath &&
+          cachedMicroscopeWeights.mtimeMs === stat.mtimeMs
+        ) {
+          return cachedMicroscopeWeights.weights;
+        }
+        const hit = parseMicroscopeWeightsV1(dataPath, stat.mtimeMs, fs.readFileSync(dataPath, "utf8"));
+        if (hit) return hit;
+      }
+    } catch {
+      // Fall through to tracked weights bundle
     }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as PortableTrendMicroscopeWeightsV1;
-    if (
-      parsed?.schema_version === "etg-trend-microscope-v1" &&
-      parsed.node_enc1?.weight &&
-      parsed.edge_enc1?.weight &&
-      parsed.inflection_head?.weight &&
-      parsed.dealias_head?.weight &&
-      parsed.coupling_head?.weight
-    ) {
-      cachedMicroscopeWeights = { mtimeMs: stat.mtimeMs, weights: parsed };
-      return parsed;
+
+    const trackedPath = path.join(process.cwd(), "ml", "weights", "etg-trend-microscope-v1.json");
+    try {
+      if (fs.existsSync(trackedPath)) {
+        const stat = fs.statSync(trackedPath);
+        if (
+          cachedMicroscopeWeights?.filePath === trackedPath &&
+          cachedMicroscopeWeights.mtimeMs === stat.mtimeMs
+        ) {
+          return cachedMicroscopeWeights.weights;
+        }
+        const hit = parseMicroscopeWeightsV1(
+          trackedPath,
+          stat.mtimeMs,
+          fs.readFileSync(trackedPath, "utf8")
+        );
+        if (hit) return hit;
+      }
+    } catch {
+      // Optional weights artifact missing or unreadable
     }
-  } catch {
-    // Optional weights artifact missing or unreadable
+    return null;
+  }
+
+  const customCandidates = [
+    path.join(options.rootDir, ".data", "etg-trend-microscope-v1.json"),
+    path.join(options.rootDir, "ml", "weights", "etg-trend-microscope-v1.json"),
+  ];
+  for (const filePath of customCandidates) {
+    try {
+      if (!fs.existsSync(/*turbopackIgnore: true*/ filePath)) continue;
+      const stat = fs.statSync(/*turbopackIgnore: true*/ filePath);
+      if (
+        cachedMicroscopeWeights?.filePath === filePath &&
+        cachedMicroscopeWeights.mtimeMs === stat.mtimeMs
+      ) {
+        return cachedMicroscopeWeights.weights;
+      }
+      const hit = parseMicroscopeWeightsV1(
+        filePath,
+        stat.mtimeMs,
+        fs.readFileSync(/*turbopackIgnore: true*/ filePath, "utf8")
+      );
+      if (hit) return hit;
+    } catch {
+      // Fall through to next candidate path
+    }
   }
   return null;
 }

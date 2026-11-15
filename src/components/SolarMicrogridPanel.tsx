@@ -412,13 +412,13 @@ export function SolarMicrogridPanel({
               {/* Decision Banner */}
               <div
                 className={`rounded-md border p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 ${
-                  data.tomorrow.chargeBatteryOvernight
+                  data.tomorrow.chargeBatteryOvernight || data.tomorrow.bayesOptimalPrecharge
                     ? "border-amber-400 bg-amber-950"
                     : "border-emerald-400 bg-emerald-950"
                 }`}
               >
                 <div className="flex items-start gap-3">
-                  {data.tomorrow.chargeBatteryOvernight ? (
+                  {data.tomorrow.chargeBatteryOvernight || data.tomorrow.bayesOptimalPrecharge ? (
                     <BatteryCharging className="h-6 w-6 text-amber-300 shrink-0 mt-0.5" />
                   ) : (
                     <BatteryFull className="h-6 w-6 text-emerald-300 shrink-0 mt-0.5" />
@@ -439,23 +439,55 @@ export function SolarMicrogridPanel({
                           ? `PRE-CHARGE OVERNIGHT (${data.tomorrow.recommendedReservePct}% Reserve)`
                           : `SOLAR SUFFICIENT (${data.tomorrow.recommendedReservePct}% Reserve)`}
                       </span>
+                      <span className="rounded-sm border border-sky-400 bg-zinc-900 px-2 py-0.5 text-[11px] font-mono text-sky-200">
+                        Storm Risk P(ALLSKY &lt; 3.5): {data.tomorrow.probStormPct.toFixed(1)}%
+                      </span>
+                      <span
+                        className={`rounded-sm border px-2 py-0.5 text-[11px] font-semibold font-mono ${
+                          data.tomorrow.bayesOptimalPrecharge
+                            ? "border-amber-300 bg-zinc-900 text-amber-200"
+                            : "border-emerald-300 bg-zinc-900 text-emerald-200"
+                        }`}
+                      >
+                        Bayes Optimal: {data.tomorrow.bayesOptimalPrecharge ? "PRE-CHARGE" : "HOLD"}
+                      </span>
                     </div>
                     <p className="text-xs text-zinc-200 mt-1.5 leading-relaxed">
                       {data.tomorrow.rationale}
                     </p>
+                    <p className="mt-1.5 text-[11px] font-mono text-zinc-300">
+                      Expected Shortfall Penalty (@ $0.205/kWh):{" "}
+                      <span className="text-amber-200">
+                        ${data.tomorrow.expectedShortfallPenaltyUsd.toFixed(2)}
+                      </span>{" "}
+                      vs. False-Precharge Risk (from ${data.tomorrow.prechargeCycleCostUsd.toFixed(2)} cycle):{" "}
+                      <span className="text-sky-200">
+                        ${data.tomorrow.expectedFalsePrechargeCostUsd.toFixed(2)}
+                      </span>{" "}
+                      (Net Bayes benefit:{" "}
+                      <span className="text-emerald-200">
+                        {data.tomorrow.bayesExpectedNetSavingsUsd >= 0 ? "+" : "-"}$
+                        {Math.abs(data.tomorrow.bayesExpectedNetSavingsUsd).toFixed(2)}
+                      </span>
+                      )
+                    </p>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2 shrink-0 text-center">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 shrink-0 text-center">
                   <div className="rounded-sm bg-zinc-950 px-3 py-2 border border-zinc-800">
                     <div className="text-[10px] text-zinc-400">Persistence</div>
                     <div className="text-sm font-semibold">{data.tomorrow.persistencePred}</div>
                   </div>
                   <div className="rounded-sm bg-zinc-950 px-3 py-2 border border-zinc-800">
-                    <div className="text-[10px] text-zinc-400">Local-Only</div>
+                    <div className="text-[10px] text-zinc-400">Local Daily</div>
+                    <div className="text-sm font-semibold">{data.tomorrow.localDailyPred}</div>
+                  </div>
+                  <div className="rounded-sm bg-zinc-950 px-3 py-2 border border-zinc-800">
+                    <div className="text-[10px] text-zinc-400">Local+Eve</div>
                     <div className="text-sm font-semibold">{data.tomorrow.localPred}</div>
                   </div>
                   <div className="rounded-sm bg-sky-950 px-3 py-2 border border-sky-400">
-                    <div className="text-[10px] text-sky-300">Graph-Aware</div>
+                    <div className="text-[10px] text-sky-300">Graph+Eve</div>
                     <div className="text-sm font-semibold text-sky-200">{data.tomorrow.graphPred}</div>
                   </div>
                 </div>
@@ -469,30 +501,37 @@ export function SolarMicrogridPanel({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs font-semibold uppercase tracking-wider text-emerald-300">
-                      K-12 Microgrid Economic &amp; Storm-Shortfall Impact
+                      K-12 Microgrid Economic &amp; Bayes Probabilistic Dispatch Impact
                     </div>
                     <span className="text-[11px] font-mono text-zinc-300">
-                      Calibrated dispatch threshold: τ = {data.economics.graphPolicy.thresholdKwh.toFixed(2)} kWh/m²/d
+                      Threshold τ = {data.economics.graphPolicy.thresholdKwh.toFixed(2)} · Bayes break-even τ* ≈ {data.economics.probabilisticGraphPolicy.thresholdKwh.toFixed(2)} kWh/m²/d
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
                     <div className="rounded-sm border border-zinc-800 bg-zinc-950 px-3 py-2">
-                      <div className="text-[10px] text-zinc-400">Net Savings vs. Persistence</div>
+                      <div className="text-[10px] text-zinc-400">Threshold Net Savings</div>
                       <div className="text-sm font-semibold font-mono text-emerald-300">
                         {data.economics.annualSavingsVsPersistenceUsd >= 0 ? "+" : "-"}$
                         {Math.abs(data.economics.annualSavingsVsPersistenceUsd).toFixed(0)}/yr
                       </div>
                     </div>
-                    <div className="rounded-sm border border-zinc-800 bg-zinc-950 px-3 py-2">
-                      <div className="text-[10px] text-zinc-400">Storm-Capture Recall</div>
-                      <div className="text-sm font-semibold font-mono text-sky-300">
-                        {data.economics.graphPolicy.stormCaptureRecallPct.toFixed(1)}%
+                    <div className="rounded-sm border border-sky-700/60 bg-zinc-950 px-3 py-2">
+                      <div className="text-[10px] text-sky-300">Bayes Net Savings</div>
+                      <div className="text-sm font-semibold font-mono text-sky-200">
+                        {data.economics.bayesAnnualSavingsVsPersistenceUsd >= 0 ? "+" : "-"}$
+                        {Math.abs(data.economics.bayesAnnualSavingsVsPersistenceUsd).toFixed(0)}/yr
                       </div>
                     </div>
                     <div className="rounded-sm border border-zinc-800 bg-zinc-950 px-3 py-2">
-                      <div className="text-[10px] text-zinc-400">Annual Penalty (Graph+Eve)</div>
+                      <div className="text-[10px] text-zinc-400">Bayes Storm Recall</div>
+                      <div className="text-sm font-semibold font-mono text-sky-300">
+                        {data.economics.probabilisticGraphPolicy.stormCaptureRecallPct.toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="rounded-sm border border-zinc-800 bg-zinc-950 px-3 py-2">
+                      <div className="text-[10px] text-zinc-400">Annual Penalty (Bayes)</div>
                       <div className="text-sm font-semibold font-mono text-zinc-100">
-                        ${data.economics.graphPolicy.annualizedPenaltyUsd.toFixed(0)}/yr
+                        ${data.economics.probabilisticGraphPolicy.annualizedPenaltyUsd.toFixed(0)}/yr
                       </div>
                     </div>
                     <div className="rounded-sm border border-zinc-800 bg-zinc-950 px-3 py-2">
@@ -504,20 +543,24 @@ export function SolarMicrogridPanel({
                   </div>
                   <p className="text-[11px] text-zinc-300">
                     <span className="font-medium text-zinc-100">{data.economics.schoolSpec}</span> —{" "}
-                    {data.economics.tariffSpec}. Unbuffered storm misses cut to{" "}
+                    {data.economics.tariffSpec}. Single-threshold τ misses{" "}
                     <span className="font-mono text-emerald-300">
                       {data.economics.graphPolicy.stormShortfallDays} / {data.economics.graphPolicy.totalLowSolarDays}
                     </span>{" "}
-                    low-solar events (vs. {data.economics.persistencePolicy.stormShortfallDays} with Persistence).
+                    events (${data.economics.graphPolicy.annualizedPenaltyUsd.toFixed(0)}/yr), whereas leak-free Bayes expected-cost dispatch ($26.25 cycle vs. $0.205/kWh shortfall) misses{" "}
+                    <span className="font-mono text-sky-300">
+                      {data.economics.probabilisticGraphPolicy.stormShortfallDays} / {data.economics.probabilisticGraphPolicy.totalLowSolarDays}
+                    </span>{" "}
+                    events (vs. {data.economics.persistencePolicy.stormShortfallDays} with Persistence).
                   </p>
                 </section>
               )}
 
-              {/* 3-Way Comparison Table */}
+              {/* 4-Way Comparison Table */}
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <h3 id={comparisonTableHeadingId} className="text-sm font-semibold">
-                    3-Way Comparison on Unseen Test Dates ({data.testRange}, n={data.testDays} days)
+                    4-Way Ablation Comparison on Unseen Test Dates ({data.testRange}, n={data.testDays} days)
                   </h3>
                   <span className="text-[11px] text-zinc-400">
                     Train: {data.trainRange} ({data.trainDays} days)
@@ -531,7 +574,7 @@ export function SolarMicrogridPanel({
                 >
                   <table className="w-full text-left text-xs">
                     <caption className="sr-only">
-                      3-way forecasting and calibrated overnight charge threshold evaluation on unseen test dates
+                      4-way forecasting, calibrated storm risk Brier score, and overnight charge threshold evaluation on unseen test dates
                     </caption>
                     <thead className="bg-zinc-900 text-zinc-300">
                       <tr>
@@ -541,30 +584,35 @@ export function SolarMicrogridPanel({
                         <th scope="col" className="px-3 py-2.5">R²</th>
                         <th scope="col" className="px-3 py-2.5">Skill vs Persist</th>
                         <th scope="col" className="px-3 py-2.5">Low-Solar F1 (&lt;3.5)</th>
+                        <th scope="col" className="px-3 py-2.5">Storm Brier</th>
                         <th scope="col" className="px-3 py-2.5">Calibrated τ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800">
-                      {[data.metrics.persistence, data.metrics.localOnly, data.metrics.graphAware].map(
-                        (m, idx) => (
-                          <tr
-                            key={m.name}
-                            className={idx === 2 ? "bg-sky-950 text-sky-100" : "text-zinc-200"}
-                          >
-                            <th scope="row" className="px-3 py-2.5 font-medium">{m.name}</th>
-                            <td className="px-3 py-2.5 font-mono">{m.rmse.toFixed(3)}</td>
-                            <td className="px-3 py-2.5 font-mono">{m.mae.toFixed(3)}</td>
-                            <td className="px-3 py-2.5 font-mono">{m.r2.toFixed(3)}</td>
-                            <td className="px-3 py-2.5 font-mono">
-                              {(m.skillVsPersistence * 100).toFixed(1)}%
-                            </td>
-                            <td className="px-3 py-2.5 font-mono">{m.lowSolarF1.toFixed(3)}</td>
-                            <td className="px-3 py-2.5 font-mono">
-                              {(m.calibratedThreshold ?? 3.5).toFixed(2)}
-                            </td>
-                          </tr>
-                        )
-                      )}
+                      {[
+                        data.metrics.persistence,
+                        data.metrics.localDailyOnly,
+                        data.metrics.localOnly,
+                        data.metrics.graphAware,
+                      ].map((m, idx) => (
+                        <tr
+                          key={m.name}
+                          className={idx === 3 ? "bg-sky-950 text-sky-100" : "text-zinc-200"}
+                        >
+                          <th scope="row" className="px-3 py-2.5 font-medium">{m.name}</th>
+                          <td className="px-3 py-2.5 font-mono">{m.rmse.toFixed(3)}</td>
+                          <td className="px-3 py-2.5 font-mono">{m.mae.toFixed(3)}</td>
+                          <td className="px-3 py-2.5 font-mono">{m.r2.toFixed(3)}</td>
+                          <td className="px-3 py-2.5 font-mono">
+                            {(m.skillVsPersistence * 100).toFixed(1)}%
+                          </td>
+                          <td className="px-3 py-2.5 font-mono">{m.lowSolarF1.toFixed(3)}</td>
+                          <td className="px-3 py-2.5 font-mono">{m.stormBrierScore.toFixed(3)}</td>
+                          <td className="px-3 py-2.5 font-mono">
+                            {(m.calibratedThreshold ?? 3.5).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
