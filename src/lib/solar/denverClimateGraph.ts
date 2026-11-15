@@ -661,10 +661,11 @@ export function runThreeWaySolarEvaluation(
   splitYyyymmdd = "20250101",
   liveBridgeSource = "NASA POWER Daily (CERES SYN1deg & MERRA-2)"
 ): SolarGraphAnalysisResult {
-  const targetSeries = seriesByNode["denver-target"];
-  if (!targetSeries || targetSeries.length < 60) {
+  const rawTargetSeries = seriesByNode["denver-target"];
+  if (!rawTargetSeries || rawTargetSeries.length < 60) {
     throw new Error("Insufficient Denver target observations for 3-way evaluation.");
   }
+  const targetSeries = [...rawTargetSeries].sort((a, b) => a.date.localeCompare(b.date));
 
   const neighborNodes = DENVER_CLIMATE_NODES.filter((n) => n.role === "upwind_neighbor");
   const neighborMaps = new Map<string, Map<string, DailyWeatherRow>>();

@@ -353,7 +353,7 @@ class PortableInductiveETGNet:
 
         train_pairs: List[Tuple[int, int]] = []
         # Strictly exclude any origin whose target timestamp t + horizon >= cutoff!
-        max_train_t = max(1, cutoff - horizon)
+        max_train_t = max(0, cutoff - horizon)
         for t in range(max_train_t):
             for j in nodes_to_train:
                 if mask_tensor[t][j] == 1 and next_targets[t][j] is not None:
@@ -924,7 +924,7 @@ if TORCH_AVAILABLE:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, epochs))
         use_bf16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
 
-        tr_origins = list(range(W - 1, max(W, cutoff - horizon)))
+        tr_origins = list(range(W - 1, max(W - 1, cutoff - horizon)))
         loss_history: List[float] = []
 
         def _forward_and_loss(active_mod: Any) -> "torch.Tensor":

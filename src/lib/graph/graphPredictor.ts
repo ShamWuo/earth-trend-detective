@@ -124,6 +124,7 @@ export interface EtgStoreLike {
     maxHops?: number;
     bucket?: TemporalBucket;
     trainFraction?: number;
+    trainCutoffDate?: string;
     horizonSteps?: number;
   }) => GraphMlDatasetExportV2;
 }
@@ -903,7 +904,7 @@ export function predictFromGraph(
   const buildLocalFeatures = (t: number): number[] => {
     const y0 = yNorm(targetEntries[t].value);
     const y1 = yNorm(targetEntries[t - 1].value);
-    const trendNorm = (t - originIndices[Math.floor(trainCount / 2)]) / Math.max(1, sampleCount);
+    const trendNorm = (t - originIndices[Math.floor(trainCount / 2)]) / Math.max(1, trainCount);
     const base = [1, y0, y0 - y1, trendNorm];
     if (includeSeasonal) {
       const ang = seasonalAngle(targetEntries[t + horizonSteps]?.date ?? targetEntries[t].date, bucket);
@@ -1138,7 +1139,7 @@ export function predictFromGraph(
     1,
     yNorm(targetEntries[lastT].value),
     yNorm(targetEntries[lastT].value) - yNorm(targetEntries[lastT - 1].value),
-    (lastT - originIndices[Math.floor(trainCount / 2)]) / Math.max(1, sampleCount),
+    (lastT - originIndices[Math.floor(trainCount / 2)]) / Math.max(1, trainCount),
     ...(includeSeasonal
       ? (() => {
           const nextLbl = advanceDateLabel(targetEntries[lastT].date, bucket, horizonSteps);
@@ -1170,11 +1171,13 @@ export function predictFromGraph(
     Number.isFinite(activeInnerZ)
   ) {
     try {
+      const firstTestTargetDate = targetEntries[originIndices[trainCount] + horizonSteps]?.date;
       const mlV2 = store.exportMlGraphDatasetV2({
         rootUuid: targetNode.uuid,
         maxHops,
         bucket,
         horizonSteps,
+        trainCutoffDate: firstTestTargetDate,
       });
       const nodeIdx = mlV2.node_ids.indexOf(targetNode.uuid);
       if (nodeIdx >= 0 && mlV2.time_index.length >= 10) {

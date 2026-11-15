@@ -20,6 +20,12 @@ import type {
  * Abramowitz & Stegun 7.1.26 rational approximation for erf(x).
  */
 export function normalCdf(z: number): number {
+  if (!Number.isFinite(z)) {
+    if (z === Number.POSITIVE_INFINITY) return 1;
+    if (z === Number.NEGATIVE_INFINITY) return 0;
+    return 0.5;
+  }
+  if (z === 0) return 0.5;
   const sign = z < 0 ? -1 : 1;
   const x = Math.abs(z) / Math.SQRT2;
   const t = 1 / (1 + 0.3275911 * x);
@@ -33,7 +39,7 @@ export function normalCdf(z: number): number {
 }
 
 export function twoTailedNormalPValue(z: number): number {
-  if (!Number.isFinite(z)) return 1;
+  if (!Number.isFinite(z) || z === 0) return 1;
   const absZ = Math.abs(z);
   const p = 2 * (1 - normalCdf(absZ));
   return Math.min(1, Math.max(0, p));
@@ -77,7 +83,8 @@ function computeTieCorrectedMkCore(values: readonly number[]): { s: number; varS
  * autocorrelation variance adjustment for serially correlated climate series.
  */
 export function mannKendallTest(values: readonly number[], alpha = 0.05): MannKendallResult {
-  const n = values.length;
+  const cleanValues = values.filter((v) => Number.isFinite(v));
+  const n = cleanValues.length;
   if (n < 3) {
     return {
       n,
@@ -97,7 +104,7 @@ export function mannKendallTest(values: readonly number[], alpha = 0.05): MannKe
     };
   }
 
-  const { s, varS } = computeTieCorrectedMkCore(values);
+  const { s, varS } = computeTieCorrectedMkCore(cleanValues);
   let zScore = 0;
   if (varS > 0) {
     if (s > 0) zScore = (s - 1) / Math.sqrt(varS);
@@ -121,20 +128,22 @@ export function mannKendallTest(values: readonly number[], alpha = 0.05): MannKe
     const seqSlopes: number[] = [];
     for (let i = 0; i < n - 1; i++) {
       for (let j = i + 1; j < n; j++) {
-        seqSlopes.push((values[j] - values[i]) / (j - i));
+        seqSlopes.push((cleanValues[j] - cleanValues[i]) / (j - i));
       }
     }
     seqSlopes.sort((a, b) => a - b);
     const senSlopeIdx = medianOfSorted(seqSlopes);
-    const residuals = values.map((v, idx) => v - senSlopeIdx * idx);
+    const residuals = cleanValues.map((v, idx) => v - senSlopeIdx * idx);
     const ranked = rankArray(residuals);
     const meanR = ranked.reduce((acc, r) => acc + r, 0) / n;
     const varR = ranked.reduce((acc, r) => acc + (r - meanR) ** 2, 0);
 
     if (varR > 1e-12) {
-      const maxLag = Math.min(n - 3, 10);
+      const maxLag = Math.min(n - 3, Math.max(10, Math.floor(n / 2)));
       const critBand = 1.959963984540054 / Math.sqrt(n);
       let weightedRhoSum = 0;
+      let rho1 = 0;
+      let posSeqBroken = false;
 
       for (let k = 1; k <= maxLag; k++) {
         let cov = 0;
@@ -142,16 +151,34 @@ export function mannKendallTest(values: readonly number[], alpha = 0.05): MannKe
           cov += (ranked[i] - meanR) * (ranked[i + k] - meanR);
         }
         const rhoK = cov / varR;
-        if (k === 1) lag1Autocorrelation = Number(rhoK.toFixed(4));
-        if (Math.abs(rhoK) > critBand) {
+        if (k === 1) {
+          rho1 = rhoK;
+          lag1Autocorrelation = Number(rhoK.toFixed(4));
+        }
+        // Use Initial Positive Sequence when rho1 > 0 so persistent red noise is not
+        // under-corrected by noisy negative higher-lag oscillations on detrended ranks.
+        if (rho1 > 0) {
+          if (rhoK <= 0) posSeqBroken = true;
+          if (!posSeqBroken && rhoK > critBand) {
+            weightedRhoSum += (n - k) * (n - k - 1) * (n - k - 2) * rhoK;
+          }
+        } else if (Math.abs(rhoK) > critBand) {
           weightedRhoSum += (n - k) * (n - k - 1) * (n - k - 2) * rhoK;
         }
       }
 
-      const rawCorrection = 1 + (2 / (n * (n - 1) * (n - 2))) * weightedRhoSum;
+      let rawCorrection = 1 + (2 / (n * (n - 1) * (n - 2))) * weightedRhoSum;
+      // Compensate finite-sample downward bias of lag-1 autocorrelation after Theil-Sen
+      // detrending (Marriott-Pope order-1/n bias) for persistent AR(1) red-noise series.
+      if (rho1 > critBand && rho1 > 0.15) {
+        const rho1BiasAdj = Math.min(0.95, rho1 + (2 + 4 * rho1) / n);
+        const ar1Floor = (1 + rho1BiasAdj) / Math.max(0.05, 1 - rho1BiasAdj);
+        rawCorrection = Math.max(rawCorrection, ar1Floor);
+      }
+      const maxCap = Math.max(12.0, n * 0.5);
       // Keep variance inflation conservative (>= 1.0) so cyclic negative lag oscillations
       // never yield an effective sample size n* > n or overstate trend significance.
-      correctionFactor = Math.max(1.0, Math.min(6.0, rawCorrection));
+      correctionFactor = Math.max(1.0, Math.min(maxCap, rawCorrection));
     }
   }
 
@@ -377,20 +404,23 @@ export function computeOlsRegression(
 export function computePettittChangePoint(
   points: readonly { date: string; t: number; value: number }[]
 ): PettittChangePointResult | null {
-  const n = points.length;
+  const cleanPoints = points.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value));
+  const n = cleanPoints.length;
   if (n < 8) return null;
 
+  // Exact O(n^2) incremental recurrence: U_t = U_{t-1} + sum_k sgn(x_t - x_k)
   let bestT = 0;
   let kStat = 0;
+  let u = 0;
   for (let t = 0; t < n - 1; t++) {
-    let u = 0;
-    for (let i = 0; i <= t; i++) {
-      for (let j = t + 1; j < n; j++) {
-        const diff = points[i].value - points[j].value;
-        if (diff > 1e-12) u += 1;
-        else if (diff < -1e-12) u -= 1;
-      }
+    const xt = cleanPoints[t].value;
+    let deltaU = 0;
+    for (let k = 0; k < n; k++) {
+      const diff = xt - cleanPoints[k].value;
+      if (diff > 1e-12) deltaU += 1;
+      else if (diff < -1e-12) deltaU -= 1;
     }
+    u += deltaU;
     const absU = Math.abs(u);
     if (absU > kStat) {
       kStat = absU;
@@ -402,7 +432,7 @@ export function computePettittChangePoint(
   const shiftIdx = Math.min(n - 1, bestT + 1);
   return {
     index: shiftIdx,
-    date: points[shiftIdx].date,
+    date: cleanPoints[shiftIdx].date,
     kStat,
     pValue,
     significant: pValue < 0.05,
@@ -418,34 +448,69 @@ export function computeSeasonalMannKendall(
   points: readonly TimeSeriesPoint[],
   alpha = 0.05
 ): SeasonalMannKendallResult | null {
-  if (points.length < 18) return null;
-  const sorted = [...points].sort((a, b) => a.t - b.t);
+  const finitePoints = points.filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value));
+  if (finitePoints.length < 18) return null;
+  const sorted = [...finitePoints].sort((a, b) => a.t - b.t);
 
-  const monthBuckets = new Map<number, Array<{ idx: number; pt: TimeSeriesPoint }>>();
+  // Aggregate intra-year duplicate/sub-monthly observations into (year, month) cells so
+  // dense intra-season sampling never generates spurious within-year seasonal slope trends.
+  const monthYearCells = new Map<
+    number,
+    Map<number, { sumVal: number; sumT: number; count: number }>
+  >();
   const monthByIdx = new Array<number | null>(sorted.length).fill(null);
 
   for (let i = 0; i < sorted.length; i++) {
     const pt = sorted[i];
-    const m = pt.date.trim().match(/^(\d{4})[-/](\d{1,2})/);
+    const trimmed = pt.date.trim();
+    const m = trimmed.match(/^(\d{4})[-/](\d{1,2})/) ?? trimmed.match(/^(\d{4})(\d{2})\d{2}$/);
     if (!m) continue;
+    const year = Number(m[1]);
     const month = Number(m[2]);
-    if (month < 1 || month > 12) continue;
+    if (!Number.isFinite(year) || month < 1 || month > 12) continue;
     monthByIdx[i] = month;
-    const list = monthBuckets.get(month) ?? [];
-    list.push({ idx: i, pt });
-    monthBuckets.set(month, list);
+    let byYear = monthYearCells.get(month);
+    if (!byYear) {
+      byYear = new Map();
+      monthYearCells.set(month, byYear);
+    }
+    const prev = byYear.get(year);
+    if (prev) {
+      prev.sumVal += pt.value;
+      prev.sumT += pt.t;
+      prev.count += 1;
+    } else {
+      byYear.set(year, { sumVal: pt.value, sumT: pt.t, count: 1 });
+    }
   }
 
-  const activeSeasons = Array.from(monthBuckets.entries()).filter(([, grp]) => grp.length >= 2);
-  if (activeSeasons.length < 2) return null;
+  interface SeasonalAnnualCell {
+    year: number;
+    t: number;
+    value: number;
+  }
 
-  const overallMean = sorted.reduce((acc, p) => acc + p.value, 0) / sorted.length;
+  const seasonSeries = new Map<number, SeasonalAnnualCell[]>();
   const monthMeans = new Map<number, number>();
-  for (const [month, grp] of monthBuckets.entries()) {
-    const meanM = grp.reduce((acc, item) => acc + item.pt.value, 0) / grp.length;
+  for (const [month, byYear] of monthYearCells.entries()) {
+    const cells: SeasonalAnnualCell[] = Array.from(byYear.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([year, agg]) => ({
+        year,
+        t: agg.sumT / agg.count,
+        value: agg.sumVal / agg.count,
+      }));
+    seasonSeries.set(month, cells);
+    const meanM = cells.reduce((acc, c) => acc + c.value, 0) / Math.max(1, cells.length);
     monthMeans.set(month, meanM);
   }
 
+  const activeSeasons = Array.from(seasonSeries.entries())
+    .filter(([, cells]) => cells.length >= 2)
+    .sort((a, b) => a[0] - b[0]);
+  if (activeSeasons.length < 2) return null;
+
+  const overallMean = sorted.reduce((acc, p) => acc + p.value, 0) / sorted.length;
   const deseasonalizedValues = sorted.map((p, idx) => {
     const month = monthByIdx[idx];
     const clim = month !== null ? (monthMeans.get(month) ?? overallMean) : overallMean;
@@ -453,25 +518,83 @@ export function computeSeasonalMannKendall(
   });
 
   let totalS = 0;
-  let totalVarS = 0;
+  let totalVarIndep = 0;
   let totalPairs = 0;
   const withinMonthSlopes: number[] = [];
 
-  for (const [, grp] of activeSeasons) {
-    const vals = grp.map((item) => item.pt.value);
+  // Precompute per-season year maps and centered Mann-Kendall rank scores R_{g,y}
+  // for Hirsch & Slack (1984) inter-season covariance estimation.
+  const seasonMeta: Array<{
+    month: number;
+    cells: SeasonalAnnualCell[];
+    valByYear: Map<number, number>;
+    rByYear: Map<number, number>;
+    varS: number;
+  }> = [];
+
+  for (const [month, cells] of activeSeasons) {
+    const vals = cells.map((c) => c.value);
     const { s, varS } = computeTieCorrectedMkCore(vals);
     totalS += s;
-    totalVarS += varS;
-    for (let i = 0; i < grp.length - 1; i++) {
-      for (let j = i + 1; j < grp.length; j++) {
-        const dt = grp[j].pt.t - grp[i].pt.t;
+    totalVarIndep += varS;
+    for (let i = 0; i < cells.length - 1; i++) {
+      for (let j = i + 1; j < cells.length; j++) {
+        const dt = cells[j].t - cells[i].t;
         if (dt > 1e-6) {
-          withinMonthSlopes.push((grp[j].pt.value - grp[i].pt.value) / dt);
+          withinMonthSlopes.push((cells[j].value - cells[i].value) / dt);
           totalPairs += 1;
         }
       }
     }
+
+    const ranks = rankArray(vals);
+    const midCenter = (vals.length + 1) / 2;
+    const valByYear = new Map<number, number>();
+    const rByYear = new Map<number, number>();
+    for (let i = 0; i < cells.length; i++) {
+      valByYear.set(cells[i].year, vals[i]);
+      rByYear.set(cells[i].year, 2 * (ranks[i] - midCenter));
+    }
+    seasonMeta.push({ month, cells, valByYear, rByYear, varS });
   }
+
+  // Hirsch & Slack (1984) serial-correlation covariance across calendar seasons:
+  // Var(S) = sum_g Var(S_g) + 2 * sum_{g < h} Cov(S_g, S_h), clamped >= sum_g Var(S_g).
+  let totalVarHS = totalVarIndep;
+  for (let a = 0; a < seasonMeta.length; a++) {
+    for (let b = a + 1; b < seasonMeta.length; b++) {
+      const sa = seasonMeta[a];
+      const sb = seasonMeta[b];
+      const commonYears: number[] = [];
+      for (const c of sa.cells) {
+        if (sb.valByYear.has(c.year)) commonYears.push(c.year);
+      }
+      if (commonYears.length < 2) continue;
+
+      let kAb = 0;
+      for (let i = 0; i < commonYears.length - 1; i++) {
+        const yi = commonYears[i];
+        const xai = sa.valByYear.get(yi)!;
+        const xbi = sb.valByYear.get(yi)!;
+        for (let j = i + 1; j < commonYears.length; j++) {
+          const yj = commonYears[j];
+          const da = (sa.valByYear.get(yj)! - xai);
+          const db = (sb.valByYear.get(yj)! - xbi);
+          const sgnA = da > 1e-12 ? 1 : da < -1e-12 ? -1 : 0;
+          const sgnB = db > 1e-12 ? 1 : db < -1e-12 ? -1 : 0;
+          kAb += sgnA * sgnB;
+        }
+      }
+
+      let rDot = 0;
+      for (const y of commonYears) {
+        rDot += (sa.rByYear.get(y) ?? 0) * (sb.rByYear.get(y) ?? 0);
+      }
+      const covAb = (kAb + rDot) / 3;
+      totalVarHS += 2 * covAb;
+    }
+  }
+  const totalVarS = Math.max(totalVarIndep, totalVarHS);
 
   let zScore = 0;
   if (totalVarS > 0) {
@@ -519,7 +642,9 @@ export function analyzeTimeSeries(
     alpha?: number;
   }
 ): TrendAnalysisSummary {
-  const sorted = [...rawPoints].sort((a, b) => a.t - b.t);
+  const sorted = rawPoints
+    .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.value))
+    .sort((a, b) => a.t - b.t);
   const values = sorted.map((p) => p.value);
   const n = values.length;
 
@@ -560,15 +685,42 @@ export function analyzeTimeSeries(
   const latestValue = values[n - 1] ?? 0;
   const latestAnomalyZ = stdDev > 1e-12 ? (latestValue - mean) / stdDev : 0;
 
-  // Respect Hamed & Rao (1998) serial-correlation adjustment on n >= 10 series
-  // to avoid red-noise AR(1) false positives in environmental telemetry.
-  const effectiveSignificant =
+  // Respect Hamed & Rao (1998) serial-correlation adjustment on n >= 10 series,
+  // and defer to Hirsch-Slack Seasonal Mann-Kendall when an annual cycle accounts
+  // for >= 25% of sample variance (prevents missing-season imbalance false trends).
+  let effectiveSignificant =
     mk.n >= 10 ? mk.significant && mk.significantAdjusted : mk.significant;
+  let effectiveDirection: MannKendallResult["direction"] = effectiveSignificant
+    ? mk.direction
+    : "no_trend";
+  let effectiveSlope = ts.slope;
+
+  if (
+    seasonalAnalysis &&
+    seasonalAnalysis.seasonsDetected >= 3 &&
+    seasonalAnalysis.totalPairs >= 6 &&
+    variance > 1e-12
+  ) {
+    const dLen = seasonalAnalysis.deseasonalizedValues.length;
+    const dMean =
+      seasonalAnalysis.deseasonalizedValues.reduce((acc, v) => acc + v, 0) / Math.max(1, dLen);
+    const deseasonalizedVar =
+      dLen > 1
+        ? seasonalAnalysis.deseasonalizedValues.reduce((acc, v) => acc + (v - dMean) ** 2, 0) /
+          (dLen - 1)
+        : variance;
+    const seasonalVarianceShare = Math.max(0, 1 - deseasonalizedVar / variance);
+    if (seasonalVarianceShare >= 0.25) {
+      effectiveSignificant = seasonalAnalysis.significant;
+      effectiveDirection = seasonalAnalysis.direction;
+      effectiveSlope = seasonalAnalysis.seasonalTheilSenSlope;
+    }
+  }
 
   let verdict: TrendAnalysisSummary["verdict"] = "Normal Environmental Variability";
-  if (effectiveSignificant && Math.abs(ts.slope) > 1e-9) {
+  if (effectiveSignificant && Math.abs(effectiveSlope) > 1e-9) {
     verdict =
-      mk.direction === "increasing"
+      effectiveDirection === "increasing"
         ? "Statistically Significant Increasing Trend"
         : "Statistically Significant Decreasing Trend";
   }
@@ -670,7 +822,7 @@ export function benjaminiHochbergAdjust(pValues: readonly number[]): number[] {
   for (let rank = m - 1; rank >= 0; rank--) {
     const rawQ = (m / (rank + 1)) * indexed[rank].p;
     runningMin = Math.min(runningMin, Math.min(1, rawQ));
-    qSorted[rank] = Number(Math.max(0, runningMin).toFixed(8));
+    qSorted[rank] = Math.max(0, runningMin);
   }
 
   const out = new Array<number>(m);

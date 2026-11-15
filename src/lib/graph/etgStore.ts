@@ -652,8 +652,16 @@ function buildCausalScaleBlock(args: {
   impulseEventsByNode: Map<number, CausalImpulseEvent[]>;
   incidentImpulsesByNode: Map<number, number[]>;
   trainFraction: number;
+  trainCutoffDate?: string;
 }) {
-  const { nodeCount, scaleMaps, impulseEventsByNode, incidentImpulsesByNode, trainFraction } = args;
+  const {
+    nodeCount,
+    scaleMaps,
+    impulseEventsByNode,
+    incidentImpulsesByNode,
+    trainFraction,
+    trainCutoffDate,
+  } = args;
   const timeKeyToT = new Map<string, number>();
   for (const m of scaleMaps) {
     for (const [k, pt] of m.entries()) {
@@ -665,8 +673,21 @@ function buildCausalScaleBlock(args: {
   );
   const T = timeIndex.length;
   const frac = Math.max(0.4, Math.min(0.9, trainFraction));
-  const trainCutoffIndex = T >= 4 ? Math.max(2, Math.min(T - 1, Math.floor(T * frac))) : T;
   const timeIndexMs = timeIndex.map((k) => parseSeriesDateMs(k) ?? 0);
+  const cutoffMs = trainCutoffDate ? parseSeriesDateMs(trainCutoffDate) : null;
+  let trainCutoffIndex = T >= 4 ? Math.max(2, Math.min(T - 1, Math.floor(T * frac))) : T;
+  if (trainCutoffDate) {
+    let strictBeforeCount = 0;
+    for (let i = 0; i < T; i++) {
+      const ms = timeIndexMs[i];
+      if (cutoffMs !== null && ms > 0) {
+        if (ms < cutoffMs) strictBeforeCount++;
+      } else if (timeIndex[i].localeCompare(trainCutoffDate) < 0) {
+        strictBeforeCount++;
+      }
+    }
+    trainCutoffIndex = Math.max(0, Math.min(T, strictBeforeCount));
+  }
 
   const normStats: Array<{ mean: number; std: number }> = [];
   const monthMeans: Array<Map<string, number>> = [];
@@ -3595,6 +3616,7 @@ export class EtgStore {
     maxHops?: number;
     bucket?: TemporalBucket;
     trainFraction?: number;
+    trainCutoffDate?: string;
     horizonSteps?: number;
   }): GraphMlDatasetExportV2 {
     const sub =
@@ -3696,12 +3718,14 @@ export class EtgStore {
     });
 
     const trainFraction = options?.trainFraction ?? 0.75;
+    const trainCutoffDate = options?.trainCutoffDate;
     const primaryBlock = buildCausalScaleBlock({
       nodeCount: nodes.length,
       scaleMaps: primaryMaps,
       impulseEventsByNode,
       incidentImpulsesByNode,
       trainFraction,
+      trainCutoffDate,
     });
 
     const trainKeys = primaryBlock.timeIndex.slice(0, primaryBlock.trainCutoffIndex);
@@ -3875,6 +3899,7 @@ export class EtgStore {
         impulseEventsByNode: subImpulseEvents,
         incidentImpulsesByNode: subIncidentImpulses,
         trainFraction,
+        trainCutoffDate,
       });
 
       multiScaleBlocks[scale] = {
