@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 interface PredictRequestParams {
   format?: string;
+  v?: string | number;
   action?: "log_forecast" | "reconcile_forecasts" | "sync_l4_finetune";
   targetUuid?: string;
   rootUuid?: string;
@@ -24,21 +25,24 @@ interface PredictRequestParams {
 
 async function handlePredict(params: PredictRequestParams) {
   const store = getEtgStore();
+  const exportVersion = params.v !== undefined ? String(params.v).trim().toLowerCase() : undefined;
+  const isV2ExportAlias =
+    params.format === "ml_export" && (exportVersion === "2" || exportVersion === "v2");
+
+  if (params.format === "ml_export_v2" || isV2ExportAlias) {
+    return store.exportMlGraphDatasetV2({
+      rootUuid: params.rootUuid || params.targetUuid,
+      maxHops: params.maxHops,
+      bucket: params.bucket,
+      horizonSteps: params.horizonSteps,
+    });
+  }
 
   if (params.format === "ml_export") {
     return store.exportMlGraphDataset({
       rootUuid: params.rootUuid || params.targetUuid,
       maxHops: params.maxHops,
       bucket: params.bucket,
-    });
-  }
-
-  if (params.format === "ml_export_v2") {
-    return store.exportMlGraphDatasetV2({
-      rootUuid: params.rootUuid || params.targetUuid,
-      maxHops: params.maxHops,
-      bucket: params.bucket,
-      horizonSteps: params.horizonSteps,
     });
   }
 
@@ -210,6 +214,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const result = await handlePredict({
       format: searchParams.get("format") || undefined,
+      v: searchParams.get("v") || undefined,
       action:
         (searchParams.get("action") as PredictRequestParams["action"] | null) || undefined,
       targetUuid: searchParams.get("targetUuid") || undefined,

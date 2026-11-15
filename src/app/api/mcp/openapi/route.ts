@@ -250,6 +250,7 @@ export async function GET(req: NextRequest) {
         operationId: "predictFromEtgGraphGet",
         parameters: [
           { name: "format", in: "query", schema: { type: "string", enum: ["prediction", "ml_export", "ml_export_v2", "ledger"] } },
+          { name: "v", in: "query", schema: { type: "string", enum: ["1", "2"] } },
           { name: "targetUuid", in: "query", schema: { type: "string" } },
           { name: "rootUuid", in: "query", schema: { type: "string" } },
           { name: "lat", in: "query", schema: { type: "number" } },
@@ -276,6 +277,7 @@ export async function GET(req: NextRequest) {
                 type: "object",
                 properties: {
                   format: { type: "string", enum: ["prediction", "ml_export", "ml_export_v2", "ledger"] },
+                  v: { type: "string", enum: ["1", "2"] },
                   action: { type: "string", enum: ["log_forecast", "reconcile_forecasts", "sync_l4_finetune"] },
                   targetUuid: { type: "string" },
                   rootUuid: { type: "string" },

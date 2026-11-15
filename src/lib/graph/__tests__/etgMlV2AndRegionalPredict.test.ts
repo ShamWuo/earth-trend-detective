@@ -348,6 +348,15 @@ describe("Global Multi-Scale ETG v2, Community Trust Gate & Regional Prediction"
     const jsonV2 = await resV2.json();
     expect(jsonV2.schema_version).toBe("etg-ml-v2");
 
+    const resV2QueryAlias = await predictGET(
+      new NextRequest(
+        `http://localhost/api/graph/predict?format=ml_export&v=2&rootUuid=${encodeURIComponent(regionPred.targetUuid)}`
+      )
+    );
+    expect(resV2QueryAlias.status).toBe(200);
+    const jsonV2Alias = await resV2QueryAlias.json();
+    expect(jsonV2Alias.schema_version).toBe("etg-ml-v2");
+
     const resCoord = await predictGET(
       new NextRequest("http://localhost/api/graph/predict?lat=45.2&lng=6.1&dataset=nasa_power")
     );
