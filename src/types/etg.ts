@@ -883,6 +883,7 @@ export type TrendMicroscopeRadarBadge =
   | "SECULAR_ACCELERATION"
   | "FALSE_TREND_CYCLE"
   | "SENSOR_GLITCH_RISK"
+  | "CONTESTED"
   | "NOMINAL";
 
 export interface NodeTrendMicroscopeCue {

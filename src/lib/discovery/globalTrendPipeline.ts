@@ -2,25 +2,28 @@ import crypto from "node:crypto";
 import {
   fetchCsaSwotAndRcmMetadata,
   fetchGeocaCanadianSeries,
-  fetchKnmiClimateIndices,
-  fetchKnmiMonthlyClimateIndices,
+  fetchKnmiClimateModeBundles,
   fetchNoaaCdoGlobalStations,
   fetchUsgsCoastalPlumeDischarge,
 } from "@/lib/agencies/challengeSourcesClient";
 import { getEtgStore, haversineKm, type EtgGraphSnapshot } from "@/lib/graph/etgStore";
+import { predictFromGraph } from "@/lib/graph/graphPredictor";
 import { classifyEarthRegionByCoord } from "@/lib/graph/regionalSubgraph";
 import { hasTerrestrialSurface, isMarineOrCoastalSurface } from "@/lib/earth/surfaceMask";
 import {
   buildGistempClimatologicalFallback,
   buildNoaaCo2ClimatologicalFallback,
   buildNsidcSeaIceClimatologicalFallback,
+  fetchNasaGistempGlobalMonthlySeries,
   fetchNasaGistempZonalSeriesWithFallback,
   fetchNoaaGlobalCo2SeriesWithFallback,
+  fetchNoaaMonthlyCo2Series,
   fetchNsidcArcticSeaIceSeriesWithFallback,
 } from "@/lib/nasa/gistempAndCo2Client";
 import { fetchLiveEonetSignals } from "@/lib/nasa/eonetClient";
 import { fetchMultiParamNasaPower } from "@/lib/nasa/nasaPowerClient";
 import {
+  VERIFIED_CITATIONS,
   buildArcticAmplificationDossier,
   buildArcticHydrologyDossier,
   buildChileMegadroughtDossier,
@@ -33,7 +36,9 @@ import {
   resolveNamedEarthRegion,
 } from "@/lib/research/curatedTrendDossiers";
 import {
+  buildNodeClaimStanceContext,
   buildNodeLiteratureQuery,
+  evaluateCitationClaimStance,
   searchPeerReviewedEarthLiterature,
   verifyAndFilterCitations,
 } from "@/lib/research/scholarlyLiteratureClient";
@@ -42,9 +47,12 @@ import {
   analyzeTimeSeries,
   benjaminiHochbergAdjust,
   compareRegionalSeries,
+  computeMultivariatePartialDetrendedCorrelation,
   computePairwisePredictiveSkillLift,
   computePartialDetrendedCorrelation,
+  computeSpatialMoransI,
   deseasonalizeMonthlySeries,
+  type SpatialMoransIResult,
 } from "@/lib/stats/trendEngine";
 import type {
   CrossRegionComparison,
@@ -72,6 +80,11 @@ export interface GlobalDiscoverySummary {
   oppositeDipolesWired: number;
   coTrendingTeleconnectionsWired: number;
   contradictingEdgesWired?: number;
+  confoundedPairsPruned?: number;
+  monthlySeriesPersisted?: number;
+  prospectiveForecastsLogged?: number;
+  prospectiveForecastsScored?: number;
+  spatialMoransI?: SpatialMoransIResult;
   verifiedLiteratureCitations?: number;
 }
 
@@ -267,23 +280,25 @@ export async function discoverGlobalEarthTrends(
   const maxEonetSites = options?.maxEonetSites ?? 7;
   const [
     gistempSettled,
+    gistempMonthlySettled,
     noaaSettled,
+    noaaMonthlySettled,
     nsidcSettled,
     eonetSettled,
     noaaCdoSettled,
-    knmiSettled,
-    knmiMonthlySettled,
+    knmiBundlesSettled,
     geocaSettled,
     usgsPlumeSettled,
     orbitalSettled,
   ] = await Promise.allSettled([
     fetchNasaGistempZonalSeriesWithFallback(1995, 2025),
+    fetchNasaGistempGlobalMonthlySeries(1995, 2026),
     fetchNoaaGlobalCo2SeriesWithFallback(1995, 2025),
+    fetchNoaaMonthlyCo2Series(1995, 2026),
     fetchNsidcArcticSeaIceSeriesWithFallback(1995, 2025),
     fetchLiveEonetSignals(maxEonetSites),
     fetchNoaaCdoGlobalStations(1995, 2025),
-    fetchKnmiClimateIndices(1995, 2025),
-    fetchKnmiMonthlyClimateIndices(1995, 2025),
+    fetchKnmiClimateModeBundles(1995, 2025),
     fetchGeocaCanadianSeries(1995, 2025),
     fetchUsgsCoastalPlumeDischarge(1995, 2025),
     fetchCsaSwotAndRcmMetadata(),
@@ -293,10 +308,20 @@ export async function discoverGlobalEarthTrends(
     gistempSettled.status === "fulfilled"
       ? gistempSettled.value
       : { ...buildGistempClimatologicalFallback(1995, 2025), provenanceMode: "climatological_fallback" as const };
+  const gistempMonthlyPts =
+    gistempFull.provenanceMode !== "climatological_fallback" &&
+    gistempMonthlySettled.status === "fulfilled"
+      ? gistempMonthlySettled.value
+      : [];
   const noaaRes =
     noaaSettled.status === "fulfilled"
       ? noaaSettled.value
       : { ...buildNoaaCo2ClimatologicalFallback(1995, 2025), provenanceMode: "climatological_fallback" as const };
+  const noaaMonthlyPts =
+    noaaRes.provenanceMode !== "climatological_fallback" &&
+    noaaMonthlySettled.status === "fulfilled"
+      ? noaaMonthlySettled.value
+      : [];
   const nsidcRes =
     nsidcSettled.status === "fulfilled"
       ? nsidcSettled.value
@@ -311,13 +336,9 @@ export async function discoverGlobalEarthTrends(
         };
 
   const noaaCdoRecords = noaaCdoSettled.status === "fulfilled" ? noaaCdoSettled.value : [];
-  const knmiRecords = knmiSettled.status === "fulfilled" ? knmiSettled.value : [];
-  const knmiMonthlyById = new Map(
-    (knmiMonthlySettled.status === "fulfilled" ? knmiMonthlySettled.value : []).map((r) => [
-      r.id,
-      r,
-    ])
-  );
+  const knmiBundles = knmiBundlesSettled.status === "fulfilled" ? knmiBundlesSettled.value : [];
+  const knmiRecords = knmiBundles.map((b) => b.annual);
+  const knmiMonthlyById = new Map(knmiBundles.map((b) => [b.id, b.monthly]));
   const geocaRecords = geocaSettled.status === "fulfilled" ? geocaSettled.value : [];
   const usgsPlumeRecord = usgsPlumeSettled.status === "fulfilled" ? usgsPlumeSettled.value : null;
   const orbitalMeta =
@@ -553,6 +574,14 @@ export async function discoverGlobalEarthTrends(
       datasetB: "nasa_power",
     });
     const co2InsightUuid = "insight-global-co2-warming";
+    if (noaaMonthlyPts.length >= 24) {
+      store.setNodeMultiScaleSeries(co2SignalUuid, "month", noaaMonthlyPts, true);
+      store.setNodeMultiScaleSeries(co2SignalUuid, "year", noaaRes.points, true);
+    }
+    if (gistempMonthlyPts.length >= 24) {
+      store.setNodeMultiScaleSeries(globalSignalUuid, "month", gistempMonthlyPts, true);
+      store.setNodeMultiScaleSeries(globalSignalUuid, "year", gistempFull.globalSeries, true);
+    }
     store.createNode({
       uuid: co2InsightUuid,
       label: "Insight",
@@ -624,6 +653,10 @@ export async function discoverGlobalEarthTrends(
       });
     }
     store.evaluateCorroboration(co2InsightUuid, false);
+    if (gistempMonthlyPts.length >= 24) {
+      store.setNodeMultiScaleSeries(co2InsightUuid, "month", gistempMonthlyPts, true);
+      store.setNodeMultiScaleSeries(co2InsightUuid, "year", gistempFull.globalSeries, true);
+    }
   }
 
   for (const zone of gistempFull.zones) {
@@ -733,6 +766,18 @@ export async function discoverGlobalEarthTrends(
         series: arcticEarlyZone.points,
         observed_at: "2010-12-01T00:00:00.000Z",
         created_at: "2010-12-01T00:00:00.000Z",
+        dossier: sanitizeResearchDossier({
+          abstract: `Historical 1995–2010 GISTEMP 64°N–90°N baseline recorded +${earlySummary.theilSen.slope.toFixed(4)} °C/yr warming (Mann-Kendall p=${earlySummary.mannKendall.pValue.toFixed(4)}), anchoring early ~2× polar amplification syntheses prior to post-2010 sea-ice albedo acceleration.`,
+          physical_mechanism:
+            "Initial Arctic warming driven by sea-ice-albedo and lapse-rate feedbacks over the first half of the modern satellite era, preserved here as an explicit epistemic baseline superseded by the full 31-year GISTEMP + NSIDC record.",
+          empirical_findings: [
+            `1995–2010 GISTEMP 64°N–90°N baseline slope: ${formatSlope(earlySummary.theilSen.slope, "°C/yr")} (MK p=${earlySummary.mannKendall.pValue.toFixed(4)}).`,
+            "Preserved under epistemic belief revision (`supersedes` edge) to quantify how extending observations through 2025 raised amplification toward ~3–4× global mean.",
+          ],
+          citations: [VERIFIED_CITATIONS.ipccAr6Wg1, VERIFIED_CITATIONS.rantanen2022Arctic],
+          researched_by: "nasa_pipeline",
+          updated_at: "2010-12-01T00:00:00.000Z",
+        }),
       },
     });
     insightsCreated++;
@@ -2442,6 +2487,32 @@ export async function discoverGlobalEarthTrends(
     return valid;
   };
 
+  const confounderPool: Array<{
+    nodeUuid: string;
+    label: string;
+    annual: TimeSeriesPoint[];
+    monthly: TimeSeriesPoint[];
+  }> = [
+    {
+      nodeUuid: "signal-gistemp-global",
+      label: "Global Mean (GISTEMP)",
+      annual: gistempFull.globalSeries,
+      monthly:
+        gistempMonthlyPts.length >= 24
+          ? deseasonalizeMonthlySeries(gistempMonthlyPts, [1995, 2020])
+          : [],
+    },
+    ...knmiBundles.map((b) => ({
+      nodeUuid: `signal-${b.id}`,
+      label: b.annual.parameter,
+      annual: b.annual.points,
+      monthly:
+        b.monthly.points.length >= 24
+          ? deseasonalizeMonthlySeries(b.monthly.points, [1995, 2020])
+          : [],
+    })),
+  ];
+
   const compareCandidatePairRigorous = (
     a: SeriesCandidate,
     b: SeriesCandidate,
@@ -2452,6 +2523,10 @@ export async function discoverGlobalEarthTrends(
     partialPValue: number;
     optimalLagPartialR: number;
     optimalLagPartialP: number;
+    multivariatePartialR: number;
+    multivariatePartialP: number;
+    optimalLagMultiPartialR: number;
+    mediatedBy?: string;
     effSeriesA: TimeSeriesPoint[];
     effSeriesB: TimeSeriesPoint[];
     usedMonthly: boolean;
@@ -2489,13 +2564,72 @@ export async function discoverGlobalEarthTrends(
       }
     }
 
+    const activeLagCap = usedMonthly ? 12 : maxAnnualLag;
     const partial = computePartialDetrendedCorrelation(
       effSeriesA,
       effSeriesB,
       gistempFull.globalSeries,
-      { maxLag: usedMonthly ? 12 : maxAnnualLag }
+      { maxLag: activeLagCap }
     );
     comp.partialR = partial.partialR;
+
+    const activeConfounders = confounderPool
+      .filter((c) => c.nodeUuid !== a.nodeUuid && c.nodeUuid !== b.nodeUuid)
+      .map((c) => ({
+        ...c,
+        series: usedMonthly && c.monthly.length >= 24 ? c.monthly : c.annual,
+      }))
+      .filter((c) => c.series.length >= 8);
+
+    const multiPartial = computeMultivariatePartialDetrendedCorrelation(
+      effSeriesA,
+      effSeriesB,
+      activeConfounders.map((c) => c.series),
+      { maxLag: activeLagCap }
+    );
+
+    const multivariatePartialR =
+      multiPartial.effectiveN >= 8 ? multiPartial.partialR : partial.partialR;
+    const multivariatePartialP =
+      multiPartial.effectiveN >= 8 ? multiPartial.partialPValue : partial.partialPValue;
+    const optimalLagMultiPartialR =
+      multiPartial.effectiveN >= 8
+        ? multiPartial.optimalLagPartialR
+        : partial.optimalLagPartialR;
+
+    let mediatedBy: string | undefined;
+    const isKnmiPair =
+      a.nodeUuid.startsWith("signal-knmi-") || b.nodeUuid.startsWith("signal-knmi-");
+    const hasSignificantLaggedSurvival =
+      Math.abs(comp.optimalLagSteps) > 0 &&
+      Math.abs(optimalLagMultiPartialR) >= 0.25 &&
+      multiPartial.optimalLagPValue < 0.05;
+    if (
+      !isKnmiPair &&
+      Math.abs(comp.detrendedR) >= 0.25 &&
+      Math.abs(partial.partialR) >= 0.18 &&
+      multiPartial.effectiveN >= 8 &&
+      Math.abs(multivariatePartialR) < 0.12 &&
+      multivariatePartialP > 0.15 &&
+      !hasSignificantLaggedSurvival
+    ) {
+      let bestMediatorLabel: string | undefined;
+      let lowestAbsR = Math.abs(comp.detrendedR);
+      for (const conf of activeConfounders) {
+        if (!conf.nodeUuid.startsWith("signal-knmi-")) continue;
+        const singleCheck = computePartialDetrendedCorrelation(
+          effSeriesA,
+          effSeriesB,
+          conf.series,
+          { maxLag: activeLagCap }
+        );
+        if (singleCheck.effectiveN >= 8 && Math.abs(singleCheck.partialR) < lowestAbsR) {
+          lowestAbsR = Math.abs(singleCheck.partialR);
+          bestMediatorLabel = conf.label;
+        }
+      }
+      mediatedBy = bestMediatorLabel ?? "Planetary Climate Modes + Global Mean";
+    }
 
     return {
       comp,
@@ -2503,6 +2637,10 @@ export async function discoverGlobalEarthTrends(
       partialPValue: partial.partialPValue,
       optimalLagPartialR: partial.optimalLagPartialR,
       optimalLagPartialP: partial.optimalLagPValue,
+      multivariatePartialR,
+      multivariatePartialP,
+      optimalLagMultiPartialR,
+      mediatedBy,
       effSeriesA,
       effSeriesB,
       usedMonthly,
@@ -2516,6 +2654,7 @@ export async function discoverGlobalEarthTrends(
     target: SeriesCandidate;
     comp: CrossRegionComparison;
     partialR: number;
+    multivariatePartialR: number;
     effSeriesA: TimeSeriesPoint[];
     effSeriesB: TimeSeriesPoint[];
     bestR: number;
@@ -2566,6 +2705,7 @@ export async function discoverGlobalEarthTrends(
           target,
           comp: cmp,
           partialR: rig.partialR,
+          multivariatePartialR: rig.multivariatePartialR,
           effSeriesA: rig.effSeriesA,
           effSeriesB: rig.effSeriesB,
           bestR,
@@ -2582,7 +2722,7 @@ export async function discoverGlobalEarthTrends(
       fdrQ: knmiQs[idx] ?? 1,
       score:
         0.45 * Math.abs(item.comp.detrendedR) +
-        0.35 * Math.abs(item.partialR) +
+        0.35 * Math.abs(item.multivariatePartialR) +
         0.2 * Math.abs(item.bestR),
     }))
     .filter((item) => item.fdrQ < 0.1)
@@ -2613,17 +2753,20 @@ export async function discoverGlobalEarthTrends(
       flipForLag ? item.effSeriesA : item.effSeriesB,
       directedLag
     );
+    const canWireKnmiOpposite =
+      canBeOpposite && (skill.nEvaluated < 6 || skill.skillLiftPct >= 0);
 
     store.createEdge({
       uuid: `edge-knmi-${crypto.createHash("sha1").update(`${item.knmiItem.uuid}:${item.target.nodeUuid}`).digest("hex").slice(0, 9)}`,
       source_uuid: sourceUuid,
       target_uuid: targetUuid,
-      type: canBeOpposite ? "drives_opposite" : "teleconnects",
+      type: canWireKnmiOpposite ? "drives_opposite" : "teleconnects",
       correlation_r: cmp.pearsonR,
       detrended_r: cmp.detrendedR,
       p_value: item.bestP,
       fdr_q_value: item.fdrQ,
       partial_r: item.partialR,
+      multivariate_partial_r: item.multivariatePartialR,
       predictive_lift_pct: skill.nEvaluated > 0 ? skill.skillLiftPct : undefined,
       optimal_lag_steps: directedLag,
       lag_unit: cmp.lagUnit,
@@ -2631,16 +2774,16 @@ export async function discoverGlobalEarthTrends(
       amplification_ratio: ampRatio,
       shared_shift_year: cmp.sharedRegimeShiftYear ?? undefined,
       cross_scale: true,
-      source_snippet: `${item.knmiItem.rec.parameter} teleconnection r=${cmp.pearsonR.toFixed(2)} (r*=${cmp.detrendedR.toFixed(2)}, partial=${item.partialR.toFixed(2)})`,
-      rationale: `KNMI ${item.knmiItem.rec.parameter} exhibits a statistically validated remote coupling with ${item.target.name} (${cmp.mechanism}: r=${cmp.pearsonR.toFixed(2)}, detrended r*=${cmp.detrendedR.toFixed(2)}, partial r=${item.partialR.toFixed(2)}, FDR q=${item.fdrQ.toExponential(1)}, Δt=${directedLag} ${cmp.lagUnit}, p=${item.bestP.toFixed(4)}).`,
+      source_snippet: `${item.knmiItem.rec.parameter} teleconnection r=${cmp.pearsonR.toFixed(2)} (r*=${cmp.detrendedR.toFixed(2)}, mv_partial=${item.multivariatePartialR.toFixed(2)})`,
+      rationale: `KNMI ${item.knmiItem.rec.parameter} exhibits a statistically validated remote coupling with ${item.target.name} (${cmp.mechanism}: r=${cmp.pearsonR.toFixed(2)}, detrended r*=${cmp.detrendedR.toFixed(2)}, partial r=${item.partialR.toFixed(2)}, mv_partial=${item.multivariatePartialR.toFixed(2)}, FDR q=${item.fdrQ.toExponential(1)}, Δt=${directedLag} ${cmp.lagUnit}, p=${item.bestP.toFixed(4)}).`,
       silent: true,
     });
     knmiWiredCount.set(item.knmiItem.uuid, count + 1);
   }
 
-  // 6. Wire data-driven cross-region Knowledge Graph connections (drives_opposite & correlates_with)
+  // 6. Wire data-driven cross-region Knowledge Graph connections (drives_opposite, leads & correlates_with)
   // Apply Benjamini-Hochberg FDR multiple-testing correction, Bretherton N_eff, Šidák lag adjustment,
-  // deseasonalized monthly anomalies where available, and partial correlation controlling for GISTEMP global warming.
+  // deseasonalized monthly anomalies where available, and multivariate partial correlation controlling for GISTEMP + planetary modes.
   const testedPairs: Array<{
     a: SeriesCandidate;
     b: SeriesCandidate;
@@ -2648,6 +2791,10 @@ export async function discoverGlobalEarthTrends(
     partialR: number;
     partialPValue: number;
     optimalLagPartialR: number;
+    multivariatePartialR: number;
+    multivariatePartialP: number;
+    optimalLagMultiPartialR: number;
+    mediatedBy?: string;
     effSeriesA: TimeSeriesPoint[];
     effSeriesB: TimeSeriesPoint[];
     couplingP: number;
@@ -2688,6 +2835,10 @@ export async function discoverGlobalEarthTrends(
         partialR: rig.partialR,
         partialPValue: rig.partialPValue,
         optimalLagPartialR: rig.optimalLagPartialR,
+        multivariatePartialR: rig.multivariatePartialR,
+        multivariatePartialP: rig.multivariatePartialP,
+        optimalLagMultiPartialR: rig.optimalLagMultiPartialR,
+        mediatedBy: rig.mediatedBy,
         effSeriesA: rig.effSeriesA,
         effSeriesB: rig.effSeriesB,
         couplingP,
@@ -2704,6 +2855,7 @@ export async function discoverGlobalEarthTrends(
     b: SeriesCandidate;
     comp: CrossRegionComparison;
     partialR: number;
+    multivariatePartialR: number;
     effSeriesA: TimeSeriesPoint[];
     effSeriesB: TimeSeriesPoint[];
     fdrQ: number;
@@ -2716,6 +2868,7 @@ export async function discoverGlobalEarthTrends(
     b: SeriesCandidate;
     comp: CrossRegionComparison;
     partialR: number;
+    multivariatePartialR: number;
     effSeriesA: TimeSeriesPoint[];
     effSeriesB: TimeSeriesPoint[];
     fdrQ: number;
@@ -2723,10 +2876,28 @@ export async function discoverGlobalEarthTrends(
     score: number;
   }> = [];
 
+  let confoundedPairsPruned = 0;
+
   testedPairs.forEach((pair, idx) => {
-    const { a, b, comp, partialR, optimalLagPartialR } = pair;
+    const {
+      a,
+      b,
+      comp,
+      partialR,
+      optimalLagPartialR,
+      multivariatePartialR,
+      optimalLagMultiPartialR,
+      mediatedBy,
+    } = pair;
     const fdrQ = couplingQs[idx] ?? 1;
     comp.fdrQValue = fdrQ;
+    if (mediatedBy) {
+      if (!comp.isSecularDriftOnly && fdrQ < 0.05) {
+        confoundedPairsPruned++;
+      }
+      return;
+    }
+
     const slopeA = a.summary.theilSen.slope;
     const slopeB = b.summary.theilSen.slope;
     const atLeastOneSignificant =
@@ -2734,16 +2905,17 @@ export async function discoverGlobalEarthTrends(
       (b.summary.mannKendall.significant && b.summary.mannKendall.significantAdjusted);
     const physicalStrength = Math.max(
       Math.abs(comp.detrendedR),
-      Math.abs(partialR),
+      Math.abs(multivariatePartialR),
       Math.abs(comp.optimalLagR)
     );
-    const zeroLagOpposite = comp.detrendedR <= -0.2 && partialR <= -0.18;
+    const zeroLagOpposite =
+      comp.detrendedR <= -0.2 && partialR <= -0.18 && multivariatePartialR <= -0.12;
     const laggedOpposite =
       Math.abs(comp.optimalLagSteps) > 0 &&
       comp.optimalLagR <= -0.45 &&
       comp.optimalLagPValue < 0.03 &&
       comp.detrendedR < 0 &&
-      (partialR <= -0.1 || optimalLagPartialR <= -0.2);
+      (partialR <= -0.1 || optimalLagPartialR <= -0.2 || optimalLagMultiPartialR <= -0.18);
 
     if (
       !comp.isSecularDriftOnly &&
@@ -2757,13 +2929,14 @@ export async function discoverGlobalEarthTrends(
         b,
         comp,
         partialR,
+        multivariatePartialR,
         effSeriesA: pair.effSeriesA,
         effSeriesB: pair.effSeriesB,
         fdrQ,
         pVal: pair.couplingP,
         score:
           0.4 * physicalStrength +
-          0.35 * Math.abs(partialR) +
+          0.35 * Math.abs(multivariatePartialR) +
           0.25 * Math.abs(comp.pearsonR) +
           (atLeastOneSignificant ? 0.2 : 0),
       });
@@ -2773,6 +2946,7 @@ export async function discoverGlobalEarthTrends(
       slopeA * slopeB > 0 &&
       comp.detrendedR >= 0.25 &&
       partialR >= 0.2 &&
+      multivariatePartialR >= 0.14 &&
       Math.max(comp.pearsonR, comp.optimalLagR) >= 0.72
     ) {
       coTrendCandidates.push({
@@ -2780,18 +2954,23 @@ export async function discoverGlobalEarthTrends(
         b,
         comp,
         partialR,
+        multivariatePartialR,
         effSeriesA: pair.effSeriesA,
         effSeriesB: pair.effSeriesB,
         fdrQ,
         pVal: pair.couplingP,
-        score: 0.45 * physicalStrength + 0.35 * Math.abs(partialR) + 0.2 * Math.abs(comp.pearsonR),
+        score:
+          0.45 * physicalStrength +
+          0.35 * Math.abs(multivariatePartialR) +
+          0.2 * Math.abs(comp.pearsonR),
       });
     }
   });
 
-  // Strict fallback only if zero pairs survived primary gate across small batches (never allow positive detrendedR)
+  // Strict fallback only if zero pairs survived primary gate across small batches (never allow confounded or positive detrendedR)
   if (oppositeCandidates.length === 0) {
     testedPairs.forEach((pair, idx) => {
+      if (pair.mediatedBy) return;
       const rawQ = rawQs[idx] ?? 1;
       if (
         !pair.comp.isSecularDriftOnly &&
@@ -2800,7 +2979,8 @@ export async function discoverGlobalEarthTrends(
         pair.a.summary.theilSen.slope * pair.b.summary.theilSen.slope < 0 &&
         pair.comp.pearsonR <= -0.45 &&
         pair.comp.detrendedR <= -0.2 &&
-        pair.partialR <= -0.15
+        pair.partialR <= -0.15 &&
+        pair.multivariatePartialR <= -0.12
       ) {
         pair.comp.fdrQValue = rawQ;
         oppositeCandidates.push({
@@ -2808,11 +2988,12 @@ export async function discoverGlobalEarthTrends(
           b: pair.b,
           comp: pair.comp,
           partialR: pair.partialR,
+          multivariatePartialR: pair.multivariatePartialR,
           effSeriesA: pair.effSeriesA,
           effSeriesB: pair.effSeriesB,
           fdrQ: rawQ,
           pVal: pair.rawP,
-          score: Math.abs(pair.comp.pearsonR) * 0.5 + Math.abs(pair.partialR) * 0.5,
+          score: Math.abs(pair.comp.pearsonR) * 0.5 + Math.abs(pair.multivariatePartialR) * 0.5,
         });
       }
     });
@@ -2823,62 +3004,80 @@ export async function discoverGlobalEarthTrends(
 
   const oppDegree = new Map<string, number>();
   let oppositeDipolesWired = 0;
+  let coTrendingTeleconnectionsWired = 0;
   for (const cand of oppositeCandidates) {
     if (oppositeDipolesWired >= 8) break;
     const degA = oppDegree.get(cand.a.nodeUuid) ?? 0;
     const degB = oppDegree.get(cand.b.nodeUuid) ?? 0;
     if (degA >= 3 || degB >= 3) continue;
 
-    // Orient source from lead-lag driver when significant, otherwise stronger positive/magnitude slope
+    // Orient source from lead-lag driver when significant, otherwise check OOS skill orientation
     const lagLedByB =
       cand.comp.optimalLagSteps < 0 && Math.abs(cand.comp.optimalLagR) >= 0.45;
     const lagLedByA =
       cand.comp.optimalLagSteps > 0 && Math.abs(cand.comp.optimalLagR) >= 0.45;
-    const aLeads = lagLedByA
+    let aLeads = lagLedByA
       ? true
       : lagLedByB
         ? false
         : cand.a.summary.theilSen.slope >= cand.b.summary.theilSen.slope;
-    const [src, tgt] = aLeads ? [cand.a, cand.b] : [cand.b, cand.a];
-    const [effSrc, effTgt] = aLeads
+    let [src, tgt] = aLeads ? [cand.a, cand.b] : [cand.b, cand.a];
+    let [effSrc, effTgt] = aLeads
       ? [cand.effSeriesA, cand.effSeriesB]
       : [cand.effSeriesB, cand.effSeriesA];
-    const directedLag = aLeads ? cand.comp.optimalLagSteps : -cand.comp.optimalLagSteps;
+    let directedLag = aLeads ? cand.comp.optimalLagSteps : -cand.comp.optimalLagSteps;
+    let skill = computePairwisePredictiveSkillLift(effSrc, effTgt, Math.max(0, directedLag));
+
+    if (!lagLedByA && !lagLedByB && skill.nEvaluated >= 6 && skill.skillLiftPct < 0) {
+      const revSkill = computePairwisePredictiveSkillLift(effTgt, effSrc, 0);
+      if (revSkill.nEvaluated >= 6 && revSkill.skillLiftPct >= 0) {
+        aLeads = !aLeads;
+        [src, tgt] = [tgt, src];
+        [effSrc, effTgt] = [effTgt, effSrc];
+        skill = revSkill;
+      }
+    }
+
     const ampRatio = aLeads
       ? cand.comp.slopeRatio
       : Math.abs(cand.comp.slopeRatio) > 1e-9
         ? 1 / cand.comp.slopeRatio
         : 0;
-    const skill = computePairwisePredictiveSkillLift(effSrc, effTgt, Math.max(0, directedLag));
+    const hasPositiveOosSkill = skill.nEvaluated < 6 || skill.skillLiftPct >= 0;
+    const edgeType = hasPositiveOosSkill ? "drives_opposite" : "correlates_with";
 
     const edgeUuid = `edge-opp-${crypto.createHash("sha1").update(`${src.nodeUuid}:${tgt.nodeUuid}`).digest("hex").slice(0, 10)}`;
     store.createEdge({
       uuid: edgeUuid,
       source_uuid: src.nodeUuid,
       target_uuid: tgt.nodeUuid,
-      type: "drives_opposite",
+      type: edgeType,
       correlation_r: cand.comp.pearsonR,
       detrended_r: cand.comp.detrendedR,
       p_value: cand.pVal,
       fdr_q_value: cand.fdrQ,
       partial_r: cand.partialR,
+      multivariate_partial_r: cand.multivariatePartialR,
       predictive_lift_pct: skill.nEvaluated > 0 ? skill.skillLiftPct : undefined,
       optimal_lag_steps: directedLag,
       lag_unit: cand.comp.lagUnit,
       mechanism: cand.comp.mechanism,
       amplification_ratio: ampRatio,
       shared_shift_year: cand.comp.sharedRegimeShiftYear ?? undefined,
-      source_snippet: `Empirical r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} · partial=${cand.partialR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
-      rationale: `${src.name} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) diverges from ${tgt.name} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) via ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, detrended r*=${cand.comp.detrendedR.toFixed(2)}, partial r=${cand.partialR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}, OOS skill ${skill.skillLiftPct >= 0 ? "+" : ""}${skill.skillLiftPct.toFixed(1)}%, Δt=${directedLag} ${cand.comp.lagUnit}).`,
+      source_snippet: `Empirical r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} · mv_partial=${cand.multivariatePartialR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
+      rationale: `${src.name} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) diverges from ${tgt.name} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) via ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, detrended r*=${cand.comp.detrendedR.toFixed(2)}, mv_partial=${cand.multivariatePartialR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}, OOS skill ${skill.skillLiftPct >= 0 ? "+" : ""}${skill.skillLiftPct.toFixed(1)}%, Δt=${directedLag} ${cand.comp.lagUnit})${hasPositiveOosSkill ? "" : " [demoted from drives_opposite to correlates_with due to negative OOS predictive lift]"}.`,
       silent: true,
     });
     oppDegree.set(src.nodeUuid, (oppDegree.get(src.nodeUuid) ?? 0) + 1);
     oppDegree.set(tgt.nodeUuid, (oppDegree.get(tgt.nodeUuid) ?? 0) + 1);
-    oppositeDipolesWired++;
+    if (hasPositiveOosSkill) {
+      oppositeDipolesWired++;
+    } else {
+      coTrendingTeleconnectionsWired++;
+    }
   }
 
   const coDegree = new Map<string, number>();
-  let coTrendingTeleconnectionsWired = 0;
   for (const cand of coTrendCandidates) {
     if (coTrendingTeleconnectionsWired >= 10) break;
     const degA = coDegree.get(cand.a.nodeUuid) ?? 0;
@@ -2898,26 +3097,32 @@ export async function discoverGlobalEarthTrends(
         : 0
       : cand.comp.slopeRatio;
     const skill = computePairwisePredictiveSkillLift(effSrc, effTgt, Math.max(0, directedLag));
+    const isCausalLead =
+      directedLag >= 1 &&
+      Math.abs(cand.comp.optimalLagR) >= 0.45 &&
+      skill.nEvaluated >= 6 &&
+      skill.skillLiftPct > 0;
 
     const edgeUuid = `edge-corr-${crypto.createHash("sha1").update(`${src.nodeUuid}:${tgt.nodeUuid}`).digest("hex").slice(0, 10)}`;
     store.createEdge({
       uuid: edgeUuid,
       source_uuid: src.nodeUuid,
       target_uuid: tgt.nodeUuid,
-      type: "correlates_with",
+      type: isCausalLead ? "leads" : "correlates_with",
       correlation_r: cand.comp.pearsonR,
       detrended_r: cand.comp.detrendedR,
       p_value: cand.pVal,
       fdr_q_value: cand.fdrQ,
       partial_r: cand.partialR,
+      multivariate_partial_r: cand.multivariatePartialR,
       predictive_lift_pct: skill.nEvaluated > 0 ? skill.skillLiftPct : undefined,
       optimal_lag_steps: directedLag,
       lag_unit: cand.comp.lagUnit,
       mechanism: cand.comp.mechanism,
       amplification_ratio: ampRatio,
       shared_shift_year: cand.comp.sharedRegimeShiftYear ?? undefined,
-      source_snippet: `Co-trending r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} · partial=${cand.partialR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
-      rationale: `Synchronized shift between ${src.region} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) and ${tgt.region} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) — ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, r*=${cand.comp.detrendedR.toFixed(2)}, partial r=${cand.partialR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}).`,
+      source_snippet: `${isCausalLead ? "Predictive lead" : "Co-trending"} r=${cand.comp.pearsonR.toFixed(2)} · r*=${cand.comp.detrendedR.toFixed(2)} · mv_partial=${cand.multivariatePartialR.toFixed(2)} (FDR q=${cand.fdrQ.toExponential(1)})`,
+      rationale: `Synchronized shift between ${src.region} (${formatSlope(src.summary.theilSen.slope, src.summary.slopeUnit)}) and ${tgt.region} (${formatSlope(tgt.summary.theilSen.slope, tgt.summary.slopeUnit)}) — ${cand.comp.mechanism} (r=${cand.comp.pearsonR.toFixed(2)}, r*=${cand.comp.detrendedR.toFixed(2)}, mv_partial=${cand.multivariatePartialR.toFixed(2)}, FDR q=${cand.fdrQ.toExponential(1)}, OOS skill ${skill.skillLiftPct >= 0 ? "+" : ""}${skill.skillLiftPct.toFixed(1)}%, Δt=${directedLag} ${cand.comp.lagUnit}).`,
       silent: true,
     });
     coDegree.set(src.nodeUuid, degA + 1);
@@ -2993,6 +3198,10 @@ export async function discoverGlobalEarthTrends(
     if (store.getNode(priorUuid)) continue;
 
     const unitLabel = insight.properties.slope_unit || "unit/yr";
+    const parentCitations =
+      insight.properties.dossier?.citations && insight.properties.dossier.citations.length > 0
+        ? insight.properties.dossier.citations.slice(0, 3)
+        : [VERIFIED_CITATIONS.ipccAr6Wg1];
     store.createNode({
       uuid: priorUuid,
       label: "Insight",
@@ -3018,6 +3227,17 @@ export async function discoverGlobalEarthTrends(
         series: preSeries,
         observed_at: insight.properties.observed_at,
         created_at: now,
+        dossier: sanitizeResearchDossier({
+          abstract: `Archived pre-${cp.date} epistemic baseline for ${insight.properties.name}. Across ${preSeries[0]?.date}–${cp.date}, Theil-Sen slope measured ${formatSlope(preStats.theilSen.slope, unitLabel)} before the empirical Pettitt structural break (K=${cp.kStat.toFixed(0)}, p=${cp.pValue.toFixed(4)}) shifted the subsequent trajectory to ${formatSlope(postStats.theilSen.slope, unitLabel)}.`,
+          physical_mechanism: `Represents the earlier stationary/baseline regime prior to the empirical ${cp.date} change point detected by the Pettitt rank test, linked via a \`supersedes\` edge to preserve epistemic belief lineage.`,
+          empirical_findings: [
+            `Pre-break baseline (${preSeries[0]?.date}–${cp.date}): Theil-Sen slope ${formatSlope(preStats.theilSen.slope, unitLabel)}, MK p=${preStats.mannKendall.pValue.toFixed(4)}.`,
+            `Post-break regime (${cp.date}–${postSeries[postSeries.length - 1]?.date}): Theil-Sen slope ${formatSlope(postStats.theilSen.slope, unitLabel)}, Pettitt p=${cp.pValue.toFixed(4)}.`,
+          ],
+          citations: parentCitations,
+          researched_by: "nasa_pipeline",
+          updated_at: now,
+        }),
       },
     });
     store.createEdge({
@@ -3143,18 +3363,20 @@ export async function discoverGlobalEarthTrends(
     }
   }
 
-  // 9. Optional Live Scholarly Literature Verification & Citation Enrichment (Crossref + Europe PMC + key-gated OpenAlex)
+  // 9. Claim-to-Abstract Stance Scoring + Optional Live Scholarly Literature Verification & Citation Enrichment
   let verifiedLiteratureCitations = 0;
-  if (options?.enrichLiterature) {
-    const dossierNodes = store
-      .getSnapshot()
-      .nodes.filter((n) => Boolean(n.properties.dossier));
+  const dossierNodes = store
+    .getSnapshot()
+    .nodes.filter((n) => Boolean(n.properties.dossier));
 
+  if (options?.enrichLiterature) {
     await runWithConcurrency(dossierNodes, 3, async (node) => {
       const existingDossier = node.properties.dossier!;
+      const claimContext = buildNodeClaimStanceContext(node);
       const query = buildNodeLiteratureQuery(node);
       const liveHits = await searchPeerReviewedEarthLiterature(query, 3, {
         timeoutMs: 4500,
+        claimContext,
       });
 
       const merged = [...existingDossier.citations];
@@ -3173,6 +3395,7 @@ export async function discoverGlobalEarthTrends(
       const { verified } = await verifyAndFilterCitations(merged, {
         timeoutMs: 4500,
         strictDropUnverifiedNonAgency: false,
+        claimContext,
       });
       const finalCitations = (verified.length > 0 ? verified : merged).slice(0, 8);
       for (const c of finalCitations) {
@@ -3188,23 +3411,109 @@ export async function discoverGlobalEarthTrends(
         store.updateNode(node.uuid, { dossier: sanitized }, true);
       }
     });
+  } else {
+    for (const node of dossierNodes) {
+      const existingDossier = node.properties.dossier!;
+      const claimContext = buildNodeClaimStanceContext(node);
+      const scoredCitations = existingDossier.citations.map((c) =>
+        evaluateCitationClaimStance(c, claimContext)
+      );
+      const sanitized = sanitizeResearchDossier({
+        ...existingDossier,
+        citations: scoredCitations,
+      });
+      if (sanitized) {
+        store.updateNode(node.uuid, { dossier: sanitized }, true);
+      }
+    }
   }
 
+  // 10. Seed Rolling Out-of-Sample Multi-Scale Backtest & Live Prospective Forecasts + Reconcile Against Ground Truth
+  let prospectiveForecastsLogged = 0;
+  let prospectiveForecastsScored = 0;
+  if (
+    gistempFull.provenanceMode !== "climatological_fallback" &&
+    seriesCandidates.length >= 4
+  ) {
+    const monthlyTargets = [
+      "signal-gistemp-global",
+      "signal-noaa-global-co2",
+      "signal-knmi-nino34",
+      "signal-knmi-amo",
+    ];
+    for (const targetUuid of monthlyTargets) {
+      const mSeries = store.getNodeMultiScaleSeries(targetUuid, "month");
+      if (!mSeries || mSeries.length < 36) continue;
+      for (const cutoffIndex of [mSeries.length - 2, mSeries.length - 1, mSeries.length]) {
+        try {
+          const pred = predictFromGraph(store, {
+            targetUuid,
+            preferredBucket: "month",
+            horizonSteps: 1,
+            ...(cutoffIndex < mSeries.length ? { cutoffIndex } : {}),
+          });
+          store.logProspectiveForecast(pred);
+          prospectiveForecastsLogged++;
+        } catch {
+          // Non-fatal if insufficient neighbors or bucket points
+        }
+      }
+    }
+
+    const annualTargets = ["signal-gistemp-global", "insight-arctic-amplification"];
+    for (const targetUuid of annualTargets) {
+      const aSeries = store.getNodeSeries(targetUuid);
+      if (!aSeries || aSeries.length < 16) continue;
+      for (const cutoffIndex of [aSeries.length - 1, aSeries.length]) {
+        try {
+          const pred = predictFromGraph(store, {
+            targetUuid,
+            preferredBucket: "year",
+            horizonSteps: 1,
+            ...(cutoffIndex < aSeries.length ? { cutoffIndex } : {}),
+          });
+          store.logProspectiveForecast(pred);
+          prospectiveForecastsLogged++;
+        } catch {
+          // Non-fatal on sparse fixtures
+        }
+      }
+    }
+
+    const recon = store.reconcileProspectiveForecasts();
+    prospectiveForecastsScored = recon.ledger.summary.scored_count;
+  }
+
+  const spatialMoransI = computeSpatialMoransI(
+    seriesCandidates.map((c) => ({
+      lat: c.lat,
+      lng: c.lng,
+      value: c.summary.theilSen.slope,
+    }))
+  );
+
   const snapshotBeforeSummary = store.getSnapshot();
+  let monthlySeriesPersisted = 0;
+  for (const node of snapshotBeforeSummary.nodes) {
+    const ms = store.getNodeMultiScaleSeries(node.uuid, "month");
+    if (ms && ms.length >= 12) {
+      monthlySeriesPersisted++;
+    }
+  }
   const corroboratedInsights = snapshotBeforeSummary.stats.corroboratedTrends;
 
   const summary: GlobalDiscoverySummary = {
     sourcesQueried: [
-      "NASA GISS GISTEMP v4 Zonal (1995–2025)",
-      "NOAA GML Global Marine CO₂ (1995–2025)",
+      "NASA GISS GISTEMP v4 Zonal & Monthly Global Mean (1995–2026)",
+      "NOAA GML Global Marine & Mauna Loa Monthly CO₂ (1995–2026)",
       "NOAA/NSIDC Sea Ice Index v4.0 (1995–2025)",
       "NOAA NCEI Climate Data Online CDO GSOY Stations",
-      "KNMI Climate Explorer (ENSO Niño 3.4, AMO, PDO, NAO)",
+      "NOAA PSL / NCEI / KNMI Climate Explorer (Niño 3.4, AMO, PDO, NAO)",
       "CSA RADARSAT RCM, SWOT RiverSP & Geo.ca Hydrometric / AHCCD",
       "USGS / NASA NTRS SeaWiFS Coastal Plume & LP DAAC AppEEARS",
       "NASA EONET v3 Live Multi-Category Orbital Events",
       "NASA POWER MERRA-2 31-Year Coordinate Reanalysis (1995–2025)",
-      ...(options?.enrichLiterature ? ["Crossref & Europe PMC Live DOI Verification"] : []),
+      ...(options?.enrichLiterature ? ["Crossref & Europe PMC Live DOI + Abstract Stance"] : []),
     ],
     gistempZonesIngested: gistempFull.zones.length,
     eonetEventsIngested: eonetSignals.length,
@@ -3219,12 +3528,17 @@ export async function discoverGlobalEarthTrends(
     oppositeDipolesWired,
     coTrendingTeleconnectionsWired,
     contradictingEdgesWired,
+    confoundedPairsPruned,
+    monthlySeriesPersisted,
+    prospectiveForecastsLogged,
+    prospectiveForecastsScored,
+    spatialMoransI,
     ...(options?.enrichLiterature ? { verifiedLiteratureCitations } : {}),
   };
 
   const finalSnapshot = store.recordActivity({
     kind: "discovery",
-    summary: `Live multi-agency discovery wired ${snapshotBeforeSummary.stats.totalNodes} nodes & ${snapshotBeforeSummary.stats.totalEdges} edges (${noaaCdoRecords.length} NOAA CDO, ${knmiRecords.length} KNMI modes, ${geocaRecords.length} CSA/Geo.ca series, ${swotGranulesLinked} SWOT passes, ${contradictingEdgesWired} contradicting divergence edges).`,
+    summary: `Live multi-agency discovery wired ${snapshotBeforeSummary.stats.totalNodes} nodes & ${snapshotBeforeSummary.stats.totalEdges} edges (${noaaCdoRecords.length} NOAA CDO, ${knmiRecords.length} KNMI/PSL modes, ${monthlySeriesPersisted} monthly series, ${confoundedPairsPruned} confounded pruned, Moran I=${spatialMoransI.moransI.toFixed(2)}, ${prospectiveForecastsScored}/${prospectiveForecastsLogged} forecasts scored).`,
   });
 
   return {

@@ -48,6 +48,58 @@ interface TrendBriefingsModalProps {
   onSnapshotChange: (snapshot: EtgGraphSnapshot, toast?: string) => void;
 }
 
+function formatSignedSlope(slope: number, unit?: string): string {
+  const prefix = slope > 0 ? "+" : "";
+  return `${prefix}${slope.toFixed(4)}${unit ? ` ${unit}` : ""}`;
+}
+
+function renderCitationStanceBadge(cit: ETGScientificCitation): React.ReactNode {
+  if (!cit.claim_stance) return null;
+  if (cit.claim_stance === "supports") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-xs border border-emerald-500/40 bg-emerald-950/40 px-1.5 py-0.5 font-mono text-[10px] font-medium text-emerald-300">
+        <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />
+        <span>Supports Claim</span>
+      </span>
+    );
+  }
+  if (cit.claim_stance === "challenges") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-xs border border-rose-500/40 bg-rose-950/40 px-1.5 py-0.5 font-mono text-[10px] font-medium text-rose-300">
+        <AlertTriangle className="h-2.5 w-2.5" aria-hidden="true" />
+        <span>Challenges Claim</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] font-medium text-text-muted">
+      <BookOpenText className="h-2.5 w-2.5" aria-hidden="true" />
+      <span>Contextual / Neutral</span>
+    </span>
+  );
+}
+
+function renderAbstractDisclosure(cit: ETGScientificCitation): React.ReactNode {
+  if (!cit.abstract_snippet && !cit.stance_rationale) return null;
+  return (
+    <details className="mt-1.5 rounded-xs border border-border/70 bg-surface/60 px-2 py-1">
+      <summary className="cursor-pointer select-none text-[11px] font-medium text-text-muted hover:text-text-primary">
+        {cit.abstract_snippet
+          ? "Read abstract & entailment rationale"
+          : "Entailment rationale"}
+      </summary>
+      <div className="mt-1.5 space-y-1 border-t border-border/50 pt-1.5 text-[11px] leading-relaxed text-text-muted">
+        {cit.stance_rationale && (
+          <p className="font-mono text-[10.5px] text-text-primary">
+            Stance analysis: {cit.stance_rationale}
+          </p>
+        )}
+        {cit.abstract_snippet && <p>{cit.abstract_snippet}</p>}
+      </div>
+    </details>
+  );
+}
+
 function renderInlineEvidenceText(
   text: string,
   nodeById: Map<string, ETGNode>,
@@ -871,32 +923,57 @@ export function TrendBriefingsModal({
                     <Waypoints className="h-3.5 w-3.5" aria-hidden="true" />
                     Epistemic Belief Revision Lineage
                   </div>
-                  {lineage.supersedes.map(({ node: older, rationale }) => (
-                    <div key={older.uuid} className="text-xs text-text-muted leading-relaxed">
-                      <span className="font-semibold text-text-primary">Supersedes prior conclusion: </span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveNodeUuid(older.uuid)}
-                        className="underline decoration-amber-400/60 underline-offset-2 hover:text-amber-300 cursor-pointer"
-                      >
-                        {older.properties.name}
-                      </button>
-                      {rationale ? ` — ${rationale}` : ""}
-                    </div>
-                  ))}
-                  {lineage.supersededBy.map(({ node: newer, rationale }) => (
-                    <div key={newer.uuid} className="text-xs text-text-muted leading-relaxed">
-                      <span className="font-semibold text-amber-300">Superseded by newer finding: </span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveNodeUuid(newer.uuid)}
-                        className="underline decoration-amber-400/60 underline-offset-2 hover:text-amber-200 cursor-pointer"
-                      >
-                        {newer.properties.name}
-                      </button>
-                      {rationale ? ` — ${rationale}` : ""}
-                    </div>
-                  ))}
+                  {lineage.supersedes.map(({ node: older, rationale }) => {
+                    const hasSlopeCmp =
+                      typeof older.properties.theil_sen_slope === "number" &&
+                      typeof selectedNode.properties.theil_sen_slope === "number";
+                    return (
+                      <div key={older.uuid} className="text-xs text-text-muted leading-relaxed">
+                        <span className="font-semibold text-text-primary">Supersedes prior conclusion: </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveNodeUuid(older.uuid)}
+                          className="underline decoration-amber-400/60 underline-offset-2 hover:text-amber-300 cursor-pointer"
+                        >
+                          {older.properties.name}
+                        </button>
+                        {hasSlopeCmp && (
+                          <span className="ws-numeric ml-1.5 inline-block rounded-xs border border-amber-500/30 bg-surface px-1.5 py-0.5 font-mono text-[10px] text-amber-200">
+                            Prior {formatSignedSlope(older.properties.theil_sen_slope!, older.properties.slope_unit)} → Current{" "}
+                            {formatSignedSlope(
+                              selectedNode.properties.theil_sen_slope!,
+                              selectedNode.properties.slope_unit
+                            )}
+                          </span>
+                        )}
+                        {rationale ? ` — ${rationale}` : ""}
+                      </div>
+                    );
+                  })}
+                  {lineage.supersededBy.map(({ node: newer, rationale }) => {
+                    const hasSlopeCmp =
+                      typeof newer.properties.theil_sen_slope === "number" &&
+                      typeof selectedNode.properties.theil_sen_slope === "number";
+                    return (
+                      <div key={newer.uuid} className="text-xs text-text-muted leading-relaxed">
+                        <span className="font-semibold text-amber-300">Superseded by newer finding: </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveNodeUuid(newer.uuid)}
+                          className="underline decoration-amber-400/60 underline-offset-2 hover:text-amber-200 cursor-pointer"
+                        >
+                          {newer.properties.name}
+                        </button>
+                        {hasSlopeCmp && (
+                          <span className="ws-numeric ml-1.5 inline-block rounded-xs border border-amber-500/30 bg-surface px-1.5 py-0.5 font-mono text-[10px] text-amber-200">
+                            This baseline {formatSignedSlope(selectedNode.properties.theil_sen_slope!, selectedNode.properties.slope_unit)} → Revised{" "}
+                            {formatSignedSlope(newer.properties.theil_sen_slope!, newer.properties.slope_unit)}
+                          </span>
+                        )}
+                        {rationale ? ` — ${rationale}` : ""}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -1205,6 +1282,7 @@ export function TrendBriefingsModal({
                                   {cit.title}
                                 </div>
                                 <div className="flex shrink-0 flex-wrap items-center gap-1">
+                                  {renderCitationStanceBadge(cit)}
                                   {cit.doi_verified && (
                                     <span className="inline-flex items-center gap-1 rounded-xs border border-emerald-500/40 bg-emerald-950/40 px-1.5 py-0.5 font-mono text-[10px] font-medium text-emerald-300">
                                       <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />
@@ -1240,6 +1318,7 @@ export function TrendBriefingsModal({
                                   </a>
                                 </div>
                               )}
+                              {renderAbstractDisclosure(cit)}
                             </li>
                           );
                         })}
@@ -1309,40 +1388,46 @@ export function TrendBriefingsModal({
                           return (
                             <li
                               key={`${attachKey}-${idx}`}
-                              className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-inset/40 p-2.5 text-xs sm:flex-row sm:items-center sm:justify-between"
+                              className="flex flex-col gap-1.5 rounded-md border border-border bg-surface-inset/40 p-2.5 text-xs"
                             >
-                              <div className="min-w-0 space-y-0.5">
-                                <div className="font-medium text-text-primary leading-snug">
-                                  {hit.title}
-                                </div>
-                                <div className="text-[11px] text-text-muted">
-                                  {hit.authors} ({hit.year})
-                                  {hit.journal ? ` · ${hit.journal}` : ""}
-                                  {typeof hit.citation_count === "number"
-                                    ? ` · Cited by ${hit.citation_count.toLocaleString()}`
-                                    : ""}
-                                </div>
-                                {hit.doi && (
-                                  <div className="font-mono text-[10px] text-accent-fg">
-                                    DOI: {hit.doi}
+                              <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0 space-y-0.5">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="font-medium text-text-primary leading-snug">
+                                      {hit.title}
+                                    </span>
+                                    {renderCitationStanceBadge(hit)}
                                   </div>
-                                )}
+                                  <div className="text-[11px] text-text-muted">
+                                    {hit.authors} ({hit.year})
+                                    {hit.journal ? ` · ${hit.journal}` : ""}
+                                    {typeof hit.citation_count === "number"
+                                      ? ` · Cited by ${hit.citation_count.toLocaleString()}`
+                                      : ""}
+                                  </div>
+                                  {hit.doi && (
+                                    <div className="font-mono text-[10px] text-accent-fg">
+                                      DOI: {hit.doi}
+                                    </div>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={alreadyCited || litAttachingDoi === attachKey}
+                                  onClick={() => void handleAttachLiteratureCitation(hit)}
+                                  className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-emerald-500/40 bg-emerald-950/35 px-2.5 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-950/60 disabled:opacity-50 cursor-pointer"
+                                >
+                                  <Plus className="h-3 w-3" aria-hidden="true" />
+                                  <span>
+                                    {alreadyCited
+                                      ? "Cited"
+                                      : litAttachingDoi === attachKey
+                                        ? "Verifying…"
+                                        : "+ Cite in Briefing"}
+                                  </span>
+                                </button>
                               </div>
-                              <button
-                                type="button"
-                                disabled={alreadyCited || litAttachingDoi === attachKey}
-                                onClick={() => void handleAttachLiteratureCitation(hit)}
-                                className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-emerald-500/40 bg-emerald-950/35 px-2.5 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-950/60 disabled:opacity-50 cursor-pointer"
-                              >
-                                <Plus className="h-3 w-3" aria-hidden="true" />
-                                <span>
-                                  {alreadyCited
-                                    ? "Cited"
-                                    : litAttachingDoi === attachKey
-                                      ? "Verifying…"
-                                      : "+ Cite in Briefing"}
-                                </span>
-                              </button>
+                              {renderAbstractDisclosure(hit)}
                             </li>
                           );
                         })}

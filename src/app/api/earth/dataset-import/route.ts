@@ -4,7 +4,6 @@ import { getEtgStore } from "@/lib/graph/etgStore";
 import type { ETGDatasetId } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   try {

@@ -382,7 +382,7 @@ export async function fetchKnmiClimateModeBundles(
   }
 
   const bundlesSettled = await Promise.allSettled(
-    KNMI_INDICES.map(async (spec) => {
+    KNMI_INDICES.map(async (spec): Promise<KnmiClimateModeBundle> => {
       const mirrorSettled = await Promise.allSettled(
         spec.urls.map(async (url) => {
           const res = await fetch(url, {
@@ -463,7 +463,7 @@ export async function fetchKnmiClimateModeBundles(
         id: spec.id,
         annual: { ...baseMeta, points: annualPoints },
         monthly: { ...baseMeta, points: monthlyPoints },
-      } satisfies KnmiClimateModeBundle;
+      };
     })
   );
 

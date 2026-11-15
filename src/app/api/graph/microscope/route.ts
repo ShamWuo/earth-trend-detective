@@ -4,7 +4,6 @@ import { scanTrendMicroscopeAsync } from "@/lib/graph/trendMicroscope";
 import type { ETGDatasetId } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 function parseFiniteNumber(raw: unknown): number | undefined {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;

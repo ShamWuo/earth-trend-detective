@@ -1653,8 +1653,8 @@ export function computeMultivariatePartialDetrendedCorrelation(
     if (alignedDates.length < 8) {
       useMonthly = false;
     } else {
-      alignedA = alignedDates.map((k) => monthA.get(k)!);
-      alignedB = alignedDates.map((k) => monthB.get(k)!);
+      alignedA = alignedDates.map((k) => ({ date: k, ...monthA.get(k)! }));
+      alignedB = alignedDates.map((k) => ({ date: k, ...monthB.get(k)! }));
     }
   }
 
@@ -1663,8 +1663,8 @@ export function computeMultivariatePartialDetrendedCorrelation(
     const yearB = aggregateByCalendarBucket(cleanB, "year");
     alignedDates = [...yearA.keys()].filter((k) => yearB.has(k)).sort();
     if (alignedDates.length < 8) return { ...empty, effectiveN: alignedDates.length };
-    alignedA = alignedDates.map((k) => yearA.get(k)!);
-    alignedB = alignedDates.map((k) => yearB.get(k)!);
+    alignedA = alignedDates.map((k) => ({ date: k, ...yearA.get(k)! }));
+    alignedB = alignedDates.map((k) => ({ date: k, ...yearB.get(k)! }));
   }
 
   // Select confounders with >= 75% temporal overlap over the intersection dates

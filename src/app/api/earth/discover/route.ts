@@ -4,7 +4,6 @@ import { classifyUpstreamFault, createTelemetryBudget } from "@/lib/earth/upstre
 import { getEtgStore } from "@/lib/graph/etgStore";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const budget = createTelemetryBudget(1600);

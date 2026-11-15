@@ -5,7 +5,6 @@ import { handleEtgMcpRpc } from "@/lib/mcp/tools";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 

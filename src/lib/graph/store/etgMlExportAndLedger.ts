@@ -637,8 +637,20 @@ export function logProspectiveForecastOp(
   prediction: GraphPredictionResult
 ): ProspectiveForecastRecord {
   const targetNode = ctx.nodes.get(prediction.targetUuid);
-  const series = ctx.getNodeSeries(prediction.targetUuid) ?? [];
+  const bucketSeries = ctx.getNodeMultiScaleSeries(
+    prediction.targetUuid,
+    prediction.bucket
+  );
+  const series =
+    bucketSeries && bucketSeries.length > 0
+      ? bucketSeries
+      : ctx.getNodeSeries(prediction.targetUuid) ?? [];
+  const backtestTailDate =
+    prediction.backtest && prediction.backtest.length > 0
+      ? prediction.backtest[prediction.backtest.length - 1]?.date
+      : undefined;
   const issuedFromRaw =
+    backtestTailDate ??
     series[series.length - 1]?.date ??
     targetNode?.properties.observed_at ??
     new Date().toISOString().slice(0, 10);
@@ -718,7 +730,16 @@ export function reconcileProspectiveForecastsOp(
     const series = ctx.getNodeSeries(uuid) ?? [];
     if (series.length > 0) {
       scoredNow += ctx.reconcileSeriesForTarget(uuid, series);
-    } else {
+    }
+    const multiScale = ctx.multiScaleSeriesByNode.get(uuid);
+    if (multiScale) {
+      for (const bucketSeries of Object.values(multiScale)) {
+        if (bucketSeries && bucketSeries.length > 0) {
+          scoredNow += ctx.reconcileSeriesForTarget(uuid, bucketSeries);
+        }
+      }
+    }
+    if (series.length === 0 && !multiScale) {
       const node = ctx.nodes.get(uuid);
       if (
         node &&

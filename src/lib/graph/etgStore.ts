@@ -367,6 +367,10 @@ export class EtgStore {
       };
     }
 
+    if (!this.loadingState && this.forecasts.size > 0) {
+      this.ctx.reconcileSeriesForTarget(uuid, merged);
+    }
+
     if (!silent) {
       this.persistState();
     }

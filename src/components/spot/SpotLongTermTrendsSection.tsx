@@ -600,6 +600,10 @@ export function SpotLongTermTrendsSection({
             label: "Sensor Glitch Risk",
             cls: "border-rose-400 bg-rose-950 text-rose-200",
           },
+          CONTESTED: {
+            label: "Contested",
+            cls: "border-orange-400 bg-orange-950 text-orange-200",
+          },
           NOMINAL: {
             label: "Nominal",
             cls: "border-border bg-surface text-text-muted",

@@ -223,12 +223,43 @@ export function collectCandidateNeighborsAndImpulses(args: {
     if (hits < 8 || coverage < 0.55) return;
 
     const edge = incidentEdgeByNeighbor.get(n.uuid);
+    if (edge && (edge.type === "contradicts" || edge.type === "supersedes")) {
+      return;
+    }
     const hopDecay = hop > 1 ? Math.pow(0.75, hop - 1) : 1;
-    const baseWeight =
+    const directSignal =
+      edge?.properties.multivariate_partial_r ??
+      edge?.properties.partial_r ??
+      edge?.properties.correlation_r;
+    let baseWeight =
       edge?.properties.weight ??
-      (edge?.properties.correlation_r !== undefined
-        ? Math.max(0.35, Math.min(1, Math.abs(edge.properties.correlation_r)))
+      (directSignal !== undefined
+        ? Math.max(0.35, Math.min(1, Math.abs(directSignal)))
         : 0.72);
+    if (edge?.properties.mediated_by) {
+      baseWeight *= 0.45;
+    } else if (
+      typeof (edge?.properties.multivariate_partial_r ?? edge?.properties.partial_r) === "number" &&
+      Math.abs((edge?.properties.multivariate_partial_r ?? edge?.properties.partial_r) as number) < 0.15
+    ) {
+      baseWeight *= 0.7;
+    }
+    const qVal = edge?.properties.fdr_q_value;
+    if (typeof qVal === "number" && Number.isFinite(qVal)) {
+      if (qVal <= 0.05) {
+        baseWeight *= 1.12;
+      } else if (qVal > 0.15) {
+        baseWeight *= 0.65;
+      }
+    }
+    const edgeLift = edge?.properties.predictive_lift_pct;
+    if (typeof edgeLift === "number" && Number.isFinite(edgeLift)) {
+      if (edgeLift < 0) {
+        baseWeight *= Math.max(0.35, 1 + edgeLift / 25);
+      } else if (edgeLift > 0) {
+        baseWeight *= 1 + Math.min(0.2, edgeLift / 50);
+      }
+    }
     const isCommunity = isCommunityContributorNode(n);
     const trustScore = store.computeNodeTrustScore
       ? store.computeNodeTrustScore(n)

@@ -37,24 +37,48 @@ export function predictFromGraph(
     maxHops?: number;
     horizonSteps?: number;
     candidateNeighborUuid?: string;
+    preferredBucket?: "day" | "month" | "year";
+    cutoffIndex?: number;
   }
 ): GraphPredictionResult {
   const targetNode = store.getNodeWithSeries(options.targetUuid);
   if (!targetNode) {
     throw new Error(`Target node "${options.targetUuid}" not found.`);
   }
-  const rawSeries = targetNode.series ?? store.getNodeSeries(options.targetUuid);
+  const preferredSeries =
+    options.preferredBucket && store.getNodeMultiScaleSeries
+      ? store.getNodeMultiScaleSeries(options.targetUuid, options.preferredBucket)
+      : undefined;
+  const rawSeries =
+    preferredSeries && preferredSeries.length >= 8
+      ? preferredSeries
+      : targetNode.series ?? store.getNodeSeries(options.targetUuid);
   if (!rawSeries || rawSeries.length < 8) {
     throw new Error(
       `Need at least 8 time-series observations on "${targetNode.properties.name}" to run graph prediction.`
     );
   }
 
-  const bucket = inferSeriesBucket(rawSeries);
+  const nativeBucket = inferSeriesBucket(rawSeries);
+  const bucket: "day" | "month" | "year" =
+    options.preferredBucket &&
+    (options.preferredBucket === nativeBucket ||
+      (nativeBucket === "day" &&
+        (options.preferredBucket === "month" || options.preferredBucket === "year")) ||
+      (nativeBucket === "month" && options.preferredBucket === "year"))
+      ? options.preferredBucket
+      : nativeBucket;
   const targetMap = aggregateSeriesByBucket(rawSeries, bucket);
-  const targetEntries = Array.from(targetMap.values()).sort(
+  const fullTargetEntries = Array.from(targetMap.values()).sort(
     (a, b) => a.t - b.t || a.date.localeCompare(b.date)
   );
+  const effectiveCutoff =
+    typeof options.cutoffIndex === "number" &&
+    Number.isFinite(options.cutoffIndex) &&
+    options.cutoffIndex > 0
+      ? Math.min(fullTargetEntries.length, Math.floor(options.cutoffIndex))
+      : fullTargetEntries.length;
+  const targetEntries = fullTargetEntries.slice(0, effectiveCutoff);
   if (targetEntries.length < 10) {
     throw new Error(
       `Target node "${targetNode.properties.name}" has only ${targetEntries.length} bucketed observations (need >= 10).`

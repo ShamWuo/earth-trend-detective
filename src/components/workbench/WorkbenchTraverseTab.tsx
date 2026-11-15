@@ -41,6 +41,10 @@ const BADGE_STYLES: Record<TrendMicroscopeRadarBadge, { label: string; cls: stri
     label: "Sensor Glitch Risk",
     cls: "border-rose-400 bg-rose-950 text-rose-300",
   },
+  CONTESTED: {
+    label: "Contested",
+    cls: "border-orange-400 bg-orange-950 text-orange-300",
+  },
   NOMINAL: {
     label: "Nominal",
     cls: "border-border bg-surface text-text-muted",

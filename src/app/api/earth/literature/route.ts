@@ -6,7 +6,10 @@ import {
   sanitizeResearchDossier,
 } from "@/lib/research/dossierUtils";
 import {
+  buildNodeClaimStanceContext,
   buildNodeLiteratureQuery,
+  type ClaimStanceContext,
+  evaluateCitationClaimStance,
   normalizeDoiIdentifier,
   searchPeerReviewedEarthLiterature,
   verifyDoiMetadataDetailed,
@@ -14,7 +17,6 @@ import {
 import type { ETGScientificCitation } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   try {
@@ -25,13 +27,17 @@ export async function GET(req: NextRequest) {
     const limit = Number.isFinite(limitParam) ? Math.max(1, Math.min(12, Math.round(limitParam))) : 6;
 
     let query = rawQ;
-    if (!query && nodeUuid) {
+    let claimContext: ClaimStanceContext | undefined;
+    if (nodeUuid) {
       const store = getEtgStore();
       const node = store.getNode(nodeUuid);
       if (!node) {
         return NextResponse.json({ error: `ETG node "${nodeUuid}" not found.` }, { status: 404 });
       }
-      query = buildNodeLiteratureQuery(node);
+      claimContext = buildNodeClaimStanceContext(node);
+      if (!query) {
+        query = buildNodeLiteratureQuery(node);
+      }
     }
 
     if (!query || query.length < 3) {
@@ -41,7 +47,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const results = await searchPeerReviewedEarthLiterature(query, limit);
+    const results = await searchPeerReviewedEarthLiterature(query, limit, {
+      claimContext,
+    });
     return NextResponse.json({
       query,
       results,
@@ -129,7 +137,12 @@ export async function POST(req: NextRequest) {
           );
         }
         if (outcome.status === "verified") {
-          citationToAttach = outcome.citation;
+          citationToAttach = {
+            ...citationToAttach,
+            ...outcome.citation,
+            abstract_snippet:
+              outcome.citation.abstract_snippet ?? citationToAttach?.abstract_snippet,
+          };
         }
       }
 
@@ -139,6 +152,11 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+
+      citationToAttach = evaluateCitationClaimStance(
+        citationToAttach,
+        buildNodeClaimStanceContext(node)
+      );
 
       const snap = store.getSnapshot();
       const nodesById = new Map(snap.nodes.map((n) => [n.uuid, n]));

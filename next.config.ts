@@ -4,16 +4,7 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   devIndicators: false,
   outputFileTracingIncludes: {
-    "/api/**/*": ["./ml/weights/**/*"],
-  },
-  outputFileTracingExcludes: {
-    "/*": [
-      "./.data/**/*",
-      "./.etg-cache/**/*",
-      "./.blind-export/**/*",
-      "./notebooks/**/*",
-      "./deliverables/**/*",
-    ],
+    "/api/*": ["ml/weights/**/*"],
   },
 };
 

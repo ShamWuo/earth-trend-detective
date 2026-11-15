@@ -56,7 +56,7 @@ See [AGENTS.md](AGENTS.md), [EARTH_TREND_DETECTIVE.md](EARTH_TREND_DETECTIVE.md)
 
 ## Submission Deliverables & Live Demo
 
-- **Live Deployed App URL:** `<ADD_DEPLOYED_PRODUCTION_URL>` *(supports `/?demo=spaceapps` & `/?demo=veritas`)*
+- **Live Deployed App URL:** [https://terravex.vercel.app](https://terravex.vercel.app) ([Space Apps Mode](https://terravex.vercel.app/?demo=spaceapps) · [Veritas Climate Mode](https://terravex.vercel.app/?demo=veritas))
 - **1-Page Blind-Review Write-Up (Veritas AI — Climate Track):** [WRITEUP.md](WRITEUP.md) · Ready-to-upload blind PDF: [veritas_climate_writeup_1page.pdf](deliverables/veritas_climate_writeup_1page.pdf)
 - **7-Slide NASA Space Apps Presentation Deck:** [spaceapps_7slide_deck.pdf](deliverables/spaceapps_7slide_deck.pdf) ([HTML source](deliverables/spaceapps_7slide_deck.html))
 - **Executed Solar Microgrid Colab Notebook (with saved outputs & plots):** [notebooks/denver_solar_climate_graph.ipynb](notebooks/denver_solar_climate_graph.ipynb)

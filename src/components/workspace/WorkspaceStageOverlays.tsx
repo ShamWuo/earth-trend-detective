@@ -34,7 +34,7 @@ export function WorkspaceStageBanner({
   return (
     <div
       className={`pointer-events-none absolute z-30 flex justify-center max-sm:inset-x-2.5 max-sm:top-14 ${
-        !statusMessage && compareMode && inspectorOpen ? "max-sm:hidden" : ""
+        !statusMessage && compareMode && inspectorOpen ? "max-lg:hidden" : ""
       } ${
         viewMode === "globe"
           ? `${aiStudioOpen ? "sm:max-lg:left-[316px] lg:left-12" : "sm:left-12"} ${

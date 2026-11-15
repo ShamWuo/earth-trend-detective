@@ -1201,7 +1201,7 @@ export function GlobeHudOverlays({
         </div>
 
         {timelineSlot && (
-          <div className="pointer-events-auto min-w-0 max-sm:w-full flex-1 sm:max-w-[340px] lg:max-w-[380px]">
+          <div className="pointer-events-auto min-w-[232px] basis-[232px] flex-1 max-sm:w-full sm:max-w-[340px] lg:max-w-[380px]">
             {timelineSlot}
           </div>
         )}

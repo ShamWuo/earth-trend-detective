@@ -51,6 +51,7 @@ interface CrossrefAuthor {
 interface CrossrefWorkItem {
   DOI?: string;
   title?: string[];
+  abstract?: string;
   author?: CrossrefAuthor[];
   "container-title"?: string[];
   publisher?: string;
@@ -61,6 +62,234 @@ interface CrossrefWorkItem {
   created?: { "date-parts"?: number[][] };
   "is-referenced-by-count"?: number;
   URL?: string;
+}
+
+export interface ClaimStanceContext {
+  claimText: string;
+  direction?: "increasing" | "decreasing" | "stable" | "mixed" | "opposite";
+  region?: string;
+  parameter?: string;
+}
+
+function stripHtmlAndJats(raw: string, maxLen = 620): string {
+  const cleaned = raw
+    .replace(/<jats:title[^>]*>[\s\S]*?<\/jats:title>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  const sliced = cleaned.slice(0, maxLen - 3);
+  const lastSpace = sliced.lastIndexOf(" ");
+  return `${(lastSpace > maxLen * 0.6 ? sliced.slice(0, lastSpace) : sliced).trim()}...`;
+}
+
+function reconstructOpenAlexAbstract(
+  invertedIndex: Record<string, number[]> | undefined
+): string | undefined {
+  if (!invertedIndex || typeof invertedIndex !== "object") return undefined;
+  const tokens: Array<{ pos: number; word: string }> = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    if (!Array.isArray(positions)) continue;
+    for (const pos of positions) {
+      if (typeof pos === "number" && Number.isFinite(pos) && pos >= 0 && pos < 160) {
+        tokens.push({ pos, word });
+      }
+    }
+  }
+  if (tokens.length === 0) return undefined;
+  tokens.sort((a, b) => a.pos - b.pos);
+  return stripHtmlAndJats(tokens.map((t) => t.word).join(" "));
+}
+
+const STANCE_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "over",
+  "that",
+  "this",
+  "these",
+  "those",
+  "have",
+  "been",
+  "were",
+  "into",
+  "across",
+  "global",
+  "earth",
+  "climate",
+  "trend",
+  "trends",
+  "change",
+  "changes",
+  "annual",
+  "monthly",
+  "series",
+  "signal",
+  "insight",
+  "region",
+  "regional",
+  "record",
+  "records",
+  "data",
+  "year",
+  "years",
+  "rate",
+  "slope",
+  "mean",
+  "anomaly",
+  "anomalies",
+  "nasa",
+  "noaa",
+  "nsidc",
+  "gistemp",
+  "power",
+  "merra",
+  "significant",
+  "observed",
+  "using",
+  "analysis",
+]);
+
+/**
+ * Deterministic Claim-to-Abstract Stance Entailment classifier.
+ * Scores whether a citation's abstract/title supports, is neutral toward, or challenges
+ * an ETG claim using keyword grounding, directional polarity, and negation/refutation cues.
+ */
+export function evaluateCitationClaimStance(
+  citation: ETGScientificCitation,
+  claimContext: ClaimStanceContext
+): ETGScientificCitation {
+  const titleText = citation.title.trim();
+  const abstractText = citation.abstract_snippet?.trim() ?? "";
+  const hasAbstract = abstractText.length >= 20;
+  const corpus = `${titleText} ${abstractText}`.toLowerCase();
+
+  const extractTerms = (txt: string): string[] => {
+    const raw = txt.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const w of raw) {
+      if (STANCE_STOPWORDS.has(w) || /^\d+$/.test(w) || seen.has(w)) continue;
+      seen.add(w);
+      out.push(w);
+    }
+    return out;
+  };
+
+  const claimTerms = extractTerms(
+    `${claimContext.claimText} ${claimContext.parameter ?? ""} ${claimContext.region ?? ""}`
+  ).slice(0, 18);
+  const regionTerms = extractTerms(claimContext.region ?? "").slice(0, 6);
+
+  const matchedTerms = claimTerms.filter((t) => corpus.includes(t));
+  const matchedRegionTerms = regionTerms.filter((t) => corpus.includes(t));
+  const topicHits = matchedTerms.length + matchedRegionTerms.length;
+
+  const challengeMatch = corpus.match(
+    /\b(no significant trend|not statistically significant|statistically insignificant|no evidence of|no clear trend|absence of (?:a )?trend|contradict(?:s|ed|ing)?|refut(?:e|ed|es|ing)|inconsistent with|overestimat(?:e|ed|es|ing)|pause in|warming hiatus|fail(?:s|ed)? to find|contrary to (?:projections|expectations|models)|attributable to natural variability)\b/i
+  );
+  const upwardMatches =
+    corpus.match(
+      /\b(increas(?:e|ed|es|ing)|ris(?:e|es|ing|en)|warm(?:ing|ed|s)|accelerat(?:e|ed|ing|ion)|amplif(?:y|ied|ies|ication)|intensif(?:y|ied|ies|ying)|upward|elevated|expand(?:ed|ing)|unprecedented|surge)\b/gi
+    ) ?? [];
+  const downwardMatches =
+    corpus.match(
+      /\b(decreas(?:e|ed|es|ing)|declin(?:e|ed|ing|es)|cool(?:ing|ed|s)|slowdown|weakening|reduc(?:e|ed|tion)|shrink(?:ing|age)|loss(?:es)?|retreat|megadrought|drought|deficit|aridity|deplet(?:ed|ion)|warming hole)\b/gi
+    ) ?? [];
+  const explicitCoolingMatches =
+    corpus.match(/\b(cool(?:ing|ed|s)|warming hole|slowdown|weakening|negative trend)\b/gi) ?? [];
+  const dipoleMatches =
+    corpus.match(
+      /\b(dipole|opposite|teleconnect(?:ion|ions|ed)?|anticorrelat(?:e|ed|ion)|warming hole|amoc|subpolar|el nino|enso|indian ocean dipole|coupled)\b/gi
+    ) ?? [];
+
+  const dir = claimContext.direction;
+  let claim_stance: "supports" | "neutral" | "challenges" = "neutral";
+  let stance_rationale = "";
+
+  if (challengeMatch) {
+    if (hasAbstract || topicHits >= 1) {
+      claim_stance = "challenges";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} includes counter-evidence phrase ("${challengeMatch[0]}") across ${topicHits} topic match(es).`;
+    }
+  } else if (dir === "opposite") {
+    if (topicHits >= 2 && (dipoleMatches.length > 0 || (upwardMatches.length > 0 && downwardMatches.length > 0))) {
+      claim_stance = "supports";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} entails opposing-regime or teleconnection mechanism (${topicHits} topic hits; ${matchedTerms.slice(0, 3).join(", ")}).`;
+    } else if (!hasAbstract) {
+      stance_rationale = "Abstract unavailable in bibliographic record; title alone does not verify dipole polarity.";
+    } else {
+      stance_rationale = `Abstract discusses related phenomena (${topicHits} term hits) without explicit opposite-trend teleconnection wording.`;
+    }
+  } else if (dir === "decreasing") {
+    if (
+      explicitCoolingMatches.length === 0 &&
+      upwardMatches.length >= 2 &&
+      downwardMatches.length === 0 &&
+      topicHits >= 2 &&
+      !/sea ice|glacier|drought|discharge/i.test(claimContext.claimText)
+    ) {
+      claim_stance = "challenges";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} emphasizes upward/warming trajectory opposing a decreasing claim.`;
+    } else if (topicHits >= 2 && (downwardMatches.length > 0 || dipoleMatches.length > 0)) {
+      claim_stance = "supports";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} aligns with declining/cooling trend (${matchedTerms.slice(0, 3).join(", ")}; ${downwardMatches.length} decline/cooling cue(s)).`;
+    } else if (!hasAbstract) {
+      stance_rationale = "Abstract unavailable in bibliographic record; manual full-text check recommended.";
+    } else {
+      stance_rationale = `Abstract provides contextual literature (${topicHits} term hits) without direct directional entailment.`;
+    }
+  } else if (dir === "increasing") {
+    const isWarmingOrTempClaim =
+      !/warming hole|cooling/i.test(claimContext.claimText) &&
+      /\b(warm|temp|heat|co2|radiative|amplif|vpd|fire|discharge)\b/i.test(
+        `${claimContext.claimText} ${claimContext.parameter ?? ""}`
+      );
+    if (
+      isWarmingOrTempClaim &&
+      explicitCoolingMatches.length >= 2 &&
+      upwardMatches.length === 0 &&
+      topicHits >= 2
+    ) {
+      claim_stance = "challenges";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} reports cooling/slowdown signals contrasting with an increasing trend.`;
+    } else if (topicHits >= 2 && (upwardMatches.length > 0 || dipoleMatches.length > 0)) {
+      claim_stance = "supports";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} entails increasing/intensifying trend (${matchedTerms.slice(0, 3).join(", ")}; ${upwardMatches.length} intensification cue(s)).`;
+    } else if (!hasAbstract && topicHits >= 3) {
+      claim_stance = "supports";
+      stance_rationale = `Title strongly matches topic and region (${matchedTerms.slice(0, 3).join(", ")}; abstract unavailable in metadata).`;
+    } else if (!hasAbstract) {
+      stance_rationale = "Abstract unavailable in bibliographic record; manual full-text check recommended.";
+    } else {
+      stance_rationale = `Abstract provides related domain context (${topicHits} keyword overlap) without explicit upward trend confirmation.`;
+    }
+  } else {
+    // mixed / stable / unspecified
+    if (topicHits >= 2 && (upwardMatches.length + downwardMatches.length + dipoleMatches.length > 0)) {
+      claim_stance = "supports";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} aligns with claim scope (${matchedTerms.slice(0, 3).join(", ")}).`;
+    } else {
+      stance_rationale = hasAbstract
+        ? `Abstract supplies broader background context (${topicHits} keyword matches).`
+        : "Abstract unavailable in bibliographic record; manual review recommended.";
+    }
+  }
+
+  return {
+    ...citation,
+    claim_stance,
+    stance_rationale,
+  };
 }
 
 function formatCrossrefAuthors(authors: CrossrefAuthor[] | undefined): string {
@@ -119,6 +348,11 @@ function parseCrossrefWorkToCitation(
       ? Math.round(item["is-referenced-by-count"])
       : undefined;
 
+  const abstractSnippet =
+    typeof item.abstract === "string" && item.abstract.trim().length > 0
+      ? stripHtmlAndJats(item.abstract)
+      : undefined;
+
   return sanitizeCitation({
     title,
     authors,
@@ -128,6 +362,7 @@ function parseCrossrefWorkToCitation(
     url: doi ? `https://doi.org/${doi}` : item.URL,
     doi_verified: Boolean(doi),
     citation_count: citationCount,
+    abstract_snippet: abstractSnippet,
     verified_at: verifiedAtIso,
     source: "crossref",
   }) ?? null;
@@ -269,6 +504,7 @@ interface EuropePmcItem {
   citedByCount?: number;
   pmcid?: string;
   pmid?: string;
+  abstractText?: string;
 }
 
 async function searchEuropePmc(
@@ -277,7 +513,7 @@ async function searchEuropePmc(
   timeoutMs: number
 ): Promise<ETGScientificCitation[]> {
   const res = await fetch(
-    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=lite&pageSize=${rows}`,
+    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=core&pageSize=${rows}`,
     {
       headers: { Accept: "application/json" },
       signal: AbortSignal.timeout(timeoutMs),
@@ -303,6 +539,10 @@ async function searchEuropePmc(
       : item.pmcid
         ? `https://europepmc.org/article/PMC/${item.pmcid}`
         : undefined;
+    const abstractSnippet =
+      typeof item.abstractText === "string" && item.abstractText.trim().length > 0
+        ? stripHtmlAndJats(item.abstractText)
+        : undefined;
     const cit = sanitizeCitation({
       title,
       authors,
@@ -315,6 +555,7 @@ async function searchEuropePmc(
         typeof item.citedByCount === "number" && item.citedByCount >= 0
           ? item.citedByCount
           : undefined,
+      abstract_snippet: abstractSnippet,
       verified_at: nowIso,
       source: "europe_pmc",
     });
@@ -330,6 +571,7 @@ interface OpenAlexWork {
   cited_by_count?: number;
   primary_location?: { source?: { display_name?: string } };
   authorships?: Array<{ author?: { display_name?: string } }>;
+  abstract_inverted_index?: Record<string, number[]>;
 }
 
 async function searchOpenAlexWorks(
@@ -363,6 +605,7 @@ async function searchOpenAlexWorks(
       : "";
     const year = Number(w.publication_year);
     if (!title || !authors || !Number.isFinite(year) || year < 1900) continue;
+    const abstractSnippet = reconstructOpenAlexAbstract(w.abstract_inverted_index);
     const cit = sanitizeCitation({
       title,
       authors,
@@ -375,6 +618,7 @@ async function searchOpenAlexWorks(
         typeof w.cited_by_count === "number" && w.cited_by_count >= 0
           ? w.cited_by_count
           : undefined,
+      abstract_snippet: abstractSnippet,
       verified_at: nowIso,
       source: "openalex",
     });
@@ -390,7 +634,7 @@ async function searchOpenAlexWorks(
 export async function searchPeerReviewedEarthLiterature(
   query: string,
   limit = 6,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number; claimContext?: ClaimStanceContext }
 ): Promise<ETGScientificCitation[]> {
   const cleanQuery = query.trim().replace(/\s+/g, " ").slice(0, 240);
   if (cleanQuery.length < 3) return [];
@@ -400,7 +644,9 @@ export async function searchPeerReviewedEarthLiterature(
   const now = Date.now();
   const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
-    return cached.results;
+    return options?.claimContext
+      ? cached.results.map((c) => evaluateCitationClaimStance(c, options.claimContext!))
+      : cached.results;
   }
 
   const timeoutMs = Math.max(800, Math.min(10_000, options?.timeoutMs ?? 4500));
@@ -427,7 +673,7 @@ export async function searchPeerReviewedEarthLiterature(
       byKey.set(key, cit);
       continue;
     }
-    // Prefer Crossref metadata + higher citation count
+    // Prefer Crossref metadata + higher citation count, while preserving abstract_snippet
     const preferNew =
       (cit.source === "crossref" && prev.source !== "crossref") ||
       (cit.citation_count ?? 0) > (prev.citation_count ?? 0);
@@ -435,12 +681,18 @@ export async function searchPeerReviewedEarthLiterature(
       byKey.set(key, {
         ...prev,
         ...cit,
+        abstract_snippet: cit.abstract_snippet ?? prev.abstract_snippet,
         citation_count: Math.max(prev.citation_count ?? 0, cit.citation_count ?? 0) || undefined,
+      });
+    } else if (!prev.abstract_snippet && cit.abstract_snippet) {
+      byKey.set(key, {
+        ...prev,
+        abstract_snippet: cit.abstract_snippet,
       });
     }
   }
 
-  const results = Array.from(byKey.values())
+  const baseResults = Array.from(byKey.values())
     .sort((a, b) => {
       const aHasDoi = a.doi ? 1 : 0;
       const bHasDoi = b.doi ? 1 : 0;
@@ -449,13 +701,15 @@ export async function searchPeerReviewedEarthLiterature(
     })
     .slice(0, boundedLimit);
 
-  if (results.length > 0) {
+  if (baseResults.length > 0) {
     searchCache.set(cacheKey, {
       expiresAt: now + CACHE_TTL_SEARCH_MS,
-      results,
+      results: baseResults,
     });
   }
-  return results;
+  return options?.claimContext
+    ? baseResults.map((c) => evaluateCitationClaimStance(c, options.claimContext!))
+    : baseResults;
 }
 
 const OFFICIAL_AGENCY_HOST_RE =
@@ -468,11 +722,20 @@ const OFFICIAL_AGENCY_HOST_RE =
  */
 export async function verifyAndFilterCitations(
   citations: readonly ETGScientificCitation[],
-  options?: { timeoutMs?: number; strictDropUnverifiedNonAgency?: boolean }
+  options?: {
+    timeoutMs?: number;
+    strictDropUnverifiedNonAgency?: boolean;
+    claimContext?: ClaimStanceContext;
+  }
 ): Promise<{ verified: ETGScientificCitation[]; rejectedDois: string[] }> {
   const verified: ETGScientificCitation[] = [];
   const rejectedDois: string[] = [];
   const seenKeys = new Set<string>();
+
+  const scoreIfNeeded = (cit: ETGScientificCitation): ETGScientificCitation =>
+    options?.claimContext
+      ? evaluateCitationClaimStance(cit, options.claimContext)
+      : cit;
 
   const timeoutMs = options?.timeoutMs ?? 3500;
   const outcomes = await Promise.all(
@@ -493,11 +756,17 @@ export async function verifyAndFilterCitations(
         continue;
       }
       if (outcome.status === "verified") {
-        const merged = outcome.citation;
+        const merged: ETGScientificCitation = {
+          ...cit,
+          ...outcome.citation,
+          abstract_snippet: outcome.citation.abstract_snippet ?? cit.abstract_snippet,
+          claim_stance: outcome.citation.claim_stance ?? cit.claim_stance,
+          stance_rationale: outcome.citation.stance_rationale ?? cit.stance_rationale,
+        };
         const key = merged.doi ? `doi:${merged.doi}` : `title:${merged.title.toLowerCase()}`;
         if (!seenKeys.has(key)) {
           seenKeys.add(key);
-          verified.push(merged);
+          verified.push(scoreIfNeeded(merged));
         }
         continue;
       }
@@ -506,7 +775,7 @@ export async function verifyAndFilterCitations(
         const key = outcome.doi ? `doi:${outcome.doi}` : `title:${cit.title.toLowerCase()}`;
         if (!seenKeys.has(key)) {
           seenKeys.add(key);
-          verified.push({ ...cit, doi: outcome.doi });
+          verified.push(scoreIfNeeded({ ...cit, doi: outcome.doi }));
         }
       }
       continue;
@@ -518,12 +787,37 @@ export async function verifyAndFilterCitations(
       const key = `title:${cit.title.toLowerCase()}`;
       if (!seenKeys.has(key)) {
         seenKeys.add(key);
-        verified.push(cit);
+        verified.push(scoreIfNeeded(cit));
       }
     }
   }
 
   return { verified, rejectedDois };
+}
+
+/**
+ * Builds a structured claim-stance context from an ETG node's claim, trend slope, and region.
+ */
+export function buildNodeClaimStanceContext(node: ETGNode): ClaimStanceContext {
+  const p = node.properties;
+  const hay = `${p.name} ${p.description}`;
+  let direction: ClaimStanceContext["direction"];
+  if (/(opposite|dipole|teleconnect|warming hole|anticorrelat)/i.test(hay)) {
+    direction = "opposite";
+  } else if (typeof p.theil_sen_slope === "number" && Number.isFinite(p.theil_sen_slope)) {
+    direction =
+      p.theil_sen_slope > 0.0005
+        ? "increasing"
+        : p.theil_sen_slope < -0.0005
+          ? "decreasing"
+          : "stable";
+  }
+  return {
+    claimText: `${p.name}. ${p.description}`,
+    direction,
+    region: p.region,
+    parameter: p.parameter,
+  };
 }
 
 /**

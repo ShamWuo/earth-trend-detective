@@ -4,7 +4,6 @@ import { predictFromGraph, predictRegion } from "@/lib/graph/graphPredictor";
 import type { ETGDatasetId, GraphPredictionResult } from "@/types/etg";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 interface PredictRequestParams {
   format?: string;
@@ -20,6 +19,7 @@ interface PredictRequestParams {
   horizonSteps?: number;
   candidateNeighborUuid?: string;
   bucket?: TemporalBucket;
+  preferredBucket?: TemporalBucket;
   persistMetrics?: boolean;
   logProspective?: boolean;
 }
@@ -120,6 +120,7 @@ async function handlePredict(params: PredictRequestParams) {
       maxHops: params.maxHops,
       horizonSteps: params.horizonSteps,
       candidateNeighborUuid: params.candidateNeighborUuid,
+      preferredBucket: params.preferredBucket ?? params.bucket,
     });
   } else {
     prediction = await predictRegion(store, {
@@ -232,6 +233,8 @@ export async function GET(req: NextRequest) {
         : undefined,
       candidateNeighborUuid: searchParams.get("candidateNeighborUuid") || undefined,
       bucket: (searchParams.get("bucket") as TemporalBucket | null) || undefined,
+      preferredBucket:
+        (searchParams.get("preferredBucket") as TemporalBucket | null) || undefined,
       persistMetrics: searchParams.get("persistMetrics") === "true",
       logProspective: searchParams.get("logProspective") === "true",
     });

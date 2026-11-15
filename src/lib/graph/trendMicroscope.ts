@@ -1155,13 +1155,28 @@ export function scanTrendMicroscope(
     : computeCalibratedFallbackForward(xNodes, pairMap);
 
   const existingPairSet = new Set<string>();
+  const edgeByPair = new Map<string, ETGEdge[]>();
   for (const e of candidateEdges) {
     existingPairSet.add(`${e.source_uuid}->${e.target_uuid}`);
     existingPairSet.add(`${e.target_uuid}->${e.source_uuid}`);
+    if (!e.properties.superseded_at) {
+      const k1 = `${e.source_uuid}->${e.target_uuid}`;
+      const k2 = `${e.target_uuid}->${e.source_uuid}`;
+      edgeByPair.set(k1, [...(edgeByPair.get(k1) ?? []), e]);
+      edgeByPair.set(k2, [...(edgeByPair.get(k2) ?? []), e]);
+    }
   }
 
   const nodeCues: NodeTrendMicroscopeCue[] = fwd.nodeOuts.map((o, idx) => {
     const an = activeNodes[idx];
+    const fullNode = store.getNode(an.uuid);
+    const contraCount =
+      typeof fullNode?.properties.contradicting_sources_count === "number"
+        ? fullNode.properties.contradicting_sources_count
+        : fullNode?.properties.contested
+          ? 1
+          : 0;
+    const isContested = Boolean(fullNode?.properties.contested || contraCount > 0);
     const mkZ = Number((xNodes[idx][10] * 4).toFixed(3));
     const dp = o.directionProbs;
     const emergingDirection: NodeTrendMicroscopeCue["emergingDirection"] =
@@ -1171,18 +1186,26 @@ export function scanTrendMicroscope(
           ? "decreasing"
           : "stable";
     const preMannKendallAlert = o.onsetProb >= 0.55 && mkZ < 1.96;
-    const aiCue = `[${an.name}] badge=${o.radarBadge} | onset=${Math.round(o.onsetProb * 100)}% (${
+    const radarBadge = isContested ? "CONTESTED" : o.radarBadge;
+    const falseTrendProb = isContested
+      ? round4(clamp(o.falseTrendProb + Math.min(0.22, contraCount * 0.08), 0, 0.99))
+      : o.falseTrendProb;
+    const trustGate = isContested
+      ? round4(clamp(o.trustGate * Math.max(0.45, 1 - contraCount * 0.15), 0.1, 1))
+      : o.trustGate;
+    const contestedNote = isContested ? ` | CONTESTED (${contraCount} contra)` : "";
+    const aiCue = `[${an.name}] badge=${radarBadge} | onset=${Math.round(o.onsetProb * 100)}% (${
       preMannKendallAlert ? "PRE-MK" : `MK |Z|=${mkZ.toFixed(2)}`
     }) | attrib: ${Math.round(o.secularShare * 100)}% secular / ${Math.round(
       o.oscillationShare * 100
     )}% cycle / ${Math.round(o.artifactShare * 100)}% noise (false_prob=${Math.round(
-      o.falseTrendProb * 100
-    )}%)`;
+      falseTrendProb * 100
+    )}%)${contestedNote}`;
 
     return {
       uuid: an.uuid,
       name: an.name,
-      radarBadge: o.radarBadge,
+      radarBadge,
       onsetProb: o.onsetProb,
       preMannKendallAlert,
       mkAbsZ: mkZ,
@@ -1192,9 +1215,9 @@ export function scanTrendMicroscope(
         secularShare: o.secularShare,
         oscillationShare: o.oscillationShare,
         artifactShare: o.artifactShare,
-        falseTrendProb: o.falseTrendProb,
+        falseTrendProb,
       },
-      trustGate: o.trustGate,
+      trustGate,
       aiCue,
     };
   });
@@ -1207,29 +1230,86 @@ export function scanTrendMicroscope(
     const nu = activeNodes[pOut.u];
     const nv = activeNodes[pOut.v];
     const meta = pairMap.get(key)!;
+    const pairEdges = edgeByPair.get(`${nu.uuid}->${nv.uuid}`) ?? [];
+
+    let adjTrueProb = pOut.trueCouplingProb;
+    let adjConfProb = pOut.confounderProb;
+    const edgeNotes: string[] = [];
+
+    if (pairEdges.length > 0) {
+      const hasContradicts = pairEdges.some((e) => e.type === "contradicts");
+      const mediatedEdge = pairEdges.find((e) => Boolean(e.properties.mediated_by));
+      const fdrVerifiedEdge = pairEdges.find(
+        (e) =>
+          typeof e.properties.fdr_q_value === "number" &&
+          e.properties.fdr_q_value <= 0.05
+      );
+      const liftValues = pairEdges
+        .map((e) => e.properties.predictive_lift_pct)
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+      const bestLift = liftValues.length > 0 ? Math.max(...liftValues) : undefined;
+      const partialValues = pairEdges
+        .map((e) => e.properties.multivariate_partial_r ?? e.properties.partial_r)
+        .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+
+      if (hasContradicts) {
+        adjTrueProb = clamp(adjTrueProb * 0.45, 0.02, 0.99);
+        adjConfProb = clamp(Math.max(adjConfProb, 0.68), 0, 0.99);
+        edgeNotes.push("CONTRADICTS");
+      } else if (mediatedEdge) {
+        adjTrueProb = clamp(adjTrueProb * 0.6, 0.02, 0.99);
+        adjConfProb = clamp(Math.max(adjConfProb + 0.22, 0.62), 0, 0.99);
+        edgeNotes.push(`mediated_by=${mediatedEdge.properties.mediated_by}`);
+      } else {
+        if (fdrVerifiedEdge) {
+          adjTrueProb = clamp(adjTrueProb + 0.07, 0.02, 0.99);
+          adjConfProb = clamp(adjConfProb * 0.85, 0, 0.99);
+          edgeNotes.push(`FDR q=${fdrVerifiedEdge.properties.fdr_q_value!.toFixed(3)}`);
+        }
+        if (bestLift !== undefined) {
+          if (bestLift > 0) {
+            adjTrueProb = clamp(adjTrueProb + Math.min(0.08, bestLift / 150), 0.02, 0.99);
+            edgeNotes.push(`OOS +${bestLift.toFixed(1)}%`);
+          } else if (bestLift < -2) {
+            adjTrueProb = clamp(adjTrueProb * 0.75, 0.02, 0.99);
+            adjConfProb = clamp(adjConfProb + 0.12, 0, 0.99);
+            edgeNotes.push(`OOS ${bestLift.toFixed(1)}%`);
+          }
+        }
+        if (partialValues.length > 0) {
+          const maxAbsPartial = Math.max(...partialValues.map((v) => Math.abs(v)));
+          edgeNotes.push(`|partial_r|=${maxAbsPartial.toFixed(2)}`);
+        }
+      }
+    }
+
+    adjTrueProb = round4(adjTrueProb);
+    adjConfProb = round4(adjConfProb);
+    const notesSuffix = edgeNotes.length > 0 ? ` [${edgeNotes.join(", ")}]` : "";
+
     const cue: LinkTrendMicroscopeCue = {
       sourceUuid: nu.uuid,
       targetUuid: nv.uuid,
       sourceName: nu.name,
       targetName: nv.name,
       alreadyWired: existingPairSet.has(`${nu.uuid}->${nv.uuid}`),
-      trueCouplingProb: pOut.trueCouplingProb,
-      confounderProb: pOut.confounderProb,
+      trueCouplingProb: adjTrueProb,
+      confounderProb: adjConfProb,
       polarity: pOut.polarity,
       optimalLagSteps: pOut.optimalLagSteps,
       rawPeakR: Number(meta.rawPeak.toFixed(3)),
       cleanPeakR: Number(meta.cleanPeak.toFixed(3)),
       aiCue: `${nu.name} -> ${nv.name}: ${pOut.polarity} (P_true=${Math.round(
-        pOut.trueCouplingProb * 100
+        adjTrueProb * 100
       )}%, lag=${pOut.optimalLagSteps}, P_illusion=${Math.round(
-        pOut.confounderProb * 100
+        adjConfProb * 100
       )}%, raw_r=${meta.rawPeak >= 0 ? "+" : ""}${meta.rawPeak.toFixed(2)}, clean_r=${
         meta.cleanPeak >= 0 ? "+" : ""
-      }${meta.cleanPeak.toFixed(2)})`,
+      }${meta.cleanPeak.toFixed(2)})${notesSuffix}`,
     };
-    if (pOut.trueCouplingProb >= 0.55 && pOut.polarity !== "none" && pOut.confounderProb < 0.55) {
+    if (adjTrueProb >= 0.55 && pOut.polarity !== "none" && adjConfProb < 0.55) {
       verifiedCouplings.push(cue);
-    } else if (pOut.confounderProb >= 0.55 && Math.abs(meta.rawPeak) >= 0.45) {
+    } else if (adjConfProb >= 0.55 && Math.abs(meta.rawPeak) >= 0.45) {
       suppressedIllusions.push(cue);
     }
   }

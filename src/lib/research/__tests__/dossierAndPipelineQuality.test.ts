@@ -7,13 +7,25 @@ import { POST as postDetective } from "@/app/api/ai/detective/route";
 import { GET as getLiterature, POST as postLiterature } from "@/app/api/earth/literature/route";
 import {
   clearScholarlyLiteratureCache,
+  evaluateCitationClaimStance,
   verifyAndFilterCitations,
 } from "@/lib/research/scholarlyLiteratureClient";
 import {
+  parseKnmiIndexDat,
+  parseKnmiMonthlyIndexDat,
+} from "@/lib/agencies/challengeSourcesClient";
+import {
+  parseGistempMonthlyCsv,
+  parseNoaaCo2MonthlyCsv,
+} from "@/lib/nasa/gistempAndCo2Client";
+import { predictFromGraph } from "@/lib/graph/graphPredictor";
+import {
   compareRegionalSeries,
+  computeMultivariatePartialDetrendedCorrelation,
   computePairEffectiveSampleSize,
   computePairwisePredictiveSkillLift,
   computePartialDetrendedCorrelation,
+  computeSpatialMoransI,
   deseasonalizeMonthlySeries,
 } from "@/lib/stats/trendEngine";
 import {
@@ -657,5 +669,367 @@ describe("Research Dossier & Pipeline Quality Guarantees", () => {
     const updated = store.getNode("insight-regional-warming")!;
     expect(updated.properties.contested).toBe(true);
     expect(updated.properties.contradicting_sources_count).toBe(1);
+  });
+
+  it("parses NOAA PSL 12-col, KNMI fractional-year, YYYYMMDD, and monthly GISTEMP/CO2 tables accurately", () => {
+    const psl12Col = [
+      "1948 2026",
+      "2023   0.50   0.60   0.70   0.80   0.90   1.00   1.10   1.20   1.30   1.40   1.50   1.60",
+      "2024   1.70   1.80   1.90   2.00   2.10   2.20   2.30  -99.90 +99.99   1.10   1.20   1.30",
+      "2025   0.90  -99.90 -99.90 -99.90 -99.90 -99.90 -99.90 -99.90 -99.90 -99.90 -99.90 -99.90",
+      "-99.90",
+    ].join("\n");
+
+    const monthly12 = parseKnmiMonthlyIndexDat(psl12Col, 2023, 2025);
+    expect(monthly12.map((p) => p.date)).toContain("2024-07");
+    expect(monthly12.map((p) => p.date)).not.toContain("2024-08");
+    expect(monthly12.map((p) => p.date)).not.toContain("2024-09");
+    expect(monthly12.map((p) => p.date)).toContain("2025-01");
+
+    const annual12 = parseKnmiIndexDat(psl12Col, 2023, 2025);
+    expect(annual12.map((p) => p.t)).toEqual([2023, 2024]);
+
+    const fracDat = [
+      "# header",
+      "2024.0000   0.15",
+      "2024.0833   0.25",
+      "2024.5000  -0.35",
+    ].join("\n");
+    const fracMonthly = parseKnmiMonthlyIndexDat(fracDat, 2024, 2025);
+    expect(fracMonthly).toEqual([
+      { date: "2024-01", t: Number((2024 + 0.5 / 12).toFixed(4)), value: 0.15 },
+      { date: "2024-02", t: Number((2024 + 1.5 / 12).toFixed(4)), value: 0.25 },
+      { date: "2024-07", t: Number((2024 + 6.5 / 12).toFixed(4)), value: -0.35 },
+    ]);
+
+    const yyyymmdd = "20240115 0.42\n20240215 -0.18\n20240315 99.99\n";
+    const ymdMonthly = parseKnmiMonthlyIndexDat(yyyymmdd, 2024, 2025);
+    expect(ymdMonthly.map((p) => p.date)).toEqual(["2024-01", "2024-02"]);
+
+    const gistempCsv = [
+      "Land-Ocean: Global Means",
+      "Year,Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec,J-D,D-N,DJF,MAM,JJA,SON",
+      "2024,1.25,1.44,1.39,1.31,1.16,1.21,1.20,1.30,1.24,1.34,1.30,1.27,1.28,1.28,1.35,1.29,1.24,1.29",
+      "2025,1.38,1.25,1.36,***,***,***,***,***,***,***,***,***,***,***,***,***,***,***",
+    ].join("\n");
+    const gMonthly = parseGistempMonthlyCsv(gistempCsv, 2024, 2026);
+    expect(gMonthly).toHaveLength(15);
+    expect(gMonthly[gMonthly.length - 1]).toEqual({
+      date: "2025-03",
+      t: Number((2025 + 2.5 / 12).toFixed(4)),
+      value: 1.36,
+    });
+
+    const co2Csv = [
+      "# comment",
+      "year,month,decimal date,average,deseasonalized,ndays,sdev,unc",
+      "2024,1,2024.0417,422.80,422.50,25,0.4,0.1",
+      "2024,2,2024.1250,-9.99,423.10,0,-9.99,-0.99",
+      "2024,3,2024.2083,425.38,424.10,27,0.5,0.1",
+    ].join("\n");
+    const cMonthly = parseNoaaCo2MonthlyCsv(co2Csv, 2024, 2026);
+    expect(cMonthly.map((p) => p.date)).toEqual(["2024-01", "2024-03"]);
+  });
+
+  it("d-separates confounded regional pairs via computeMultivariatePartialDetrendedCorrelation and scores Moran's I", () => {
+    const z1 = Array.from({ length: 30 }, (_, i) => ({
+      date: `${1996 + i}`,
+      t: 1996 + i,
+      value: 0.025 * i,
+    }));
+    const z2Mode = Array.from({ length: 30 }, (_, i) => ({
+      date: `${1996 + i}`,
+      t: 1996 + i,
+      value: Math.sin(i * 1.1) + 0.3 * Math.cos(i * 0.4),
+    }));
+    const xSeries = Array.from({ length: 30 }, (_, i) => ({
+      date: `${1996 + i}`,
+      t: 1996 + i,
+      value: 10 + 0.03 * i + 2.4 * z2Mode[i].value,
+    }));
+    const ySeries = Array.from({ length: 30 }, (_, i) => ({
+      date: `${1996 + i}`,
+      t: 1996 + i,
+      value: 20 - 0.03 * i - 2.4 * z2Mode[i].value + ((i % 3) - 1) * 0.05,
+    }));
+
+    const uniPartial = computePartialDetrendedCorrelation(xSeries, ySeries, z1, { maxLag: 0 });
+    expect(Math.abs(uniPartial.partialR)).toBeGreaterThan(0.9);
+
+    const multiPartial = computeMultivariatePartialDetrendedCorrelation(
+      xSeries,
+      ySeries,
+      [z1, z2Mode],
+      { maxLag: 0 }
+    );
+    expect(Math.abs(multiPartial.partialR)).toBeLessThan(0.2);
+
+    const clustered = computeSpatialMoransI([
+      { lat: 60, lng: -100, value: 0.07 },
+      { lat: 62, lng: -95, value: 0.068 },
+      { lat: 58, lng: -105, value: 0.065 },
+      { lat: -30, lng: -70, value: -0.02 },
+      { lat: -32, lng: -68, value: -0.018 },
+      { lat: -28, lng: -72, value: -0.022 },
+    ]);
+    expect(clustered.moransI).toBeGreaterThan(0.25);
+
+    const checkerboard = computeSpatialMoransI([
+      { lat: 10.0, lng: 10.0, value: 1.0 },
+      { lat: 10.2, lng: 10.2, value: -1.0 },
+      { lat: 30.0, lng: 30.0, value: 1.0 },
+      { lat: 30.2, lng: 30.2, value: -1.0 },
+    ]);
+    expect(checkerboard.moransI).toBeLessThan(0);
+  });
+
+  it("down-weights co-located homogeneous community sensors in corroboration and penalizes contested trust", () => {
+    const store = getEtgStore();
+    store.ensureGovernanceRules();
+
+    store.createNode({
+      uuid: "insight-denver-corrob",
+      label: "Insight",
+      is_provisional: true,
+      properties: {
+        name: "Front Range Heat-Island Anomaly",
+        description: "Testing spatial and modal corroboration weighting.",
+        lat: 39.74,
+        lng: -104.99,
+        dataset: "nasa_power",
+        confidence: 0.9,
+      },
+    });
+    store.createNode({
+      uuid: "sensor-denver-1",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "Community Sensor A",
+        description: "Rooftop thermometer",
+        lat: 39.75,
+        lng: -104.98,
+        dataset: "air_quality",
+        producer_type: "community_camera",
+        source_system: "Community Grid A",
+      },
+    });
+    store.createNode({
+      uuid: "sensor-denver-2",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "Community Sensor B",
+        description: "Co-located thermometer 3km away",
+        lat: 39.76,
+        lng: -104.97,
+        dataset: "air_quality",
+        producer_type: "community_camera",
+        source_system: "Community Grid B",
+      },
+    });
+    store.createEdge({
+      source_uuid: "sensor-denver-1",
+      target_uuid: "insight-denver-corrob",
+      type: "supports",
+      silent: true,
+    });
+    store.createEdge({
+      source_uuid: "sensor-denver-2",
+      target_uuid: "insight-denver-corrob",
+      type: "supports",
+      silent: true,
+    });
+
+    const clusterAudit = store.evaluateCorroboration("insight-denver-corrob", false);
+    expect(clusterAudit.effectiveIndependentSources).toBeCloseTo(1.45, 2);
+    expect(clusterAudit.corroborated).toBe(false);
+
+    store.createNode({
+      uuid: "signal-nasa-denver",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "NASA POWER MERRA-2 Reanalysis",
+        description: "Independent satellite reanalysis.",
+        lat: 39.74,
+        lng: -104.99,
+        dataset: "nasa_power",
+        producer_type: "nasa_satellite",
+        source_system: "NASA POWER MERRA-2",
+      },
+    });
+    store.createEdge({
+      source_uuid: "signal-nasa-denver",
+      target_uuid: "insight-denver-corrob",
+      type: "supports",
+      silent: true,
+    });
+
+    const crossModalAudit = store.evaluateCorroboration("insight-denver-corrob", false);
+    expect(crossModalAudit.effectiveIndependentSources).toBeCloseTo(2.45, 2);
+    expect(crossModalAudit.corroborated).toBe(true);
+
+    const trustBefore = store.computeNodeTrustScore(store.getNode("insight-denver-corrob")!);
+    store.createEdge({
+      source_uuid: "signal-nasa-denver",
+      target_uuid: "insight-denver-corrob",
+      type: "contradicts",
+      silent: true,
+    });
+    store.evaluateCorroboration("insight-denver-corrob", false);
+    const trustAfter = store.computeNodeTrustScore(store.getNode("insight-denver-corrob")!);
+    expect(trustAfter).toBeLessThan(trustBefore);
+  });
+
+  it("supports monthly preferredBucket and causal cutoffIndex in predictFromGraph and scores prospective forecasts", () => {
+    const store = getEtgStore();
+    const months = Array.from({ length: 30 }, (_, idx) => {
+      const y = 2023 + Math.floor(idx / 12);
+      const m = (idx % 12) + 1;
+      return {
+        date: `${y}-${String(m).padStart(2, "0")}`,
+        t: y + (m - 0.5) / 12,
+        idx,
+      };
+    });
+    const driverMonthly = months.map((m) => ({
+      date: m.date,
+      t: m.t,
+      value: Number((Math.sin(m.idx * 0.65) + 0.04 * m.idx).toFixed(4)),
+    }));
+    const targetMonthly = months.map((m, i) => ({
+      date: m.date,
+      t: m.t,
+      value: Number(
+        (
+          10 +
+          0.03 * m.idx +
+          0.85 * (i > 0 ? driverMonthly[i - 1].value : driverMonthly[0].value)
+        ).toFixed(4)
+      ),
+    }));
+
+    store.createNode({
+      uuid: "signal-monthly-driver",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "Monthly Climate Driver",
+        description: "Monthly upstream oscillator.",
+        lat: 0,
+        lng: -140,
+        dataset: "ocean_temp",
+        producer_type: "research_station",
+        source_system: "NOAA PSL",
+        series: driverMonthly,
+      },
+    });
+    store.setNodeMultiScaleSeries("signal-monthly-driver", "month", driverMonthly, true);
+
+    store.createNode({
+      uuid: "signal-monthly-target",
+      label: "Signal",
+      is_provisional: false,
+      properties: {
+        name: "Monthly Regional Response",
+        description: "Monthly downstream climate response.",
+        lat: 35,
+        lng: -120,
+        dataset: "nasa_power",
+        producer_type: "nasa_satellite",
+        source_system: "NASA GISTEMP v4",
+        unit: "°C anom",
+        series: targetMonthly.slice(0, 3).map((p) => ({ date: p.date.slice(0, 4), t: Math.floor(p.t), value: p.value })),
+      },
+    });
+    store.setNodeMultiScaleSeries(
+      "signal-monthly-target",
+      "month",
+      targetMonthly.slice(0, 28),
+      true
+    );
+
+    store.createEdge({
+      source_uuid: "signal-monthly-driver",
+      target_uuid: "signal-monthly-target",
+      type: "leads",
+      correlation_r: 0.85,
+      partial_r: 0.78,
+      multivariate_partial_r: 0.76,
+      fdr_q_value: 0.002,
+      predictive_lift_pct: 12.5,
+      optimal_lag_steps: 1,
+      lag_unit: "months",
+      silent: true,
+    });
+
+    const causalPred = predictFromGraph(store, {
+      targetUuid: "signal-monthly-target",
+      preferredBucket: "month",
+      horizonSteps: 1,
+      cutoffIndex: 28,
+    });
+    expect(causalPred.bucket).toBe("month");
+    expect(causalPred.sampleCount).toBe(24);
+    expect(causalPred.nextForecast.nextPeriodLabel).toBe("2025-05");
+
+    const logged = store.logProspectiveForecast(causalPred);
+    expect(logged.status).toBe("pending");
+    expect(logged.target_period).toBe("2025-05");
+
+    // Simulate arrival of new ground-truth months via setNodeMultiScaleSeries triggering reconciliation
+    store.setNodeMultiScaleSeries("signal-monthly-target", "month", targetMonthly, true);
+    const ledger = store.getProspectiveLedger("signal-monthly-target");
+    expect(ledger.summary.scored_count).toBe(1);
+    expect(ledger.records[0]?.status).toBe("scored");
+    expect(ledger.records[0]?.actual_value).toBeCloseTo(targetMonthly[28].value, 3);
+  });
+
+  it("evaluates claim-to-abstract stance deterministically as supports, challenges, or neutral", () => {
+    const claimCtx = {
+      claimText: "Arctic warming amplification exceeds global mean with accelerated sea ice loss",
+      direction: "increasing" as const,
+      region: "Arctic Polar",
+      parameter: "Surface Temperature",
+    };
+
+    const supporting = evaluateCitationClaimStance(
+      {
+        title: "Rapid Arctic warming amplification tied to sea ice loss",
+        authors: "Rantanen, M., et al.",
+        year: 2022,
+        abstract_snippet:
+          "Surface observations across the Arctic polar circle show warming rates increasing nearly fourfold faster than the global mean, accelerating summer sea ice loss.",
+        source: "crossref",
+      },
+      claimCtx
+    );
+    expect(supporting.claim_stance).toBe("supports");
+    expect(supporting.stance_rationale).toContain("entails");
+
+    const challenging = evaluateCitationClaimStance(
+      {
+        title: "Reassessing high-latitude temperature variability",
+        authors: "Smith, J.",
+        year: 2023,
+        abstract_snippet:
+          "Updated homogeneous Arctic stations show no significant trend above background decadal cycles, indicating that amplification was overestimated.",
+        source: "europe_pmc",
+      },
+      claimCtx
+    );
+    expect(challenging.claim_stance).toBe("challenges");
+
+    const missingAbstract = evaluateCitationClaimStance(
+      {
+        title: "Methods in Paleoclimate Reanalysis",
+        authors: "Doe, A.",
+        year: 2021,
+        source: "crossref",
+      },
+      claimCtx
+    );
+    expect(missingAbstract.claim_stance).toBe("neutral");
   });
 });

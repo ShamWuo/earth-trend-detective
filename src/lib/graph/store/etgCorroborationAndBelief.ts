@@ -12,6 +12,7 @@ import {
   assertValidEtgLabel,
   haversineKm,
   inferProducerType,
+  isCommunityContributorNode,
 } from "./etgSeriesAndTrustUtils";
 import type { EtgStoreContext } from "./etgStoreContext";
 
@@ -110,6 +111,7 @@ export function evaluateCorroborationOp(
   const sourceSystemSet = new Set<string>();
   const countedSupportCoords: Array<{
     pType: ETGProducerType;
+    isCommunity: boolean;
     systemKey: string;
     dataset?: string;
     lat?: number;
@@ -123,6 +125,8 @@ export function evaluateCorroborationOp(
       const src = ctx.nodes.get(edge.source_uuid);
       if (!src) continue;
       const pType = inferProducerType(src);
+      const isCommunityModality =
+        pType === "community_camera" || isCommunityContributorNode(src);
       const systemKey = String(
         src.properties.source_system ||
           `${pType}:${src.properties.dataset || src.uuid}`
@@ -138,18 +142,10 @@ export function evaluateCorroborationOp(
         typeof src.properties.lng === "number" && Number.isFinite(src.properties.lng)
           ? src.properties.lng
           : undefined;
-      const isCommunityModality =
-        pType === "citizen_sensor" ||
-        pType === "iot_sensor" ||
-        pType === "community";
 
       let weightFactor = 1.0;
       for (const prev of countedSupportCoords) {
-        const prevCommunityModality =
-          prev.pType === "citizen_sensor" ||
-          prev.pType === "iot_sensor" ||
-          prev.pType === "community";
-        const isHomogeneousCommunity = isCommunityModality && prevCommunityModality;
+        const isHomogeneousCommunity = isCommunityModality && prev.isCommunity;
         const isSameSystemOrDataset =
           prev.systemKey === systemKey ||
           (Boolean(src.properties.dataset) &&
@@ -173,6 +169,7 @@ export function evaluateCorroborationOp(
       effectiveIndependentTotal += weightFactor;
       countedSupportCoords.push({
         pType,
+        isCommunity: isCommunityModality,
         systemKey,
         dataset: src.properties.dataset,
         lat: srcLat,

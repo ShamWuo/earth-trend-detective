@@ -7,7 +7,6 @@ import {
 } from "@/lib/solar/denverClimateGraph";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
 
 export async function GET(request: Request) {
   const budget = createTelemetryBudget(1550);
