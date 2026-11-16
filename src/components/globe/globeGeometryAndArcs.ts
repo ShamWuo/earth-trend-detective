@@ -6,7 +6,7 @@ import type {
   RegionalZoomTier,
 } from "@/lib/earth/nasaGibsRegional";
 import type { SatelliteDepthTier } from "@/lib/earth/satelliteZoomTiles";
-import { classifyRelationCategory } from "@/lib/plainLanguage";
+import { classifyRelationCategory, findNearbyFilteredNodes } from "@/lib/plainLanguage";
 import type {
   ETGDatasetId,
   ETGEdge,
@@ -147,6 +147,7 @@ export function selectVisibleGlobeArcs(params: {
   mode: GlobeArcMode;
   selectedNodeUuid: string | null;
   probedAnchorUuid?: string | null;
+  probedCoord?: { lat: number; lng: number } | null;
   selectedEdgeUuid: string | null;
   cascadeEdgeUuids: string[];
   enabledCategories?: ReadonlyArray<RelationCategory>;
@@ -159,6 +160,7 @@ export function selectVisibleGlobeArcs(params: {
     mode,
     selectedNodeUuid,
     probedAnchorUuid = null,
+    probedCoord = null,
     selectedEdgeUuid,
     cascadeEdgeUuids,
     enabledCategories,
@@ -232,13 +234,33 @@ export function selectVisibleGlobeArcs(params: {
 
   if (mode === "focus") {
     if (activeAnchorUuid) {
-      return sortEdges(
+      const anchorEdges = sortEdges(
         categoryFiltered.filter(
           (e) =>
             e.source_uuid === activeAnchorUuid ||
             e.target_uuid === activeAnchorUuid
         )
-      ).slice(0, incidentCap);
+      );
+      if (anchorEdges.length > 0 || selectedNodeUuid || !probedCoord) {
+        return anchorEdges.slice(0, incidentCap);
+      }
+    }
+    if (probedCoord) {
+      const nearby = findNearbyFilteredNodes(
+        probedCoord.lat,
+        probedCoord.lng,
+        nodes,
+        1200,
+        8
+      );
+      if (nearby.length > 0) {
+        const nearbySet = new Set(nearby.map((hit) => hit.node.uuid));
+        return sortEdges(
+          categoryFiltered.filter(
+            (e) => nearbySet.has(e.source_uuid) || nearbySet.has(e.target_uuid)
+          )
+        ).slice(0, incidentCap);
+      }
     }
     if (isRegionalZoom && regionalCenter) {
       return sortEdges(
@@ -327,6 +349,95 @@ export function selectVisibleGlobeArcs(params: {
     );
 
   return pickSpatiallyDistinctArcs(ranked, nodeById, 6, spatialBucketDeg);
+}
+
+/**
+ * Selects which geo-pinned nodes should be rendered on the 3D globe.
+ * In default `focus` mode, nothing is shown until the user clicks a relation
+ * (showing its specific endpoints) or clicks a point/node (showing nearby
+ * nodes and the endpoints of its visible relations).
+ */
+export function selectVisibleGlobeNodes(params: {
+  nodes: ETGNode[];
+  visibleArcs: ETGEdge[];
+  mode: GlobeArcMode;
+  selectedNodeUuid: string | null;
+  probedAnchorUuid?: string | null;
+  probedCoord?: { lat: number; lng: number } | null;
+  selectedEdgeUuid: string | null;
+  cascadeEdgeUuids: string[];
+  nearbyRadiusKm?: number;
+  nearbyLimit?: number;
+}): ETGNode[] {
+  const {
+    nodes,
+    visibleArcs,
+    mode,
+    selectedNodeUuid,
+    probedAnchorUuid = null,
+    probedCoord = null,
+    selectedEdgeUuid,
+    cascadeEdgeUuids,
+    nearbyRadiusKm = 1200,
+    nearbyLimit = 10,
+  } = params;
+
+  const hasEdgeOrCascadeFocus =
+    selectedEdgeUuid !== null || cascadeEdgeUuids.length > 0;
+
+  if (hasEdgeOrCascadeFocus) {
+    const endpointIds = new Set<string>();
+    for (const arc of visibleArcs) {
+      endpointIds.add(arc.source_uuid);
+      endpointIds.add(arc.target_uuid);
+    }
+    if (selectedNodeUuid) {
+      endpointIds.add(selectedNodeUuid);
+    }
+    return nodes.filter((n) => endpointIds.has(n.uuid));
+  }
+
+  if (mode !== "focus" && mode !== "off") {
+    return nodes;
+  }
+
+  if (!selectedNodeUuid && !probedAnchorUuid && !probedCoord) {
+    return [];
+  }
+
+  const visibleIds = new Set<string>();
+  if (selectedNodeUuid) visibleIds.add(selectedNodeUuid);
+  if (probedAnchorUuid) visibleIds.add(probedAnchorUuid);
+  for (const arc of visibleArcs) {
+    visibleIds.add(arc.source_uuid);
+    visibleIds.add(arc.target_uuid);
+  }
+
+  let anchorCoord = probedCoord;
+  if (!anchorCoord && selectedNodeUuid) {
+    const sel = nodes.find((n) => n.uuid === selectedNodeUuid);
+    if (
+      sel &&
+      typeof sel.properties.lat === "number" &&
+      typeof sel.properties.lng === "number"
+    ) {
+      anchorCoord = { lat: sel.properties.lat, lng: sel.properties.lng };
+    }
+  }
+  if (anchorCoord) {
+    const nearby = findNearbyFilteredNodes(
+      anchorCoord.lat,
+      anchorCoord.lng,
+      nodes,
+      nearbyRadiusKm,
+      nearbyLimit
+    );
+    for (const hit of nearby) {
+      visibleIds.add(hit.node.uuid);
+    }
+  }
+
+  return nodes.filter((n) => visibleIds.has(n.uuid));
 }
 
 export const EARTH_RADIUS = 100;
@@ -690,7 +801,7 @@ export interface GlobePersistedPrefs {
   showPlaceLabels?: boolean;
 }
 
-export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v3";
+export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v4";
 
 export interface ProjectedArcLabel {
   uuid: string;

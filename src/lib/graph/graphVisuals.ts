@@ -28,8 +28,8 @@ export interface Point3D {
 export type DetailTier = "dots" | "compact" | "full";
 export type Layout2DMode = "force" | "causal_flow";
 
-export const CARD_WIDTH = 248;
-export const CARD_HEIGHT = 40;
+export const CARD_WIDTH = 296;
+export const CARD_HEIGHT = 76;
 export const MIN_ZOOM = 0.28;
 export const MAX_ZOOM = 2.6;
 
@@ -118,7 +118,7 @@ export function resolveDetailTier(zoom: number): DetailTier {
 export function wheelZoomStep(currentZoom: number, deltaY: number): number {
   const clampedDelta = Math.max(-120, Math.min(120, deltaY));
   const factor = Math.exp(-clampedDelta * 0.0018);
-  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentZoom * factor));
+  return Math.max(1e-5, Math.min(MAX_ZOOM, currentZoom * factor));
 }
 
 /** Deterministic string hash in [0, 1) */
@@ -746,7 +746,7 @@ export function computeLayout2D(
     }
 
     const colSpacing = CARD_WIDTH + 96;
-    const rowSpacing = CARD_HEIGHT + 34;
+    const rowSpacing = CARD_HEIGHT + 36;
     for (const [col, colNodes] of columns.entries()) {
       colNodes.sort((a, b) => a.properties.name.localeCompare(b.properties.name));
       const count = colNodes.length;
@@ -906,9 +906,9 @@ export function computeLayout2D(
   }
 
   // Deterministic rectangular AABB de-overlap pass for CARD_WIDTH × CARD_HEIGHT cards + padding
-  const minDx = CARD_WIDTH + 30;
-  const minDy = CARD_HEIGHT + 26;
-  for (let pass = 0; pass < 64; pass++) {
+  const minDx = CARD_WIDTH + 34;
+  const minDy = CARD_HEIGHT + 28;
+  for (let pass = 0; pass < 80; pass++) {
     let moved = false;
     for (let i = 0; i < nodes.length; i++) {
       const pa = pos.get(nodes[i].uuid)!;
@@ -975,6 +975,7 @@ export interface ScreenLabelCandidate {
   priority: number;
   extraWidthPx?: number;
   boxHeightPx?: number;
+  maxWidthPx?: number;
 }
 
 export interface PlacedScreenLabel extends ScreenLabelCandidate {
@@ -998,8 +999,9 @@ export function selectNonOverlappingLabels(
   for (const cand of sorted) {
     if (placed.length >= maxLabels) break;
     const extraW = cand.extraWidthPx ?? 0;
-    const textWidth = Math.min(188 + extraW, Math.max(76, cand.title.length * 6.4 + 24 + extraW));
-    const boxHeight = cand.boxHeightPx ?? 22;
+    const capW = cand.maxWidthPx ?? (260 + extraW);
+    const textWidth = Math.min(capW, Math.max(84, cand.title.length * 6.6 + 28 + extraW));
+    const boxHeight = cand.boxHeightPx ?? 26;
 
     const left = cand.x - textWidth / 2;
     const right = cand.x + textWidth / 2;

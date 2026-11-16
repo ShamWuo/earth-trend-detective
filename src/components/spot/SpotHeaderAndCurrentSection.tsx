@@ -10,6 +10,8 @@ import {
   Droplets,
   Gauge,
   MapPin,
+  Maximize2,
+  Minimize2,
   Satellite,
   Sun,
   Wind,
@@ -41,6 +43,7 @@ import {
   type GuidedCaseStudyItem,
   type SpotInspectorTab,
 } from "@/components/spot/spotCardShared";
+import { getTrendToneStyles } from "@/components/spot/TrendFindingHighlight";
 
 /** Structured spot header with uncrushed balanced heading, unit controls, and single-row ARIA tablist. */
 export function SpotCardHeader({
@@ -56,6 +59,8 @@ export function SpotCardHeader({
   onOpenSolarForSpot,
   mobileCollapsed,
   onToggleMobileCollapse,
+  isWide = false,
+  onToggleWide,
   activeTab,
   onSelectTab,
   visibleSummaryCount,
@@ -74,6 +79,8 @@ export function SpotCardHeader({
   onOpenSolarForSpot?: (lat: number, lng: number, label: string) => void;
   mobileCollapsed: boolean;
   onToggleMobileCollapse?: () => void;
+  isWide?: boolean;
+  onToggleWide?: () => void;
   activeTab: SpotInspectorTab;
   onSelectTab: (tab: SpotInspectorTab) => void;
   visibleSummaryCount: number;
@@ -116,14 +123,14 @@ export function SpotCardHeader({
   };
 
   return (
-    <div className="shrink-0 px-3 pt-2.5">
-      <div className="flex items-start justify-between gap-2">
+    <div className="shrink-0 px-4 pt-3.5">
+      <div className="flex items-start justify-between gap-2.5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[14px] font-semibold leading-snug text-text-primary">
+          <h2 className="text-[15px] sm:text-base font-semibold leading-snug text-text-primary">
             {cardTitle}
           </h2>
           {coord && !isComparingTwoSpots && (
-            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-text-subtle">
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-subtle">
               <span className="inline-flex items-center gap-1">
                 <MapPin className="h-3 w-3 shrink-0 text-accent-fg" aria-hidden="true" />
                 <span className="ws-numeric font-mono">{formatCoordShort(coord.lat, coord.lng)}</span>
@@ -210,6 +217,22 @@ export function SpotCardHeader({
             </button>
           )}
 
+          {onToggleWide && (
+            <button
+              type="button"
+              onClick={onToggleWide}
+              title={isWide ? "Restore standard panel width" : "Expand panel width"}
+              aria-label={isWide ? "Restore standard panel width" : "Expand panel width"}
+              className="etg-hud-btn hidden lg:inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-band hover:text-text-primary cursor-pointer"
+            >
+              {isWide ? (
+                <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onClose}
@@ -226,7 +249,7 @@ export function SpotCardHeader({
         role="tablist"
         aria-label="Spot inspector sections"
         onKeyDown={handleTabKeyDown}
-        className={`etg-tablist -mx-3 mt-1.5 px-3 ${mobileCollapsed ? "max-sm:hidden" : ""}`}
+        className={`etg-tablist -mx-4 mt-2 px-4 ${mobileCollapsed ? "max-sm:hidden" : ""}`}
       >
         {tabs.map((tab) => {
           const isSelected = activeTab === tab.id;
@@ -369,6 +392,7 @@ export function SpotComparisonModeSection({
           },
         ].map((side) => {
           const d = describeTrendPlainly(side.summary, tempUnit);
+          const toneStyles = getTrendToneStyles(d);
           return (
             <div key={side.id} className="ws-inset space-y-0.5 rounded-md p-2">
               <div className="flex items-center gap-1.5 text-[11px] font-semibold text-text-primary">
@@ -383,10 +407,11 @@ export function SpotComparisonModeSection({
                   </span>
                 </div>
               )}
-              <div className="text-[11px] font-medium text-text-secondary">
+              <div className={`text-[12px] font-semibold leading-snug ${toneStyles.headline}`}>
+                {toneStyles.dirSymbol !== "—" ? `${toneStyles.dirSymbol} ` : ""}
                 {d.headline}
               </div>
-              <div className="ws-numeric font-mono text-[11px] text-text-subtle">
+              <div className={`ws-numeric font-mono text-[11px] font-medium ${toneStyles.rate}`}>
                 {d.ratePerDecade}
               </div>
             </div>

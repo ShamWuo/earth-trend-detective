@@ -277,8 +277,14 @@ export function clearNasaPowerSeriesCache(): void {
   SERIES_CACHE.clear();
 }
 
-function cacheKey(lat: number, lng: number, dataset: ETGDatasetId): string {
-  return `${lat.toFixed(2)}:${lng.toFixed(2)}:${dataset}`;
+function cacheKey(
+  lat: number,
+  lng: number,
+  dataset: ETGDatasetId,
+  startYear = 1995,
+  endYear = 2025
+): string {
+  return `${lat.toFixed(2)}:${lng.toFixed(2)}:${dataset}:${startYear}:${endYear}`;
 }
 
 /**
@@ -439,7 +445,7 @@ export async function fetchEarthTimeSeries(
   }
   const clampedLat = coord.apiLat;
   const clampedLng = coord.apiLng;
-  const key = cacheKey(clampedLat, clampedLng, dataset);
+  const key = cacheKey(clampedLat, clampedLng, dataset, startYear, endYear);
   const cached = SERIES_CACHE.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return { ...cached.summary, provenanceMode: "cached" };
@@ -826,7 +832,7 @@ export async function fetchMultiParamNasaPower(
     }
     if (pts.length >= 5) {
       const config = POWER_PARAM_MAP[ds];
-      SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
+      SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds, startYear, endYear), {
         expiresAt: Date.now() + 1000 * 60 * 15,
         summary: enrichSummaryWithMonthlySeasonality(
           analyzeTimeSeries(pts, {
@@ -926,7 +932,7 @@ export async function fetchMultiDatasetSummariesDetailed(
   const now = Date.now();
 
   for (const ds of targets) {
-    const cached = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, ds));
+    const cached = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, ds, startYear, endYear));
     if (cached && cached.expiresAt > now) {
       resolved.set(ds, { ...cached.summary, provenanceMode: "cached" });
     } else {
@@ -1097,7 +1103,7 @@ export async function fetchMultiDatasetSummariesDetailed(
                 vpdMonthly
               )
             );
-            SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
+            SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds, startYear, endYear), {
               expiresAt: Date.now() + 1000 * 60 * 15,
               summary: vpdSummary,
             });
@@ -1144,7 +1150,7 @@ export async function fetchMultiDatasetSummariesDetailed(
             monthlyRawPoints
           )
         );
-        SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds), {
+        SERIES_CACHE.set(cacheKey(clampedLat, clampedLng, ds, startYear, endYear), {
           expiresAt: Date.now() + 1000 * 60 * 15,
           summary,
         });
@@ -1454,7 +1460,7 @@ export async function fetchRegionalMultiScaleSeries(
       provenanceMode: "live",
     });
   } else {
-    const stale = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, dataset));
+    const stale = SERIES_CACHE.get(cacheKey(clampedLat, clampedLng, dataset, startYear, endYear));
     if (stale) {
       summary = { ...stale.summary, provenanceMode: "cached" };
     } else {

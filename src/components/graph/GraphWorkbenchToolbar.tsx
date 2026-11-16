@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowRight, Database, GitBranchPlus, Plus, Sparkles, Waypoints, X } from "lucide-react";
+import { ArrowRight, Database, GitBranchPlus, Sparkles, Waypoints, X } from "lucide-react";
 import type { RegionOption } from "@/lib/graph/regionalSubgraph";
 import type { TraversalFilterState } from "@/components/graph/graphViewShared";
 
@@ -16,10 +16,10 @@ export interface GraphWorkbenchToolbarProps {
   candidateCount: number;
   traversalFilter: TraversalFilterState;
   inspectorOpen: boolean;
+  inspectorWide?: boolean;
   regionOptions?: RegionOption[];
   selectedRegionScope?: string | null;
   onToggleConnectMode?: () => void;
-  onOpenQuickAddNode?: () => void;
   onDiscoverLinks?: () => void;
   onClearCandidateLinks?: () => void;
   onChangeTraversalFilter?: (next: TraversalFilterState) => void;
@@ -42,10 +42,10 @@ export function GraphWorkbenchToolbar({
   candidateCount,
   traversalFilter,
   inspectorOpen,
+  inspectorWide = false,
   regionOptions = [],
   selectedRegionScope = null,
   onToggleConnectMode,
-  onOpenQuickAddNode,
   onDiscoverLinks,
   onClearCandidateLinks,
   onChangeTraversalFilter,
@@ -101,7 +101,9 @@ export function GraphWorkbenchToolbar({
     <div
       className={`etg-stage-hud-row pointer-events-none absolute top-2.5 left-11 z-20 flex flex-col items-center gap-1.5 transition-[right] duration-200 ${
         inspectorOpen
-          ? "right-2.5 sm:right-[22.75rem] xl:right-[23.75rem]"
+          ? inspectorWide
+            ? "right-2.5 sm:right-[26rem] lg:right-[33.5rem] xl:right-[36rem]"
+            : "right-2.5 sm:right-[26rem] lg:right-[28.5rem] xl:right-[30.5rem]"
           : "right-2.5"
       }`}
     >
@@ -113,22 +115,6 @@ export function GraphWorkbenchToolbar({
         className="etg-hud-pill pointer-events-auto flex max-w-full flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] rounded-lg bg-surface px-1.5 py-0.5 text-[10.5px] shadow-lg"
       >
         <div role="group" aria-label="Graph authoring actions" className="flex shrink-0 items-center gap-0.5">
-          {onOpenQuickAddNode && (
-            <button
-              type="button"
-              onClick={onOpenQuickAddNode}
-              title="Add Node to Graph"
-              aria-label="Add Node"
-              className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 font-medium text-text-primary hover:bg-surface-hover cursor-pointer"
-            >
-              <Plus
-                className="h-3 w-3 text-amber-400"
-                aria-hidden="true"
-              />
-              <span>Add</span>
-            </button>
-          )}
-
           {onToggleConnectMode && (
             <button
               type="button"
@@ -258,6 +244,14 @@ export function GraphWorkbenchToolbar({
           </>
         )}
 
+        <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+        <span
+          title="This Knowledge Graph is stored locally on this instance only because no shared database is configured yet."
+          className="inline-flex h-6 shrink-0 items-center rounded-sm border border-amber-500/30 bg-amber-950/40 px-2 font-mono text-[9.5px] font-medium text-amber-300"
+        >
+          Local Only · No DB
+        </span>
+
         {onChangeRegionScope && regionOptions.length > 0 && (
           <>
             <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
@@ -266,7 +260,7 @@ export function GraphWorkbenchToolbar({
                 aria-label="Move to region"
                 value={selectedRegionScope ?? ""}
                 onChange={(e) => onChangeRegionScope(e.target.value ? e.target.value : null)}
-                className="h-6 min-w-[112px] max-w-[180px] rounded-sm border border-border bg-surface-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-primary focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)] cursor-pointer"
+                className="h-6 min-w-[112px] max-w-[180px] sm:max-w-[340px] truncate rounded-sm border border-border bg-surface-elevated px-1.5 py-0.5 text-[10px] font-medium text-text-primary focus:border-accent-fg focus-visible:outline-2 focus-visible:outline-[var(--accent-fg)] cursor-pointer"
               >
                 <option value="">All Regions</option>
                 {regionOptions.map((opt) => (

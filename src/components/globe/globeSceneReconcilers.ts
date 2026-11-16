@@ -24,6 +24,7 @@ import {
   lngSpanDeg,
   resolveComparisonArcVisuals,
   selectVisibleGlobeArcs,
+  selectVisibleGlobeNodes,
   vector3ToLatLng,
   type ComparisonArcVisualMeta,
   type GlobeArcMode,
@@ -139,6 +140,7 @@ export function reconcileMarkersAndArcs(params: {
   arcMode: GlobeArcMode;
   selectedNodeUuid: string | null;
   probedAnchorUuid: string | null;
+  probedCoord?: { lat: number; lng: number } | null;
   selectedEdgeUuid: string | null;
   cascadeEdgeUuids: string[];
   enabledCategories?: ReadonlyArray<RelationCategory>;
@@ -154,6 +156,7 @@ export function reconcileMarkersAndArcs(params: {
     arcMode,
     selectedNodeUuid,
     probedAnchorUuid,
+    probedCoord = null,
     selectedEdgeUuid,
     cascadeEdgeUuids,
     enabledCategories,
@@ -176,11 +179,23 @@ export function reconcileMarkersAndArcs(params: {
     mode: arcMode,
     selectedNodeUuid,
     probedAnchorUuid,
+    probedCoord,
     selectedEdgeUuid,
     cascadeEdgeUuids,
     enabledCategories,
     isRegionalZoom,
     regionalCenter: isRegionalZoom ? { lat: regBucketLat, lng: regBucketLng } : null,
+  });
+
+  const visibleNodes = selectVisibleGlobeNodes({
+    nodes,
+    visibleArcs,
+    mode: arcMode,
+    selectedNodeUuid,
+    probedAnchorUuid,
+    probedCoord,
+    selectedEdgeUuid,
+    cascadeEdgeUuids,
   });
 
   const hasEdgeOrCascadeFocus =
@@ -201,7 +216,7 @@ export function reconcileMarkersAndArcs(params: {
   const nodeById = new Map(nodes.map((n) => [n.uuid, n]));
 
   // Render sleek, calm orbital beacons for geo-pinned nodes
-  nodes.forEach((node, idx) => {
+  visibleNodes.forEach((node, idx) => {
     const { lat, lng } = node.properties;
     if (lat === undefined || lng === undefined) return;
 
@@ -905,6 +920,7 @@ export function projectGlobeOverlayLabels(params: {
   currentW: number;
   currentH: number;
   inspectorOpen: boolean;
+  inspectorWide?: boolean;
   isRegionalZoom: boolean;
   showPins: boolean;
   showArcLabels: boolean;
@@ -928,6 +944,7 @@ export function projectGlobeOverlayLabels(params: {
     currentW,
     currentH,
     inspectorOpen,
+    inspectorWide = false,
     isRegionalZoom,
     showPins,
     showArcLabels,
@@ -947,15 +964,27 @@ export function projectGlobeOverlayLabels(params: {
 
   camera.updateMatrixWorld();
   camUnitVec.copy(camera.position).normalize();
-  const rightCutoff = inspectorOpen && currentW >= 1024 ? currentW - 430 : currentW - 60;
+  const panelAllowance = inspectorWide
+    ? currentW >= 1280
+      ? 588
+      : 548
+    : currentW >= 1280
+      ? 500
+      : 468;
+  const rightCutoff =
+    inspectorOpen && currentW >= 1024 ? currentW - panelAllowance : currentW - 60;
   const occupiedBoxes: Array<{ x: number; y: number }> = [];
 
   // 1. Project nearby station badges when zoomed into a regional swath
   if (isRegionalZoom && showPins) {
     tmpSphVec.setFromSpherical(spherical);
     const subCenter = vector3ToLatLng(tmpSphVec);
+    const renderedNodeIds = refs
+      ? new Set(Array.from(refs.markerMap.values(), (node) => node.uuid))
+      : null;
     const nearby = nodes
       .filter((n) => {
+        if (renderedNodeIds && !renderedNodeIds.has(n.uuid)) return false;
         const nLat = n.properties.lat;
         const nLng = n.properties.lng;
         if (nLat === undefined || nLng === undefined) return false;

@@ -10,7 +10,6 @@ import {
   computeRegionClusters2D,
   formatEdgeRelationLabel,
   MAX_ZOOM,
-  MIN_ZOOM,
   type Point2D,
   resolveDetailTier,
   resolveEtgEdgeColor,
@@ -169,12 +168,12 @@ export function GraphCanvas2D({
   const recenterToFit = useCallback(
     (animate = false) => {
       const { width, height } = viewportSize;
-      const rightInset = hasRightPanel && width >= 900 ? 440 : 0;
+      const rightInset = hasRightPanel && width >= 900 ? (width >= 1280 ? 496 : 456) : 0;
       const usableWidth = Math.max(320, width - rightInset);
       const graphW = Math.max(320, bounds.maxX - bounds.minX + CARD_WIDTH + 32);
       const graphH = Math.max(240, bounds.maxY - bounds.minY + CARD_HEIGHT + 48);
       const fitZoom = Math.max(
-        MIN_ZOOM,
+        1e-5,
         Math.min(1.08, Math.min((usableWidth * 0.86) / graphW, (height * 0.78) / graphH))
       );
       const cx = (bounds.minX + bounds.maxX) / 2;
@@ -198,7 +197,12 @@ export function GraphCanvas2D({
     (clusterId: string) => {
       const target = regionClusters2D.find((c) => c.id === clusterId);
       if (!target) return;
-      const rightInset = hasRightPanel && viewportSize.width >= 900 ? 440 : 0;
+      const rightInset =
+        hasRightPanel && viewportSize.width >= 900
+          ? viewportSize.width >= 1280
+            ? 496
+            : 456
+          : 0;
       const focusZoom = Math.max(
         0.86,
         Math.min(1.18, cameraRef.current.zoom < 0.8 ? 0.96 : cameraRef.current.zoom)
@@ -417,7 +421,7 @@ export function GraphCanvas2D({
     (factor: number) => {
       cancelCameraAnim2D();
       setCamera((prev) => {
-        const nextZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor));
+        const nextZoom = Math.max(1e-5, Math.min(MAX_ZOOM, prev.zoom * factor));
         const scale = nextZoom / prev.zoom;
         return {
           zoom: nextZoom,
@@ -480,7 +484,7 @@ export function GraphCanvas2D({
       };
     }
     const halfW = CARD_WIDTH / 2 + 2;
-    const halfH = 22;
+    const halfH = CARD_HEIGHT / 2 + 2;
     return {
       startPt: intersectBoxBorder(p1, ctrl, halfW, halfH),
       endPt: intersectBoxBorder(p2, ctrl, halfW, halfH),
@@ -814,11 +818,11 @@ export function GraphCanvas2D({
                 pointerEvents="none"
               >
                 <rect
-                  x={-(item.pillLabel.length * 3.1 + 10)}
-                  y={-10}
-                  width={item.pillLabel.length * 6.2 + 20}
-                  height={20}
-                  rx={3}
+                  x={-(item.pillLabel.length * 3.2 + 12)}
+                  y={-11}
+                  width={item.pillLabel.length * 6.4 + 24}
+                  height={22}
+                  rx={5}
                   fill={isLightTheme ? "#ffffff" : "#11141d"}
                   stroke={item.strokeColor}
                   strokeWidth={1}
@@ -826,7 +830,7 @@ export function GraphCanvas2D({
                 <text
                   textAnchor="middle"
                   dominantBaseline="central"
-                  fontSize={9}
+                  fontSize={9.5}
                   fontWeight={600}
                   letterSpacing="0.05em"
                   fill={item.strokeColor}
@@ -899,11 +903,11 @@ export function GraphCanvas2D({
                 />
                 <g transform={`translate(${midX}, ${midY})`}>
                   <rect
-                    x={-(ghostLabel.length * 3.1 + 10)}
-                    y={-10}
-                    width={ghostLabel.length * 6.2 + 20}
-                    height={20}
-                    rx={3}
+                    x={-(ghostLabel.length * 3.2 + 12)}
+                    y={-11}
+                    width={ghostLabel.length * 6.4 + 24}
+                    height={22}
+                    rx={5}
                     fill={isLightTheme ? "#f5f3ff" : "#1b1630"}
                     stroke="#a78bfa"
                     strokeWidth={1.1}
@@ -911,7 +915,7 @@ export function GraphCanvas2D({
                   <text
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize={9}
+                    fontSize={9.5}
                     fontWeight={600}
                     fill={isLightTheme ? "#5b21b6" : "#ddd6fe"}
                   >

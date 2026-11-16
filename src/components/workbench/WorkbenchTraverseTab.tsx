@@ -108,7 +108,7 @@ function NeighborLinkList({
 }) {
   const isIncoming = direction === "incoming";
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {isIncoming ? (
         <div className="flex items-center justify-between">
           <span className="ws-eyebrow text-sky-400">
@@ -121,27 +121,27 @@ function NeighborLinkList({
         </span>
       )}
       {links.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border px-3 py-2 text-[11px] text-text-muted">
+        <div className="rounded-md border border-dashed border-border px-3.5 py-2.5 text-xs text-text-muted">
           {isIncoming
             ? "No incoming driver edges yet. Wire one or click Discover Links."
             : "No outgoing downstream edges yet."}
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {links.map(({ edge, node }) => (
             <div
               key={edge.properties.uuid}
-              className="flex items-center justify-between gap-2 rounded-md border border-border bg-surface-inset px-2 py-1.5"
+              className="flex items-start justify-between gap-3 rounded-md border border-border bg-surface-inset px-3 py-2.5"
             >
               <button
                 type="button"
                 onClick={() => onSelectNode(node)}
                 className="min-w-0 flex-1 text-left cursor-pointer group"
               >
-                <div className="ws-numeric truncate font-medium text-text-primary group-hover:text-accent-fg">
+                <div className="ws-numeric text-[12.5px] font-medium leading-snug text-text-primary group-hover:text-accent-fg line-clamp-2">
                   {isIncoming ? node.properties.name : `→ ${node.properties.name}`}
                 </div>
-                <div className="ws-numeric flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-text-muted">
+                <div className="ws-numeric mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-text-muted">
                   <span style={{ color: resolveEtgEdgeColor(edge.type) }}>
                     {formatEdgeRelationLabel(edge.type, edge.properties.custom_label)}
                   </span>
@@ -175,24 +175,24 @@ function NeighborLinkList({
                     )}
                 </div>
               </button>
-              <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1 shrink-0 pt-0.5">
                 <button
                   type="button"
                   onClick={() => onSelectEdge(edge)}
                   title={isIncoming ? "Edit connection" : undefined}
                   aria-label={`Edit edge ${isIncoming ? "from" : "to"} ${formatEdgeAriaTarget(node.properties.name)}`}
-                  className="rounded p-1 text-text-muted hover:text-text-primary cursor-pointer"
+                  className="rounded p-1.5 text-text-muted hover:text-text-primary cursor-pointer"
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3.5 w-3.5" />
                 </button>
                 <button
                   type="button"
                   onClick={() => void onDeleteEdge(edge.properties.uuid)}
                   title={isIncoming ? "Unlink" : undefined}
                   aria-label={`Unlink ${formatEdgeAriaTarget(node.properties.name)}`}
-                  className="rounded p-1 text-text-muted hover:text-rose-400 cursor-pointer"
+                  className="rounded p-1.5 text-text-muted hover:text-rose-400 cursor-pointer"
                 >
-                  <Unlink className="h-3 w-3" />
+                  <Unlink className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
@@ -442,7 +442,13 @@ export function WorkbenchTraverseTab({
   };
 
   return (
-    <div className="space-y-2.5 p-2.5">
+    <div className="space-y-4 p-4">
+      {selectedNode.properties.description && (
+        <p className="rounded-md border border-border/80 bg-surface-inset/70 px-3.5 py-2.5 text-xs leading-relaxed text-text-muted line-clamp-3">
+          {humanizeNodeText(selectedNode.properties.description)}
+        </p>
+      )}
+
       {microscopeCue &&
         (() => {
           const secPct = Math.round(microscopeCue.dealiasing.secularShare * 100);
@@ -472,25 +478,25 @@ export function WorkbenchTraverseTab({
                 : "→ stable";
 
           return (
-            <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2">
-              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="ws-eyebrow flex items-center gap-1 text-sky-400">
-                    <Sparkles className="h-3 w-3" />
+            <div className="space-y-3 rounded-md border border-border bg-surface-inset p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="ws-eyebrow flex items-center gap-1.5 text-sky-400">
+                    <Sparkles className="h-3.5 w-3.5" />
                     ETG Trend Microscope
                   </span>
-                  <span className="rounded-xs border border-border bg-surface px-1 py-0.5 font-mono text-[9px] text-text-subtle">
+                  <span className="rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-text-subtle">
                     {engineLabel}
                   </span>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   {microscopeCue.preMannKendallAlert && (
-                    <span className="rounded-xs border border-sky-400 bg-sky-950 px-1.5 py-0.5 font-mono text-[9px] font-bold text-sky-300">
+                    <span className="rounded-xs border border-sky-400 bg-sky-950 px-1.5 py-0.5 font-mono text-[10px] font-bold text-sky-300">
                       PRE-MK
                     </span>
                   )}
                   <span
-                    className={`rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${BADGE_STYLES[microscopeCue.radarBadge].cls}`}
+                    className={`rounded-xs border px-2 py-0.5 text-[11px] font-semibold ${BADGE_STYLES[microscopeCue.radarBadge].cls}`}
                   >
                     {BADGE_STYLES[microscopeCue.radarBadge].label}
                   </span>
@@ -498,24 +504,52 @@ export function WorkbenchTraverseTab({
               </div>
 
               {/* Head 1: Early Inflection Radar */}
-              <div className="ws-numeric flex flex-wrap items-center gap-x-2.5 gap-y-0.5 font-mono text-[10px] text-text-muted">
-                <span>Onset {Math.round(microscopeCue.onsetProb * 100)}%</span>
-                <span>{dirLabel}</span>
-                {microscopeCue.leadStepsAhead > 0 && (
-                  <span>Lead +{microscopeCue.leadStepsAhead.toFixed(1)} steps</span>
-                )}
-                <span>|Z| {microscopeCue.mkAbsZ.toFixed(2)}</span>
-                <span>Trust {Math.round(microscopeCue.trustGate * 100)}%</span>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="rounded-sm border border-border/70 bg-surface px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-text-subtle">
+                    Onset
+                  </div>
+                  <div className="ws-numeric mt-0.5 font-mono text-xs font-semibold text-text-primary">
+                    {Math.round(microscopeCue.onsetProb * 100)}%
+                  </div>
+                </div>
+                <div className="rounded-sm border border-border/70 bg-surface px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-text-subtle">
+                    Trajectory
+                  </div>
+                  <div className="ws-numeric mt-0.5 font-mono text-xs font-semibold text-text-primary">
+                    {dirLabel}
+                    {microscopeCue.leadStepsAhead > 0
+                      ? ` (+${microscopeCue.leadStepsAhead.toFixed(1)})`
+                      : ""}
+                  </div>
+                </div>
+                <div className="rounded-sm border border-border/70 bg-surface px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-text-subtle">
+                    MK |Z|
+                  </div>
+                  <div className="ws-numeric mt-0.5 font-mono text-xs font-semibold text-text-primary">
+                    {microscopeCue.mkAbsZ.toFixed(2)}
+                  </div>
+                </div>
+                <div className="rounded-sm border border-border/70 bg-surface px-2.5 py-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-text-subtle">
+                    Trust
+                  </div>
+                  <div className="ws-numeric mt-0.5 font-mono text-xs font-semibold text-text-primary">
+                    {Math.round(microscopeCue.trustGate * 100)}%
+                  </div>
+                </div>
               </div>
 
               {/* Head 3: 3-Simplex Cycle / Artifact De-Aliasing */}
-              <div className="space-y-1">
-                <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface">
+              <div className="space-y-1.5">
+                <div className="flex h-2 w-full overflow-hidden rounded-full bg-surface">
                   <div className="bg-emerald-400" style={{ width: `${secPct}%` }} />
                   <div className="bg-purple-400" style={{ width: `${cycPct}%` }} />
                   <div className="bg-rose-400" style={{ width: `${artPct}%` }} />
                 </div>
-                <div className="ws-numeric flex flex-wrap justify-between gap-x-2 font-mono text-[9.5px] text-text-subtle">
+                <div className="ws-numeric flex flex-wrap justify-between gap-x-3 gap-y-1 font-mono text-[11px] text-text-subtle">
                   <span>Secular {secPct}%</span>
                   <span>Cycle {cycPct}%</span>
                   <span>Artifact {artPct}%</span>
@@ -523,15 +557,15 @@ export function WorkbenchTraverseTab({
                     False Risk {Math.round(microscopeCue.dealiasing.falseTrendProb * 100)}%
                   </span>
                 </div>
-                <p className="text-[11px] leading-snug text-text-muted">
+                <p className="text-xs leading-relaxed text-text-muted">
                   {formatMicroscopeNodeSummary(microscopeCue)}
                 </p>
               </div>
 
               {/* Head 2: Verified Lead-Lag Couplings vs Suppressed Illusions */}
               {anchoredCouplings.length > 0 && (
-                <div className="space-y-1 border-t border-border/70 pt-1.5">
-                  <div className="font-mono text-[9px] font-semibold uppercase tracking-wide text-emerald-400">
+                <div className="space-y-2 border-t border-border/70 pt-2.5">
+                  <div className="font-mono text-[10.5px] font-semibold uppercase tracking-wide text-emerald-400">
                     Verified Lead-Lag Couplings ({anchoredCouplings.length})
                   </div>
                   {anchoredCouplings.map((c) => {
@@ -549,10 +583,10 @@ export function WorkbenchTraverseTab({
                     return (
                       <div
                         key={key}
-                        className="flex items-center justify-between gap-2 rounded-sm border border-border/80 bg-surface px-2 py-1"
+                        className="flex items-start justify-between gap-2.5 rounded-sm border border-border/80 bg-surface p-2.5"
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1 text-[10px]">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs leading-snug">
                             <span
                               className={`font-semibold ${
                                 c.polarity === "drives_opposite"
@@ -566,23 +600,23 @@ export function WorkbenchTraverseTab({
                               <button
                                 type="button"
                                 onClick={() => onSelectNode(peerNode)}
-                                className="truncate font-medium text-text-primary hover:text-accent-fg hover:underline cursor-pointer text-left"
+                                className="font-medium text-text-primary hover:text-accent-fg hover:underline cursor-pointer text-left"
                               >
                                 {peerNode.properties.name}
                               </button>
                             ) : (
-                              <span className="truncate text-text-primary">
+                              <span className="text-text-primary">
                                 {c.sourceUuid === selectedNode.uuid ? c.targetName : c.sourceName}
                               </span>
                             )}
                           </div>
-                          <div className="ws-numeric font-mono text-[9px] text-text-subtle">
+                          <div className="ws-numeric font-mono text-[11px] text-text-subtle">
                             lag={c.optimalLagSteps} · P={Math.round(c.trueCouplingProb * 100)}% · r=
                             {c.rawPeakR.toFixed(2)}→{c.cleanPeakR.toFixed(2)}
                           </div>
                         </div>
                         {isWired ? (
-                          <span className="shrink-0 rounded-xs border border-emerald-400 bg-emerald-950 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-emerald-300">
+                          <span className="shrink-0 rounded-xs border border-emerald-400 bg-emerald-950 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-300">
                             Wired
                           </span>
                         ) : (
@@ -590,7 +624,7 @@ export function WorkbenchTraverseTab({
                             type="button"
                             disabled={wiringMicroscopeKey === key}
                             onClick={() => void handleWireMicroscopeCoupling(c)}
-                            className="shrink-0 rounded-xs border border-amber-400 bg-amber-950 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-amber-300 hover:border-amber-300 disabled:opacity-50 cursor-pointer"
+                            className="shrink-0 rounded-xs border border-amber-400 bg-amber-950 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-300 hover:border-amber-300 disabled:opacity-50 cursor-pointer"
                           >
                             {wiringMicroscopeKey === key ? "Wiring…" : "+ Wire"}
                           </button>
@@ -602,23 +636,23 @@ export function WorkbenchTraverseTab({
               )}
 
               {anchoredIllusions.length > 0 && (
-                <div className="space-y-1 border-t border-border/70 pt-1.5">
-                  <div className="font-mono text-[9px] font-semibold uppercase tracking-wide text-amber-400">
+                <div className="space-y-2 border-t border-border/70 pt-2.5">
+                  <div className="font-mono text-[10.5px] font-semibold uppercase tracking-wide text-amber-400">
                     Suppressed Seasonal / Drift Illusions ({anchoredIllusions.length})
                   </div>
                   {anchoredIllusions.map((ill) => (
                     <div
                       key={`${ill.sourceUuid}--${ill.targetUuid}`}
-                      className="rounded-sm border border-dashed border-amber-400/50 bg-amber-950/35 px-2 py-1 text-[10px]"
+                      className="space-y-1.5 rounded-sm border border-dashed border-amber-400/50 bg-amber-950/35 p-2.5 text-xs"
                     >
-                      <div className="font-medium text-amber-300">
+                      <div className="font-medium leading-snug text-amber-300">
                         {ill.sourceName} ↔ {ill.targetName}
                       </div>
-                      <div className="ws-numeric font-mono text-[9.5px] text-text-muted">
+                      <div className="ws-numeric font-mono text-[11px] text-text-muted">
                         De-trended r={ill.cleanPeakR.toFixed(2)} (raw r={ill.rawPeakR.toFixed(2)}) ·{" "}
                         {Math.round(ill.confounderProb * 100)}% confounder risk
                       </div>
-                      <div className="text-[10px] leading-snug text-text-subtle">
+                      <div className="text-[11.5px] leading-relaxed text-text-subtle">
                         {formatMicroscopeLinkSummary(ill)}
                       </div>
                     </div>
@@ -630,14 +664,14 @@ export function WorkbenchTraverseTab({
         })()}
 
       {(supersededByItems.length > 0 || supersedesPriorItems.length > 0) && (
-        <div className="space-y-1.5 rounded-md border border-purple-400/50 bg-purple-950/30 p-2.5">
-          <div className="ws-eyebrow flex items-center gap-1 text-purple-300">
-            <Waypoints className="h-3 w-3" />
+        <div className="space-y-2.5 rounded-md border border-purple-400/50 bg-purple-950/30 p-3.5">
+          <div className="ws-eyebrow flex items-center gap-1.5 text-purple-300">
+            <Waypoints className="h-3.5 w-3.5" />
             Epistemic Belief-Revision Lineage (supersedes)
           </div>
           {supersededByItems.map(({ node: newerNode, rationale }) => (
-            <div key={`by-${newerNode.uuid}`} className="space-y-0.5 text-[10.5px]">
-              <div className="flex flex-wrap items-center gap-1 text-text-muted">
+            <div key={`by-${newerNode.uuid}`} className="space-y-1 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5 text-text-muted">
                 <span className="font-semibold text-amber-300">Superseded by →</span>
                 <button
                   type="button"
@@ -647,12 +681,14 @@ export function WorkbenchTraverseTab({
                   {newerNode.properties.name}
                 </button>
               </div>
-              {rationale && <div className="text-[10px] text-text-subtle">{rationale}</div>}
+              {rationale && (
+                <div className="text-xs leading-relaxed text-text-muted">{rationale}</div>
+              )}
             </div>
           ))}
           {supersedesPriorItems.map(({ node: priorNode, rationale }) => (
-            <div key={`prior-${priorNode.uuid}`} className="space-y-0.5 text-[10.5px]">
-              <div className="flex flex-wrap items-center gap-1 text-text-muted">
+            <div key={`prior-${priorNode.uuid}`} className="space-y-1 text-xs">
+              <div className="flex flex-wrap items-center gap-1.5 text-text-muted">
                 <span className="font-semibold text-emerald-300">Supersedes prior →</span>
                 <button
                   type="button"
@@ -662,19 +698,21 @@ export function WorkbenchTraverseTab({
                   {priorNode.properties.name}
                 </button>
               </div>
-              {rationale && <div className="text-[10px] text-text-subtle">{rationale}</div>}
+              {rationale && (
+                <div className="text-xs leading-relaxed text-text-muted">{rationale}</div>
+              )}
             </div>
           ))}
         </div>
       )}
 
       {traversalHistory.length > 1 && (
-        <div className="space-y-1">
-          <div className="ws-eyebrow flex items-center gap-1">
-            <History className="h-3 w-3" />
+        <div className="space-y-1.5">
+          <div className="ws-eyebrow flex items-center gap-1.5">
+            <History className="h-3.5 w-3.5" />
             Traversal Trail
           </div>
-          <div className="flex flex-wrap items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1.5">
             {traversalHistory.slice(-5).map((crumb, idx, arr) => {
               const target = nodeById.get(crumb.uuid);
               const isCurrent = crumb.uuid === selectedNode.uuid;
@@ -685,18 +723,18 @@ export function WorkbenchTraverseTab({
                     disabled={!target || isCurrent}
                     onClick={() => target && onSelectNode(target)}
                     title={humanizeNodeText(crumb.name)}
-                    className={`rounded-xs px-1.5 py-0.5 text-[10px] ${
+                    className={`rounded-xs px-2 py-1 text-[11px] ${
                       isCurrent
                         ? "border border-accent-fg bg-amber-950 font-semibold text-amber-300"
                         : "bg-surface-inset text-text-muted hover:text-text-primary cursor-pointer"
                     }`}
                   >
-                    <span className="block max-w-[9.5rem] truncate">
+                    <span className="block max-w-[12rem] truncate">
                       {humanizeNodeText(crumb.name)}
                     </span>
                   </button>
                   {idx < arr.length - 1 && (
-                    <span className="text-[10px] text-text-subtle">→</span>
+                    <span className="text-[11px] text-text-subtle">→</span>
                   )}
                 </React.Fragment>
               );
@@ -722,25 +760,25 @@ export function WorkbenchTraverseTab({
       />
 
       {governanceLinks.length > 0 && (
-        <details className="rounded-md border border-border bg-surface-inset p-2">
-          <summary className="cursor-pointer select-none text-[11px] font-semibold text-text-muted">
+        <details className="rounded-md border border-border bg-surface-inset p-3.5">
+          <summary className="cursor-pointer select-none text-xs font-semibold text-text-muted">
             Observational Corroboration &amp; Governance ({governanceLinks.length})
           </summary>
-          <div className="mt-2 space-y-1.5">
+          <div className="mt-2.5 space-y-2">
             {governanceLinks.map(({ edge, node, dir }) => (
               <div
                 key={edge.properties.uuid}
-                className="flex items-center justify-between gap-2 rounded-sm border border-border/80 bg-surface px-2 py-1"
+                className="flex items-start justify-between gap-2.5 rounded-sm border border-border/80 bg-surface px-3 py-2"
               >
                 <button
                   type="button"
                   onClick={() => onSelectNode(node)}
                   className="min-w-0 flex-1 text-left cursor-pointer group"
                 >
-                  <div className="ws-numeric truncate text-[11px] font-medium text-text-primary group-hover:text-accent-fg">
+                  <div className="ws-numeric text-xs font-medium leading-snug text-text-primary group-hover:text-accent-fg line-clamp-2">
                     {dir === "incoming" ? `← ${node.properties.name}` : `→ ${node.properties.name}`}
                   </div>
-                  <div className="ws-numeric flex flex-wrap items-center gap-x-2 text-[10px] text-text-muted">
+                  <div className="ws-numeric mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-text-muted">
                     <span style={{ color: resolveEtgEdgeColor(edge.type) }}>
                       {formatEdgeRelationLabel(edge.type, edge.properties.custom_label)}
                     </span>
@@ -754,17 +792,17 @@ export function WorkbenchTraverseTab({
                     type="button"
                     onClick={() => onSelectEdge(edge)}
                     aria-label={`Edit edge ${dir === "incoming" ? "from" : "to"} ${formatEdgeAriaTarget(node.properties.name)}`}
-                    className="rounded p-1 text-text-muted hover:text-text-primary cursor-pointer"
+                    className="rounded p-1.5 text-text-muted hover:text-text-primary cursor-pointer"
                   >
-                    <Pencil className="h-3 w-3" />
+                    <Pencil className="h-3.5 w-3.5" />
                   </button>
                   <button
                     type="button"
                     onClick={() => void onDeleteEdge(edge.properties.uuid)}
                     aria-label={`Unlink ${formatEdgeAriaTarget(node.properties.name)}`}
-                    className="rounded p-1 text-text-muted hover:text-rose-400 cursor-pointer"
+                    className="rounded p-1.5 text-text-muted hover:text-rose-400 cursor-pointer"
                   >
-                    <Unlink className="h-3 w-3" />
+                    <Unlink className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
@@ -775,10 +813,10 @@ export function WorkbenchTraverseTab({
 
       {/* Multi-Hop Scientific Path Tracer */}
       {physicalPathTargetOptions.length > 0 && (
-        <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2">
+        <div className="space-y-2.5 rounded-md border border-border bg-surface-inset p-3.5">
           <div className="flex items-center justify-between gap-2">
-            <span className="ws-eyebrow flex items-center gap-1 text-sky-400">
-              <Route className="h-3 w-3" />
+            <span className="ws-eyebrow flex items-center gap-1.5 text-sky-400">
+              <Route className="h-3.5 w-3.5" />
               Multi-Hop Scientific Path Tracer
             </span>
             {onHighlightCascadeEdges && (highlightedPathIdx !== null || tracedPaths.length > 0) && (
@@ -788,13 +826,13 @@ export function WorkbenchTraverseTab({
                   onHighlightCascadeEdges([]);
                   setHighlightedPathIdx(null);
                 }}
-                className="rounded-xs border border-border bg-surface px-1.5 py-0.5 text-[9.5px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
+                className="rounded-xs border border-border bg-surface px-2 py-0.5 text-[10.5px] font-medium text-text-muted hover:text-text-primary cursor-pointer"
               >
                 Clear Highlight
               </button>
             )}
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <label htmlFor={`${baseId}-path-target`} className="sr-only">
               Target phenomenon node for multi-hop path trace
             </label>
@@ -802,7 +840,7 @@ export function WorkbenchTraverseTab({
               id={`${baseId}-path-target`}
               value={pathTargetUuid}
               onChange={(e) => setPathTargetUuid(e.target.value)}
-              className="form-input flex-1 text-[11px]"
+              className="form-input flex-1 text-xs"
             >
               <option value="">Trace mechanism to node…</option>
               {physicalPathTargetOptions.map((n) => (
@@ -815,23 +853,23 @@ export function WorkbenchTraverseTab({
               type="button"
               disabled={!pathTargetUuid || pathTracing}
               onClick={() => void handleTraceScientificPaths()}
-              className="rounded-sm border border-sky-400 bg-sky-950 px-2.5 py-1 text-[10.5px] font-semibold text-sky-300 hover:border-sky-300 disabled:opacity-45 cursor-pointer"
+              className="rounded-sm border border-sky-400 bg-sky-950 px-3 py-1.5 text-[11.5px] font-semibold text-sky-300 hover:border-sky-300 disabled:opacity-45 cursor-pointer"
             >
               {pathTracing ? "Tracing…" : "Trace Path"}
             </button>
           </div>
           {pathTraceError && (
-            <div className="rounded-xs border border-rose-400/60 bg-rose-950/60 px-2 py-1 text-[10px] text-rose-300">
+            <div className="rounded-xs border border-rose-400/60 bg-rose-950/60 px-3 py-2 text-[11px] text-rose-300">
               {pathTraceError}
             </div>
           )}
           {pathTraceRan && tracedPaths.length === 0 && !pathTraceError && (
-            <div className="rounded-xs border border-dashed border-border px-2 py-1 text-[10px] text-text-subtle">
+            <div className="rounded-xs border border-dashed border-border px-3 py-2 text-[11px] text-text-subtle">
               No hub-free physical path found within 4 hops between these endpoints.
             </div>
           )}
           {tracedPaths.length > 0 && (
-            <div className="space-y-1.5 pt-1">
+            <div className="space-y-2 pt-1">
               {tracedPaths.slice(0, 3).map((path, idx) => {
                 const negCount = (path.edgeTypes ?? []).filter(
                   (t) => t === "drives_opposite" || t === "dampens"
@@ -841,16 +879,16 @@ export function WorkbenchTraverseTab({
                 return (
                   <div
                     key={`${path.edgeUuids.join(",")}-${idx}`}
-                    className={`rounded-sm border px-2 py-1.5 space-y-1 ${
+                    className={`space-y-1.5 rounded-sm border px-3 py-2 ${
                       isHighlighted
                         ? "border-sky-400 bg-sky-950/40"
                         : "border-border/80 bg-surface"
                     }`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-1 text-[10px]">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
                       <div className="flex items-center gap-1.5 font-mono ws-numeric">
                         <span
-                          className={`rounded-xs border px-1 py-0.5 text-[9px] font-bold ${
+                          className={`rounded-xs border px-1.5 py-0.5 text-[10px] font-bold ${
                             isOpposite
                               ? "border-rose-400 bg-rose-950 text-rose-300"
                               : "border-emerald-400 bg-emerald-950 text-emerald-300"
@@ -880,13 +918,13 @@ export function WorkbenchTraverseTab({
                               setHighlightedPathIdx(idx);
                             }
                           }}
-                          className="rounded-xs border border-sky-400/70 bg-sky-950/70 px-1.5 py-0.5 text-[9.5px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
+                          className="rounded-xs border border-sky-400/70 bg-sky-950/70 px-2 py-0.5 text-[10.5px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
                         >
                           {isHighlighted ? "Highlighted" : "Highlight on Canvas"}
                         </button>
                       )}
                     </div>
-                    <div className="flex flex-wrap items-center gap-1 text-[10px] text-text-primary">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs leading-relaxed text-text-primary">
                       {path.nodeUuids.map((uid, nIdx) => {
                         const n = nodeById.get(uid);
                         return (
@@ -895,7 +933,7 @@ export function WorkbenchTraverseTab({
                               <button
                                 type="button"
                                 onClick={() => onSelectNode(n)}
-                                className="max-w-[9rem] truncate underline decoration-border hover:text-accent-fg cursor-pointer text-left"
+                                className="max-w-[13rem] truncate underline decoration-border hover:text-accent-fg cursor-pointer text-left"
                               >
                                 {n.properties.name}
                               </button>
@@ -903,7 +941,7 @@ export function WorkbenchTraverseTab({
                               <span className="truncate">{uid}</span>
                             )}
                             {nIdx < path.nodeUuids.length - 1 && (
-                              <span className="text-text-subtle font-mono text-[9px]">
+                              <span className="font-mono text-[10.5px] text-text-subtle">
                                 →[{path.edgeTypes?.[nIdx] ?? "link"}]→
                               </span>
                             )}
@@ -921,34 +959,34 @@ export function WorkbenchTraverseTab({
 
       {/* Downstream +1sigma Perturbation Preview */}
       {downstreamPerturbations.length > 0 && (
-        <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2">
-          <div className="ws-eyebrow flex items-center gap-1 text-amber-400">
-            <Activity className="h-3 w-3" />
+        <div className="space-y-2.5 rounded-md border border-border bg-surface-inset p-3.5">
+          <div className="ws-eyebrow flex items-center gap-1.5 text-amber-400">
+            <Activity className="h-3.5 w-3.5" />
             Downstream +1σ Perturbation Preview
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {downstreamPerturbations.map((item) => {
               const positive = item.effectZ >= 0;
               return (
                 <div
                   key={item.node.uuid}
-                  className="flex items-center justify-between gap-2 rounded-sm border border-border/70 bg-surface px-2 py-1 text-[10.5px]"
+                  className="flex items-start justify-between gap-2.5 rounded-sm border border-border/70 bg-surface px-3 py-2 text-xs"
                 >
                   <button
                     type="button"
                     onClick={() => onSelectNode(item.node)}
                     className="min-w-0 flex-1 text-left cursor-pointer group"
                   >
-                    <div className="truncate font-medium text-text-primary group-hover:text-accent-fg">
+                    <div className="font-medium leading-snug text-text-primary group-hover:text-accent-fg line-clamp-2">
                       {item.node.properties.name}
                     </div>
-                    <div className="ws-numeric truncate font-mono text-[9.5px] text-text-subtle">
+                    <div className="ws-numeric mt-0.5 truncate font-mono text-[11px] text-text-subtle">
                       {item.hops}-hop · Δt={item.lagSteps} {item.lagUnit}
                       {item.viaName ? ` · via ${item.viaName}` : ""}
                     </div>
                   </button>
                   <span
-                    className={`shrink-0 rounded-xs border px-1.5 py-0.5 font-mono ws-numeric text-[10px] font-semibold ${
+                    className={`shrink-0 rounded-xs border px-2 py-0.5 font-mono ws-numeric text-[11px] font-semibold ${
                       positive
                         ? "border-emerald-400 bg-emerald-950 text-emerald-300"
                         : "border-rose-400 bg-rose-950 text-rose-300"
@@ -966,11 +1004,11 @@ export function WorkbenchTraverseTab({
 
       {/* Quick Inline Wire */}
       {allNodes.length > 1 && (
-        <div className="space-y-1 border-t border-border pt-2">
+        <div className="space-y-1.5 border-t border-border pt-3">
           <label htmlFor={`${baseId}-quick-wire`} className="ws-eyebrow block">
             Quick Wire To Another Node
           </label>
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <select
               id={`${baseId}-quick-wire`}
               value={quickWireTargetUuid}
@@ -996,7 +1034,7 @@ export function WorkbenchTraverseTab({
                   setQuickWireTargetUuid("");
                 }
               }}
-              className="rounded-sm bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-45 cursor-pointer"
+              className="rounded-sm bg-accent px-3.5 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-45 cursor-pointer"
             >
               Wire
             </button>
@@ -1006,44 +1044,44 @@ export function WorkbenchTraverseTab({
 
       {/* Latent Candidate Links */}
       {nodeCandidates.length > 0 && (
-        <div className="space-y-1.5 border-t border-border pt-2">
-          <div className="ws-eyebrow flex items-center gap-1 text-purple-300">
-            <Sparkles className="h-3 w-3" />
+        <div className="space-y-2.5 border-t border-border pt-3">
+          <div className="ws-eyebrow flex items-center gap-1.5 text-purple-300">
+            <Sparkles className="h-3.5 w-3.5" />
             Latent Connection Suggestions ({nodeCandidates.length})
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {nodeCandidates.slice(0, 5).map((cand) => (
               <div
                 key={cand.id}
-                className="rounded-md border border-purple-400 bg-purple-950 p-2 space-y-1"
+                className="space-y-1.5 rounded-md border border-purple-400 bg-purple-950 p-3"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-text-primary truncate">
+                <div className="flex items-start justify-between gap-2.5">
+                  <span className="text-xs font-medium leading-snug text-text-primary line-clamp-2">
                     {cand.sourceName} → {cand.targetName}
                   </span>
                   <button
                     type="button"
                     onClick={() => void onAcceptCandidateLink(cand)}
-                    className="shrink-0 inline-flex items-center gap-1 rounded-sm border border-violet-400 bg-violet-950 px-2 py-0.5 text-[10px] font-semibold text-violet-200 hover:border-violet-300 cursor-pointer"
+                    className="shrink-0 inline-flex items-center gap-1 rounded-sm border border-violet-400 bg-violet-950 px-2.5 py-1 text-[11px] font-semibold text-violet-200 hover:border-violet-300 cursor-pointer"
                   >
-                    <Link2 className="h-2.5 w-2.5" />
+                    <Link2 className="h-3 w-3" />
                     Wire
                   </button>
                 </div>
-                <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-purple-300">
+                <div className="flex flex-wrap items-center gap-2 text-[11px] leading-relaxed text-purple-300">
                   <span>
                     {cand.suggestedType.toUpperCase()} · {cand.mechanism}
                     {cand.pearsonR !== undefined ? ` (r=${cand.pearsonR.toFixed(2)})` : ""}
                     {cand.fdrQValue !== undefined ? ` · q=${cand.fdrQValue.toFixed(3)}` : ""}
                   </span>
                   {cand.isSecularDriftOnly && (
-                    <span className="rounded-sm border border-amber-400 bg-amber-950 px-1.5 py-0.5 text-[9px] font-semibold text-amber-300">
+                    <span className="rounded-sm border border-amber-400 bg-amber-950 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
                       Shared secular drift
                     </span>
                   )}
                   {cand.microscopeCouplingProb !== undefined && (
                     <span
-                      className={`rounded-sm border px-1.5 py-0.5 text-[9px] font-semibold ${
+                      className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold ${
                         (cand.confounderProb ?? 0) >= 0.55
                           ? "border-amber-400 bg-amber-950 text-amber-300"
                           : "border-emerald-400 bg-emerald-950 text-emerald-300"

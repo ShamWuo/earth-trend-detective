@@ -23,3 +23,11 @@ next-env.d.ts
 
 # OS
 .DS_Store
+
+# Submission deliverables & local prep scripts (kept locally, excluded from repo)
+DEMO_SCRIPT.md
+SUBMISSION_GUIDE.md
+WRITEUP.md
+deliverables/
+scripts/build_submission_pdfs.py
+scripts/prepare_blind_submission.sh

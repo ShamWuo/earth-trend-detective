@@ -59,6 +59,7 @@ interface GlobeHudOverlaysProps {
   probedCoord: { lat: number; lng: number } | null;
   compareMode: boolean;
   inspectorOpen: boolean;
+  inspectorWide?: boolean;
   mobileSheetExpanded: boolean;
   enabledCategories?: ReadonlyArray<RelationCategory>;
   onChangeEnabledCategories?: (cats: RelationCategory[]) => void;
@@ -195,6 +196,7 @@ export function GlobeHudOverlays({
   probedCoord,
   compareMode,
   inspectorOpen,
+  inspectorWide = false,
   mobileSheetExpanded,
   enabledCategories,
   onChangeEnabledCategories,
@@ -782,7 +784,11 @@ export function GlobeHudOverlays({
       {/* Coordinated Single-Row Bottom HUD Bar */}
       <div
         className={`etg-stage-hud-row pointer-events-none absolute bottom-2.5 left-2.5 right-2.5 z-10 flex flex-wrap items-center justify-between gap-1.5 sm:left-12 ${
-          inspectorOpen ? "sm:right-[22.75rem] xl:right-[23.75rem]" : "sm:right-2.5"
+          inspectorOpen
+            ? inspectorWide
+              ? "sm:right-[26rem] lg:right-[33.5rem] xl:right-[36rem]"
+              : "sm:right-[26rem] lg:right-[28.5rem] xl:right-[30.5rem]"
+            : "sm:right-2.5"
         } ${
           mobileSheetExpanded
             ? "max-sm:hidden"
@@ -1210,17 +1216,19 @@ export function GlobeHudOverlays({
       {/* Hover Tooltip */}
       {hoveredInfo && (
         <div
-          className="etg-hud-pill pointer-events-none absolute z-20 max-w-xs rounded-md bg-surface px-3 py-2 text-xs shadow-lg"
+          className="etg-hud-pill pointer-events-none absolute z-20 max-w-sm space-y-1 rounded-lg bg-surface px-3.5 py-2.5 text-xs shadow-xl"
           style={{
-            left: Math.min(hoveredInfo.x + 14, containerWidth - 240),
-            top: Math.max(12, hoveredInfo.y - 46),
+            left: Math.min(hoveredInfo.x + 16, Math.max(12, containerWidth - 320)),
+            top: Math.max(12, hoveredInfo.y - 56),
           }}
         >
-          <div className="font-medium text-text-primary">{hoveredInfo.name}</div>
-          <div className="mt-0.5 text-[11px] text-text-muted">{hoveredInfo.subtitle}</div>
+          <div className="text-[13px] font-semibold leading-snug text-text-primary">
+            {hoveredInfo.name}
+          </div>
+          <div className="text-xs leading-relaxed text-text-muted">{hoveredInfo.subtitle}</div>
           {hoveredInfo.radarDetail && hoveredInfo.radarBadge && (
             <div
-              className={`mt-1 inline-flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${
+              className={`mt-1 inline-flex items-center gap-1 rounded-xs border px-2 py-0.5 text-[11px] font-semibold ${
                 hoveredInfo.radarBadge === "SENSOR_GLITCH_RISK"
                   ? "border-rose-400 bg-rose-950 text-rose-300"
                   : hoveredInfo.radarBadge === "FALSE_TREND_CYCLE"

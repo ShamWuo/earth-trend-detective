@@ -142,10 +142,10 @@ export function WorkbenchEdgeComposerForm({
 
   return (
     <div className="etg-hud-pill flex max-h-[calc(100dvh-5.75rem)] flex-col overflow-hidden rounded-md bg-surface shadow-2xl">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
-        <div className="flex items-center gap-1.5">
-          <GitBranchPlus className="h-3.5 w-3.5 text-amber-400" />
-          <h2 className="text-[13px] font-semibold text-text-primary">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex items-center gap-2">
+          <GitBranchPlus className="h-4 w-4 text-amber-400" />
+          <h2 className="text-[14px] font-semibold text-text-primary">
             {selectedEdge ? "Edit Graph Connection" : "Connect Phenomena"}
           </h2>
         </div>
@@ -163,9 +163,9 @@ export function WorkbenchEdgeComposerForm({
       </div>
 
       <form onSubmit={handleSaveEdge} className="flex min-h-0 flex-1 flex-col">
-        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto overscroll-contain p-2.5 text-xs">
+        <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto overscroll-contain p-4 text-xs">
         {/* Directed Endpoints + Swap */}
-        <div className="rounded-md border border-border bg-surface-inset p-2 space-y-1.5">
+        <div className="space-y-2.5 rounded-md border border-border bg-surface-inset p-3.5">
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
               <label htmlFor={`${baseId}-edge-src`} className="ws-eyebrow block">
@@ -412,20 +412,20 @@ export function WorkbenchEdgeComposerForm({
               });
             }
             return (
-              <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2 text-[10.5px]">
+              <div className="space-y-2 rounded-md border border-border bg-surface-inset p-3.5 text-xs">
                 <div className="ws-eyebrow text-sky-400">
-                  Empirical Coupling & Confounder Audit
+                  Empirical Coupling &amp; Confounder Audit
                 </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono ws-numeric">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 font-mono ws-numeric">
                   {stats.map((s) => (
-                    <div key={s.label} className="flex items-center justify-between gap-1">
+                    <div key={s.label} className="flex items-center justify-between gap-1.5">
                       <span className="text-text-subtle">{s.label}</span>
                       <span className={s.cls ?? "font-medium text-text-primary"}>{s.value}</span>
                     </div>
                   ))}
                 </div>
                 {ep.mediated_by && (
-                  <div className="flex flex-wrap items-center gap-1 border-t border-border/60 pt-1 text-[10px] text-amber-300">
+                  <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-1.5 text-[11px] text-amber-300">
                     <span className="font-semibold">Mediated / Confounded by:</span>
                     {medNode && onSelectNode ? (
                       <button
@@ -447,7 +447,7 @@ export function WorkbenchEdgeComposerForm({
         {localError && (
           <div
             role="alert"
-            className="rounded-sm border border-rose-400 bg-rose-950 px-2.5 py-1.5 text-[11px] text-rose-300"
+            className="rounded-sm border border-rose-400 bg-rose-950 px-3 py-2 text-xs leading-relaxed text-rose-300"
           >
             {localError}
           </div>
@@ -455,7 +455,7 @@ export function WorkbenchEdgeComposerForm({
 
         </div>
 
-        <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-2.5 py-2">
+        <div className="flex shrink-0 items-center gap-2 border-t border-border-subtle px-4 py-2.5">
           <button
             type="submit"
             disabled={busy}

@@ -79,12 +79,10 @@ node scripts/stream_ground_sensor.mjs --dry-run
 
 ---
 
-## Submission Deliverables & Docs
+## Notebooks & Docs
 
-- **1-Page Blind-Review Write-Up (Veritas AI):** [WRITEUP.md](WRITEUP.md) | [veritas_climate_writeup_1page.pdf](deliverables/veritas_climate_writeup_1page.pdf)
-- **7-Slide Space Apps Deck:** [spaceapps_7slide_deck.pdf](deliverables/spaceapps_7slide_deck.pdf) ([HTML source](deliverables/spaceapps_7slide_deck.html))
 - **Colab Notebooks (with saved outputs & plots):** [notebooks/denver_solar_climate_graph.ipynb](notebooks/denver_solar_climate_graph.ipynb) | [notebooks/etg_blackwell_global_trainer.ipynb](notebooks/etg_blackwell_global_trainer.ipynb)
-- **Guides & Scripts:** [AGENTS.md](AGENTS.md) | [EARTH_TREND_DETECTIVE.md](EARTH_TREND_DETECTIVE.md) | [DEMO_SCRIPT.md](DEMO_SCRIPT.md) | [SUBMISSION_GUIDE.md](SUBMISSION_GUIDE.md) | [ml/README.md](ml/README.md)
+- **Architecture & Guides:** [AGENTS.md](AGENTS.md) | [EARTH_TREND_DETECTIVE.md](EARTH_TREND_DETECTIVE.md) | [ml/README.md](ml/README.md)
 
 ---
 

@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Compass, GitCompare, MapPin, Plus, RefreshCw, Sun, X } from "lucide-react";
+import { Compass, GitCompare, MapPin, RefreshCw, Sun, X } from "lucide-react";
 import {
   GUIDED_DIPOLE_CASES,
   type GuidedDipoleCase,
@@ -15,6 +15,7 @@ export function WorkspaceStageBanner({
   viewMode,
   aiStudioOpen,
   inspectorOpen,
+  inspectorWide = false,
   onDismissStatus,
   onCancelCompare,
 }: {
@@ -24,6 +25,7 @@ export function WorkspaceStageBanner({
   viewMode: WorkspaceViewMode;
   aiStudioOpen: boolean;
   inspectorOpen: boolean;
+  inspectorWide?: boolean;
   onDismissStatus: () => void;
   onCancelCompare: () => void;
 }) {
@@ -31,18 +33,20 @@ export function WorkspaceStageBanner({
     return null;
   }
 
+  const rightOffsetClass = inspectorOpen
+    ? inspectorWide
+      ? "sm:right-[26rem] lg:right-[33.5rem] xl:right-[36rem]"
+      : "sm:right-[26rem] lg:right-[28.5rem] xl:right-[30.5rem]"
+    : "sm:right-2.5";
+
   return (
     <div
       className={`pointer-events-none absolute z-30 flex justify-center max-sm:inset-x-2.5 max-sm:top-14 ${
         !statusMessage && compareMode && inspectorOpen ? "max-lg:hidden" : ""
       } ${
         viewMode === "globe"
-          ? `${aiStudioOpen ? "sm:max-lg:left-[316px] lg:left-12" : "sm:left-12"} ${
-              inspectorOpen ? "sm:right-[22.75rem] xl:right-[23.75rem]" : "sm:right-2.5"
-            } sm:top-2.5`
-          : `${aiStudioOpen ? "sm:max-lg:left-[316px] lg:left-4" : "sm:left-4"} ${
-              inspectorOpen ? "sm:right-[22.75rem] xl:right-[23.75rem]" : "sm:right-2.5"
-            } sm:top-12`
+          ? `${aiStudioOpen ? "sm:max-lg:left-[316px] lg:left-12" : "sm:left-12"} ${rightOffsetClass} sm:bottom-20`
+          : `${aiStudioOpen ? "sm:max-lg:left-[316px] lg:left-4" : "sm:left-4"} ${rightOffsetClass} sm:top-12`
       }`}
     >
       {statusMessage ? (
@@ -219,27 +223,25 @@ export function WorkspaceGraphEmptyPrompt({
   discoverBusy,
   onDiscoverGlobalTrends,
   onMaterializeSolarGraph,
-  onOpenQuickAddNode,
   onOpenAgencyHub,
 }: {
   discoverBusy: boolean;
   onDiscoverGlobalTrends: () => void;
   onMaterializeSolarGraph: () => void;
-  onOpenQuickAddNode: () => void;
   onOpenAgencyHub: () => void;
 }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-4">
       <div className="etg-hud-pill pointer-events-auto max-w-md space-y-2.5 rounded-md bg-surface p-4 text-center shadow-2xl">
-        <div className="mx-auto inline-flex items-center gap-1.5 rounded-sm border border-teal-400 bg-teal-950 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-teal-300">
-          Zero Seeded Data · Live Scientific Observatory
+        <div className="mx-auto inline-flex items-center gap-1.5 rounded-sm border border-amber-400/50 bg-amber-950/60 px-2.5 py-0.5 font-mono text-[10.5px] font-semibold text-amber-300">
+          Local-Only Graph · No Database Configured
         </div>
         <h3 className="font-outfit text-base font-semibold text-text-primary">
           Build &amp; Connect the Earth Trend Knowledge Graph
         </h3>
         <p className="text-[11.5px] leading-relaxed text-text-muted">
-          Ingest live NASA/NOAA/CSA streams, load the 7-node Front Range solar microgrid graph
-          to benchmark graph-aware prediction, or create phenomenon nodes directly.
+          Ingest live NASA/NOAA/CSA streams or load the 7-node Front Range solar microgrid graph.
+          Graph state is stored locally on this instance only (no shared database is set up yet).
         </p>
         <div className="flex flex-wrap items-center justify-center gap-1.5 pt-0.5">
           <button
@@ -259,14 +261,6 @@ export function WorkspaceGraphEmptyPrompt({
           >
             <Sun className="h-3.5 w-3.5" />
             Load 7-Node Solar Predictive Graph
-          </button>
-          <button
-            type="button"
-            onClick={onOpenQuickAddNode}
-            className="inline-flex items-center gap-1.5 rounded-sm border border-border-strong bg-surface-elevated px-3 py-1.5 text-xs font-medium text-text-primary hover:border-accent-fg cursor-pointer"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Create Phenomenon Node
           </button>
           <button
             type="button"

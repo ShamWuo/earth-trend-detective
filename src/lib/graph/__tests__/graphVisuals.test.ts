@@ -206,8 +206,9 @@ describe("graphVisuals layout and readability helpers", () => {
     }
   });
 
-  it("matches single-row SVG card height and returns empty nodes when onlyOpposite finds no dipole edges", () => {
-    expect(CARD_HEIGHT).toBe(40);
+  it("matches spacious two-row SVG card dimensions and returns empty nodes when onlyOpposite finds no dipole edges", () => {
+    expect(CARD_WIDTH).toBe(296);
+    expect(CARD_HEIGHT).toBe(76);
     const { nodes } = makeSyntheticTopology(4);
     const nonOppositeEdges: ETGEdge[] = [
       {

@@ -128,7 +128,7 @@ async function fetchGibsUpstream(
 }
 
 export async function GET(req: NextRequest) {
-  const budget = createTelemetryBudget(1550);
+  const budget = createTelemetryBudget(1750);
   const sp = req.nextUrl.searchParams;
   const layerParam = sp.get("layer");
   const scopeParam = sp.get("scope");
@@ -200,7 +200,7 @@ export async function GET(req: NextRequest) {
 
   const fallbackDate = isMonthly ? "2025-07-01" : "2025-07-15";
   const singleAttempt = isBorders || timeParam === fallbackDate;
-  const primaryTimeoutMs = singleAttempt ? 1450 : UPSTREAM_TIMEOUT_MS;
+  const primaryTimeoutMs = singleAttempt ? 1700 : UPSTREAM_TIMEOUT_MS;
 
   let resolvedDate = timeParam;
   let primaryOutcome = await fetchGibsUpstream(

@@ -36,7 +36,6 @@ export interface UseWorkspaceGraphActionsArgs {
   setSelectedNodeUuid: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedEdgeUuid: React.Dispatch<React.SetStateAction<string | null>>;
   setInspectorOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  setQuickAddNodeOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setPendingConnectPair: React.Dispatch<
     React.SetStateAction<{ sourceUuid: string; targetUuid: string } | null>
   >;
@@ -64,7 +63,6 @@ export function useWorkspaceGraphActions({
   setSelectedNodeUuid,
   setSelectedEdgeUuid,
   setInspectorOpen,
-  setQuickAddNodeOpen,
   setPendingConnectPair,
   setConnectMode,
   setConnectSourceUuid,
@@ -344,7 +342,6 @@ export function useWorkspaceGraphActions({
           setCutoffMs(nextMax);
         }
         setViewMode("graph");
-        setQuickAddNodeOpen(false);
         setPendingConnectPair(null);
         if (typeof data.hubUuid === "string") {
           setSelectedNodeUuid(data.hubUuid);
@@ -369,7 +366,6 @@ export function useWorkspaceGraphActions({
     setCutoffMs,
     setInspectorOpen,
     setPendingConnectPair,
-    setQuickAddNodeOpen,
     setSelectedEdgeUuid,
     setSelectedNodeUuid,
     setSnapshot,
@@ -562,7 +558,6 @@ export function useWorkspaceGraphActions({
       setTraversalSubgraph(null);
       setTraversalHistory([]);
       setPendingConnectPair(null);
-      setQuickAddNodeOpen(false);
       setConnectMode(false);
       setConnectSourceUuid(null);
       onClearGraphTelemetry();
@@ -575,7 +570,6 @@ export function useWorkspaceGraphActions({
     setConnectSourceUuid,
     setInspectorOpen,
     setPendingConnectPair,
-    setQuickAddNodeOpen,
     setSelectedEdgeUuid,
     setSelectedNodeUuid,
     setSnapshot,

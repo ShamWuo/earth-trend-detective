@@ -113,6 +113,8 @@ export interface CompactSpotCardProps {
   onOpenBriefing?: (nodeUuid: string) => void;
   onSatelliteZoomSpot?: (lat: number, lng: number) => void;
   onOpenSolarForSpot?: (lat: number, lng: number, label: string) => void;
+  isWide?: boolean;
+  onToggleWide?: () => void;
   onGraphUpdated: () => Promise<void>;
   onClose: () => void;
 }

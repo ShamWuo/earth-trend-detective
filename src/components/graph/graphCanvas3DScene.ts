@@ -349,6 +349,7 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
   viewportWidth: number;
   viewportHeight: number;
   inspectorOpen: boolean;
+  inspectorWide?: boolean;
   nodeObjects: SceneNodeObject3D[];
   edgeObjects: SceneEdgeObject3D[];
   regionClusters: RegionCluster3D[];
@@ -364,6 +365,7 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     viewportWidth: w,
     viewportHeight: h,
     inspectorOpen,
+    inspectorWide = false,
     nodeObjects: currentNodes,
     edgeObjects: currentEdges,
     regionClusters,
@@ -397,7 +399,14 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
   const labelCandidates: ScreenLabelCandidate[] = [];
   const leftLabelEdge = 82;
   const topLabelEdge = 92;
-  const rightLabelEdge = inspectorOpen && w >= 1024 ? w - 400 : w - 60;
+  const panelWidth = inspectorWide
+    ? w >= 1280
+      ? 584
+      : 540
+    : w >= 1280
+      ? 496
+      : 460;
+  const rightLabelEdge = inspectorOpen && w >= 1024 ? w - panelWidth : w - 60;
 
   let minCamDist = Infinity;
   let maxCamDist = 1;
@@ -447,12 +456,23 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     if (shouldShowLabel) {
       projVec.copy(item.worldPos).project(camera);
       if (projVec.z < 1 && opacity > 0.3) {
-        const sx = (projVec.x * 0.5 + 0.5) * w;
-        const sy = (-projVec.y * 0.5 + 0.5) * h - 18;
-        if (sx > leftLabelEdge && sx < rightLabelEdge && sy > topLabelEdge && sy < h - 42) {
-          const depthRatio = (camera.position.distanceTo(item.worldPos) - minCamDist) / distSpan;
+        const camDist = Math.max(1, camera.position.distanceTo(item.worldPos));
+        const halfFovTan = Math.tan((camera.fov * Math.PI) / 360);
+        const projectedRadiusPx = ((s * 0.42) / (camDist * halfFovTan)) * (h * 0.5);
+        const verticalClearancePx = Math.max(24, Math.min(76, Math.round(projectedRadiusPx + 14)));
+        const rawSx = (projVec.x * 0.5 + 0.5) * w;
+        const sy = (-projVec.y * 0.5 + 0.5) * h - verticalClearancePx;
+        const isPrimaryFocus = isSelected || isHovered;
+        const withinBounds = isPrimaryFocus
+          ? rawSx > 36 && rawSx < rightLabelEdge + 40 && sy > 64 && sy < h - 28
+          : rawSx > leftLabelEdge && rawSx < rightLabelEdge && sy > topLabelEdge && sy < h - 42;
+        if (withinBounds) {
+          const minSx = Math.min(leftLabelEdge + 96, w * 0.5);
+          const maxSx = Math.max(minSx, rightLabelEdge - 96);
+          const sx = isPrimaryFocus ? Math.max(minSx, Math.min(maxSx, rawSx)) : rawSx;
+          const depthRatio = (camDist - minCamDist) / distSpan;
           const cleanTitle = humanizeNodeText(item.node.properties.name);
-          const displayTitle = cleanTitle.length > 32 ? `${cleanTitle.slice(0, 30)}…` : cleanTitle;
+          const displayTitle = cleanTitle.length > 64 ? `${cleanTitle.slice(0, 62)}…` : cleanTitle;
           const nodeRole = rolesMap[uuid];
           const microCue = microMap[uuid];
           const isSupersededNode =
@@ -460,10 +480,10 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
           const microBadge = resolveMicroscopeNodeBadge(microCue, lightThemeNow);
 
           let extraWidthPx = 0;
-          if (nodeRole === "upstream" || nodeRole === "downstream") extraWidthPx += 44;
-          if (isSupersededNode) extraWidthPx += 62;
-          if (microBadge) extraWidthPx += 50;
-          if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 14;
+          if (nodeRole === "upstream" || nodeRole === "downstream") extraWidthPx += 48;
+          if (isSupersededNode) extraWidthPx += 66;
+          if (microBadge) extraWidthPx += 54;
+          if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 20;
 
           let priority = (1 - depthRatio) * 120;
           if (isSearchHit) priority += 450;
@@ -479,6 +499,8 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
             y: sy,
             priority,
             extraWidthPx,
+            boxHeightPx: isPrimaryFocus ? 52 : 30,
+            maxWidthPx: isPrimaryFocus ? 356 : 280,
           });
         }
       }

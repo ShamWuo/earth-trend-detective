@@ -15,6 +15,7 @@ import {
 import {
   EARTH_RADIUS,
   latLngToVector3,
+  selectVisibleGlobeNodes,
 } from "@/components/globe/globeGeometryAndArcs";
 import { resolveGlobePointerClick } from "@/components/globe/globeSceneReconcilers";
 import type { ETGEdge, ETGNode, ETGRelationshipType } from "@/types/etg";
@@ -256,6 +257,80 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
     expect(
       evidenceOnly.every((e) => e.type === "supports" || e.type === "corroborates")
     ).toBe(true);
+  });
+
+  it("hides all nodes in default focus mode until a relation or point is clicked", () => {
+    const idleNodes = selectVisibleGlobeNodes({
+      nodes,
+      visibleArcs: [],
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedAnchorUuid: null,
+      probedCoord: null,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(idleNodes).toHaveLength(0);
+  });
+
+  it("shows only the two specific endpoint nodes when a relation is selected", () => {
+    const visibleArcs = selectVisibleGlobeArcs({
+      nodes,
+      edges,
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedCoord: { lat: 39.7, lng: -105.0 },
+      selectedEdgeUuid: "e-dipole-1",
+      cascadeEdgeUuids: [],
+    });
+    const visibleNodes = selectVisibleGlobeNodes({
+      nodes,
+      visibleArcs,
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedCoord: { lat: 39.7, lng: -105.0 },
+      selectedEdgeUuid: "e-dipole-1",
+      cascadeEdgeUuids: [],
+    });
+    expect(visibleNodes.map((n) => n.uuid).sort()).toEqual(["andes", "hub"]);
+  });
+
+  it("shows nearby nodes and relation endpoints when a point on Earth is clicked", () => {
+    // Click near hub (67.55, -64.83)
+    const probed = { lat: 67.6, lng: -64.9 };
+    const visibleArcs = selectVisibleGlobeArcs({
+      nodes,
+      edges,
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedAnchorUuid: null,
+      probedCoord: probed,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    expect(visibleArcs.length).toBeGreaterThan(0);
+    expect(visibleArcs.every((e) => e.source_uuid === "hub" || e.target_uuid === "hub")).toBe(
+      true
+    );
+
+    const visibleNodes = selectVisibleGlobeNodes({
+      nodes,
+      visibleArcs,
+      mode: "focus",
+      selectedNodeUuid: null,
+      probedAnchorUuid: null,
+      probedCoord: probed,
+      selectedEdgeUuid: null,
+      cascadeEdgeUuids: [],
+    });
+    const uuids = new Set(visibleNodes.map((n) => n.uuid));
+    expect(uuids.has("hub")).toBe(true);
+    for (const arc of visibleArcs) {
+      expect(uuids.has(arc.source_uuid)).toBe(true);
+      expect(uuids.has(arc.target_uuid)).toBe(true);
+    }
+    // Unrelated far nodes not connected to visible arcs should stay hidden
+    expect(uuids.has("sahel")).toBe(false);
   });
 
   it("reveals short-range regional Front Range corridors only in regional zoom", () => {

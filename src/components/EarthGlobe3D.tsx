@@ -114,6 +114,7 @@ interface EarthGlobe3DProps {
   compareMode?: boolean;
   comparisonArcMeta?: ComparisonArcVisualMeta | null;
   inspectorOpen?: boolean;
+  inspectorWide?: boolean;
   mobileSheetExpanded?: boolean;
   enabledCategories?: ReadonlyArray<RelationCategory>;
   onChangeEnabledCategories?: (cats: RelationCategory[]) => void;
@@ -184,6 +185,7 @@ export function EarthGlobe3D({
   compareMode = false,
   comparisonArcMeta = null,
   inspectorOpen = false,
+  inspectorWide = false,
   mobileSheetExpanded = false,
   enabledCategories,
   onChangeEnabledCategories,
@@ -206,7 +208,7 @@ export function EarthGlobe3D({
   const [sunPreset, setSunPreset] = useState<SunPreset>(initialSunPreset ?? "daylight");
   const [liveUtcTime, setLiveUtcTime] = useState<string>("");
   const [showClouds, setShowClouds] = useState(false);
-  const [arcMode, setArcMode] = useState<GlobeArcMode>("dipoles");
+  const [arcMode, setArcMode] = useState<GlobeArcMode>("focus");
   const [showArcLabels, setShowArcLabels] = useState(false);
   const [showPins, setShowPins] = useState(true);
   const [satelliteMode, setSatelliteMode] = useState<RegionalSatelliteMode>(
@@ -351,6 +353,8 @@ export function EarthGlobe3D({
   showPinsRef.current = showPins;
   const inspectorOpenRef = useRef(inspectorOpen);
   inspectorOpenRef.current = inspectorOpen;
+  const inspectorWideRef = useRef(inspectorWide);
+  inspectorWideRef.current = inspectorWide;
   const compareModeRef = useRef(compareMode);
   compareModeRef.current = compareMode;
   const activeGibsLayerRef = useRef<ActiveGibsLayerId | null>(resolvedGibsLayerId);
@@ -1213,7 +1217,9 @@ export function EarthGlobe3D({
 
       const targetOffsetX =
         inspectorOpenRef.current && currentW >= 720
-          ? Math.round(Math.min(388, currentW * 0.36) * 0.38)
+          ? Math.round(
+              Math.min(inspectorWideRef.current ? 556 : 468, currentW * 0.42) * 0.38
+            )
           : 0;
       currentViewOffsetX += (targetOffsetX - currentViewOffsetX) * 0.1;
       if (Math.abs(currentViewOffsetX) > 0.5) {
@@ -1368,6 +1374,7 @@ export function EarthGlobe3D({
           currentW,
           currentH,
           inspectorOpen: inspectorOpenRef.current,
+          inspectorWide: inspectorWideRef.current,
           isRegionalZoom: isRegionalRef.current,
           showPins: showPinsRef.current,
           showArcLabels: showArcLabelsRef.current,
@@ -1568,6 +1575,7 @@ export function EarthGlobe3D({
       arcMode,
       selectedNodeUuid,
       probedAnchorUuid,
+      probedCoord,
       selectedEdgeUuid,
       cascadeEdgeUuids,
       enabledCategories,
@@ -1581,6 +1589,7 @@ export function EarthGlobe3D({
     arcMode,
     selectedNodeUuid,
     probedAnchorUuid,
+    probedCoord,
     selectedEdgeUuid,
     cascadeEdgeUuids,
     enabledCategories,
@@ -1735,6 +1744,7 @@ export function EarthGlobe3D({
         probedCoord={probedCoord}
         compareMode={compareMode}
         inspectorOpen={inspectorOpen}
+        inspectorWide={inspectorWide}
         mobileSheetExpanded={mobileSheetExpanded}
         enabledCategories={enabledCategories}
         onChangeEnabledCategories={onChangeEnabledCategories}

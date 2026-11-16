@@ -1,22 +1,20 @@
 "use client";
 
 import React, { useEffect, useId, useRef, useState } from "react";
-import { Bot, Cpu, Download, ExternalLink, FileSpreadsheet, Globe2, Satellite, Send, Upload, X } from "lucide-react";
+import { Bot, Download, ExternalLink, FileSpreadsheet, Satellite, Send, Upload, X } from "lucide-react";
 import {
   CHALLENGE_SPACE_AGENCY_RESOURCES,
   EARTH_TREND_DATASETS,
 } from "@/lib/datasets";
 import { attachDialogLightDismissFallback } from "@/lib/a11y/dialogLightDismiss";
 import { restoreOpenerFocus, trapDialogTabKey } from "@/lib/a11y/dialogFocusTrap";
-import type { ETGDatasetId, ETGNode } from "@/types/etg";
+import type { ETGNode } from "@/types/etg";
 
-export type IngestionTabId = "dataset" | "agencies" | "mcp" | "webhook" | "community";
+export type IngestionTabId = "dataset" | "agencies" | "mcp";
 const INGESTION_TABS: readonly IngestionTabId[] = [
   "dataset",
   "agencies",
   "mcp",
-  "webhook",
-  "community",
 ];
 
 interface IngestionModalProps {
@@ -31,7 +29,7 @@ export function IngestionModal({
   open,
   initialTab = "dataset",
   onClose,
-  nodes,
+  nodes: _nodes,
   onIngested,
 }: IngestionModalProps) {
   const titleId = useId();
@@ -60,25 +58,6 @@ export function IngestionModal({
   const [mcpArgs, setMcpArgs] = useState('{\n  "max_eonet_sites": 7\n}');
   const [mcpOutput, setMcpOutput] = useState<string>("");
   const [running, setRunning] = useState(false);
-
-  // Webhook state (no hardcoded coordinates or device IDs)
-  const [whNodeId, setWhNodeId] = useState("");
-  const [whLat, setWhLat] = useState("");
-  const [whLng, setWhLng] = useState("");
-  const [whValue, setWhValue] = useState("");
-  const [whUnit, setWhUnit] = useState("");
-  const [whDataset, setWhDataset] = useState<ETGDatasetId>("community");
-  const [whStatus, setWhStatus] = useState<string>("");
-  const [whLiveTelemetryBanner, setWhLiveTelemetryBanner] = useState<string>("");
-
-  // Community Submission state (no hardcoded coordinates)
-  const [obsName, setObsName] = useState("");
-  const [obsDesc, setObsDesc] = useState("");
-  const [obsLat, setObsLat] = useState("");
-  const [obsLng, setObsLng] = useState("");
-  const [obsDataset, setObsDataset] = useState<ETGDatasetId>("community");
-  const [obsSupports, setObsSupports] = useState("");
-  const [obsStatus, setObsStatus] = useState("");
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -209,196 +188,6 @@ export function IngestionModal({
     }
   };
 
-  const sendWebhook = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRunning(true);
-    setWhStatus("");
-    try {
-      const res = await fetch(`/api/graph/nodes/${encodeURIComponent(whNodeId.trim())}/webhook`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          device_id: whNodeId.trim(),
-          dataset: whDataset,
-          lat: Number(whLat),
-          lng: Number(whLng),
-          value: Number(whValue),
-          unit: whUnit.trim() || "units",
-          confidence: 0.92,
-        }),
-      });
-      const data = await res.json();
-      setWhStatus(
-        res.ok
-          ? `Ingested Signal "${data.signalNode?.uuid}" · linked to ${data.linkedInsights?.length ?? 0} trend(s).`
-          : data.error || "Webhook failed"
-      );
-      if (res.ok) await onIngested();
-    } catch (err) {
-      setWhStatus(err instanceof Error ? err.message : "Webhook request failed");
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const ingestLiveGroundStation = async () => {
-    setRunning(true);
-    setWhStatus("");
-    setWhLiveTelemetryBanner("");
-    const stationId = "kden-denver-ground-01";
-    const stationLat = 39.74;
-    const stationLng = -104.99;
-    try {
-      const omUrl =
-        `https://api.open-meteo.com/v1/forecast?latitude=${stationLat}&longitude=${stationLng}` +
-        `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation&wind_speed_unit=ms`;
-      const omRes = await fetch(omUrl);
-      if (!omRes.ok) {
-        throw new Error(`Live station telemetry HTTP ${omRes.status}`);
-      }
-      const omJson = (await omRes.json()) as {
-        current?: {
-          time?: string;
-          temperature_2m?: number;
-          relative_humidity_2m?: number;
-          wind_speed_10m?: number;
-          shortwave_radiation?: number;
-        };
-      };
-      const cur = omJson.current;
-      const tempC =
-        typeof cur?.temperature_2m === "number" && Number.isFinite(cur.temperature_2m)
-          ? Number(cur.temperature_2m.toFixed(2))
-          : null;
-      if (tempC === null) {
-        throw new Error("Live station telemetry returned missing temperature_2m reading");
-      }
-      const swWm2 =
-        typeof cur?.shortwave_radiation === "number" && Number.isFinite(cur.shortwave_radiation)
-          ? Number(cur.shortwave_radiation.toFixed(1))
-          : null;
-      const rhPct =
-        typeof cur?.relative_humidity_2m === "number" && Number.isFinite(cur.relative_humidity_2m)
-          ? Number(cur.relative_humidity_2m.toFixed(0))
-          : null;
-      const wsMs =
-        typeof cur?.wind_speed_10m === "number" && Number.isFinite(cur.wind_speed_10m)
-          ? Number(cur.wind_speed_10m.toFixed(1))
-          : null;
-
-      let nwsDesc: string | null = null;
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 2500);
-        const nwsRes = await fetch("https://api.weather.gov/stations/KDEN/observations/latest", {
-          headers: { Accept: "application/geo+json" },
-          signal: ctrl.signal,
-        });
-        clearTimeout(t);
-        if (nwsRes.ok) {
-          const nwsJson = (await nwsRes.json()) as { properties?: { textDescription?: string } };
-          if (typeof nwsJson?.properties?.textDescription === "string" && nwsJson.properties.textDescription.trim()) {
-            nwsDesc = nwsJson.properties.textDescription.trim();
-          }
-        }
-      } catch {
-        // Optional NWS METAR enrichment falls back to Open-Meteo surface telemetry
-      }
-
-      const observedAt =
-        typeof cur?.time === "string" && cur.time.length >= 10
-          ? cur.time.endsWith("Z")
-            ? cur.time
-            : `${cur.time}:00Z`
-          : new Date().toISOString();
-
-      setWhNodeId(stationId);
-      setWhDataset("nasa_power");
-      setWhLat(String(stationLat));
-      setWhLng(String(stationLng));
-      setWhValue(String(tempC));
-      setWhUnit("°C");
-
-      const liveTitle = `Live Ground Station (Denver KDEN): ${tempC} °C${swWm2 !== null ? `, ${swWm2} W/m²` : ""}${rhPct !== null ? `, RH ${rhPct}%` : ""}${wsMs !== null ? `, Wind ${wsMs} m/s` : ""}${nwsDesc ? ` · NWS: ${nwsDesc}` : ""}`;
-      setWhLiveTelemetryBanner(`${liveTitle} · Observed ${observedAt}`);
-
-      const res = await fetch(`/api/graph/nodes/${encodeURIComponent(stationId)}/webhook`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          device_id: stationId,
-          dataset: "nasa_power",
-          lat: stationLat,
-          lng: stationLng,
-          value: tempC,
-          unit: "°C",
-          confidence: nwsDesc ? 0.96 : 0.93,
-          observed_at: observedAt,
-          title: liveTitle,
-        }),
-      });
-      const data = await res.json();
-      setWhStatus(
-        res.ok
-          ? `Ingested live ground-station Signal "${data.signalNode?.uuid}" · linked to ${data.linkedInsights?.length ?? 0} trend(s).`
-          : data.error || "Live station webhook failed"
-      );
-      if (res.ok) await onIngested();
-    } catch (err) {
-      setWhStatus(err instanceof Error ? err.message : "Live ground-station fetch failed");
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  const submitCommunitySignal = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setRunning(true);
-    setObsStatus("");
-    try {
-      const res = await fetch("/api/graph", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          node: {
-            label: "Signal",
-            is_provisional: false,
-            properties: {
-              name: obsName,
-              description: obsDesc,
-              lat: Number(obsLat),
-              lng: Number(obsLng),
-              dataset: obsDataset,
-              producer_type: "iot_sensor",
-              confidence: 0.87,
-            },
-          },
-          edge: obsSupports
-            ? {
-                source_uuid: "$NEW_NODE",
-                target_uuid: obsSupports,
-                type: "corroborates",
-                source_snippet: "Community field observation",
-              }
-            : undefined,
-        }),
-      });
-      if (res.ok) {
-        setObsStatus("Observation published to Earth Trend Graph.");
-        setObsName("");
-        setObsDesc("");
-        await onIngested();
-      } else {
-        const d = await res.json();
-        setObsStatus(d.error || "Submission failed");
-      }
-    } catch (err) {
-      setObsStatus(err instanceof Error ? err.message : "Observation submission failed");
-    } finally {
-      setRunning(false);
-    }
-  };
-
   const handleExportWorkspaceBundle = async () => {
     setRunning(true);
     setDsError("");
@@ -457,8 +246,6 @@ export function IngestionModal({
     }
   };
 
-  const insightNodes = nodes.filter((n) => n.label === "Insight");
-
   const handleTabKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const currentIndex = INGESTION_TABS.indexOf(tab);
     let nextIndex = -1;
@@ -488,10 +275,10 @@ export function IngestionModal({
       <div className="flex items-center justify-between border-b border-border bg-surface-band px-3.5 py-2">
         <div>
           <h2 id={titleId} className="text-sm font-semibold text-text-primary">
-            Real Dataset, Hardware &amp; AI-Native Ingestion
+            Dataset &amp; Agency Ingestion (Local-Only Graph)
           </h2>
           <p className="text-[11px] text-text-subtle">
-            Import empirical CSV/JSON series, stream live NASA/NOAA feeds, run MCP tools, or push sensor webhooks.
+            Import empirical CSV/JSON series, stream live NASA/NOAA feeds, or run MCP tools. Graph state is local-only (no database configured yet).
           </p>
         </div>
         <button
@@ -558,38 +345,6 @@ export function IngestionModal({
         >
           <Bot className="h-3.5 w-3.5 shrink-0" />
           MCP &amp; OpenAPI (16)
-        </button>
-        <button
-          ref={(el) => {
-            tabButtonRefs.current.webhook = el;
-          }}
-          id={`${baseId}-tab-webhook`}
-          type="button"
-          role="tab"
-          aria-selected={tab === "webhook"}
-          aria-controls={`${baseId}-panel-webhook`}
-          tabIndex={tab === "webhook" ? 0 : -1}
-          onClick={() => setTab("webhook")}
-          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
-        >
-          <Cpu className="h-3.5 w-3.5 shrink-0" />
-          Sensor Webhook
-        </button>
-        <button
-          ref={(el) => {
-            tabButtonRefs.current.community = el;
-          }}
-          id={`${baseId}-tab-community`}
-          type="button"
-          role="tab"
-          aria-selected={tab === "community"}
-          aria-controls={`${baseId}-panel-community`}
-          tabIndex={tab === "community" ? 0 : -1}
-          onClick={() => setTab("community")}
-          className="etg-tab flex items-center gap-1.5 !px-2 !py-1.5 !text-[11.5px]"
-        >
-          <Globe2 className="h-3.5 w-3.5 shrink-0" />
-          Field Signal
         </button>
       </div>
 
@@ -995,288 +750,6 @@ export function IngestionModal({
           </div>
         </div>
 
-        <div
-          id={`${baseId}-panel-webhook`}
-          role="tabpanel"
-          aria-labelledby={`${baseId}-tab-webhook`}
-          hidden={tab !== "webhook"}
-        >
-          <div className="space-y-2.5 p-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-surface-inset p-3">
-            <div className="min-w-0 flex-1">
-              <div className="font-semibold text-text-primary">
-                Live Ground-Station Telemetry -&gt; Webhook
-              </div>
-              <div className="mt-0.5 text-[11px] text-text-muted">
-                Pulls real-time surface observations (Denver KDEN / Open-Meteo irradiance, temperature, RH, wind) and ingests into the ETG graph with provenance.
-              </div>
-              {whLiveTelemetryBanner && (
-                <div className="mt-1.5 font-mono text-[11px] text-sky-300">
-                  {whLiveTelemetryBanner}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => void ingestLiveGroundStation()}
-              disabled={running}
-              className="inline-flex items-center gap-1.5 rounded-sm bg-accent px-3 py-1.5 font-semibold text-white hover:bg-accent-hover disabled:opacity-50 cursor-pointer"
-            >
-              <Cpu className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span>{running ? "Streaming…" : "Fetch & Ingest Live KDEN"}</span>
-            </button>
-          </div>
-          <form onSubmit={sendWebhook} className="space-y-3">
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <div>
-                <label htmlFor={`${baseId}-wh-id`} className="ws-eyebrow mb-1 block">
-                  Target Device / Node ID
-                </label>
-                <input
-                  id={`${baseId}-wh-id`}
-                  name="device_id"
-                  type="text"
-                  required
-                  autoCorrect="off"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  placeholder="e.g., esp32-flux-station-01"
-                  value={whNodeId}
-                  onChange={(e) => setWhNodeId(e.target.value)}
-                  className="form-input font-mono"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-wh-ds`} className="ws-eyebrow mb-1 block">
-                  Dataset
-                </label>
-                <select
-                  id={`${baseId}-wh-ds`}
-                  name="dataset"
-                  value={whDataset}
-                  onChange={(e) => setWhDataset(e.target.value as ETGDatasetId)}
-                  className="form-input"
-                >
-                  {EARTH_TREND_DATASETS.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-wh-lat`} className="ws-eyebrow mb-1 block">
-                  Latitude
-                </label>
-                <input
-                  id={`${baseId}-wh-lat`}
-                  name="lat"
-                  type="number"
-                  step="any"
-                  required
-                  placeholder="-90 to 90"
-                  value={whLat}
-                  onChange={(e) => setWhLat(e.target.value)}
-                  className="form-input font-mono ws-numeric"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-wh-lng`} className="ws-eyebrow mb-1 block">
-                  Longitude
-                </label>
-                <input
-                  id={`${baseId}-wh-lng`}
-                  name="lng"
-                  type="number"
-                  step="any"
-                  required
-                  placeholder="-180 to 180"
-                  value={whLng}
-                  onChange={(e) => setWhLng(e.target.value)}
-                  className="form-input font-mono ws-numeric"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-wh-val`} className="ws-eyebrow mb-1 block">
-                  Reading Value
-                </label>
-                <input
-                  id={`${baseId}-wh-val`}
-                  name="value"
-                  type="number"
-                  step="any"
-                  required
-                  placeholder="Numeric sensor reading"
-                  value={whValue}
-                  onChange={(e) => setWhValue(e.target.value)}
-                  className="form-input font-mono ws-numeric"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-wh-unit`} className="ws-eyebrow mb-1 block">
-                  Unit
-                </label>
-                <input
-                  id={`${baseId}-wh-unit`}
-                  name="unit"
-                  type="text"
-                  required
-                  placeholder="e.g., °C, ppm, µg/m³"
-                  value={whUnit}
-                  onChange={(e) => setWhUnit(e.target.value)}
-                  className="form-input font-mono"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={running}
-              className="rounded bg-accent px-3 py-2 font-semibold text-white hover:bg-accent-hover cursor-pointer"
-            >
-              {running ? "Streaming…" : `POST /api/graph/nodes/${whNodeId || "{nodeId}"}/webhook`}
-            </button>
-            {whStatus && (
-              <div
-                role="status"
-                aria-live="polite"
-                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
-              >
-                {whStatus}
-              </div>
-            )}
-          </form>
-          </div>
-        </div>
-
-        <div
-          id={`${baseId}-panel-community`}
-          role="tabpanel"
-          aria-labelledby={`${baseId}-tab-community`}
-          hidden={tab !== "community"}
-        >
-          <div className="p-3.5">
-          <form onSubmit={submitCommunitySignal} className="space-y-2.5">
-            <div>
-              <label htmlFor={`${baseId}-obs-name`} className="ws-eyebrow mb-1 block">
-                Observation Title
-              </label>
-              <input
-                id={`${baseId}-obs-name`}
-                name="observation_name"
-                type="text"
-                required
-                placeholder="Observed environmental phenomenon & location"
-                value={obsName}
-                onChange={(e) => setObsName(e.target.value)}
-                className="form-input"
-              />
-            </div>
-            <div>
-              <label htmlFor={`${baseId}-obs-desc`} className="ws-eyebrow mb-1 block">
-                Scientific Context
-              </label>
-              <textarea
-                id={`${baseId}-obs-desc`}
-                name="observation_description"
-                required
-                rows={2}
-                placeholder="Describe sensor calibration, observed anomaly, and verification source."
-                value={obsDesc}
-                onChange={(e) => setObsDesc(e.target.value)}
-                className="form-input"
-              />
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <label htmlFor={`${baseId}-obs-lat`} className="ws-eyebrow mb-1 block">
-                  Lat
-                </label>
-                <input
-                  id={`${baseId}-obs-lat`}
-                  name="observation_lat"
-                  type="number"
-                  step="any"
-                  required
-                  placeholder="-90..90"
-                  value={obsLat}
-                  onChange={(e) => setObsLat(e.target.value)}
-                  className="form-input font-mono ws-numeric"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-obs-lng`} className="ws-eyebrow mb-1 block">
-                  Lng
-                </label>
-                <input
-                  id={`${baseId}-obs-lng`}
-                  name="observation_lng"
-                  type="number"
-                  step="any"
-                  required
-                  placeholder="-180..180"
-                  value={obsLng}
-                  onChange={(e) => setObsLng(e.target.value)}
-                  className="form-input font-mono ws-numeric"
-                />
-              </div>
-              <div>
-                <label htmlFor={`${baseId}-obs-ds`} className="ws-eyebrow mb-1 block">
-                  Dataset
-                </label>
-                <select
-                  id={`${baseId}-obs-ds`}
-                  name="observation_dataset"
-                  value={obsDataset}
-                  onChange={(e) => setObsDataset(e.target.value as ETGDatasetId)}
-                  className="form-input"
-                >
-                  {EARTH_TREND_DATASETS.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.shortLabel}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label htmlFor={`${baseId}-obs-supports`} className="ws-eyebrow mb-1 block">
-                Corroborate Existing Trend (Optional)
-              </label>
-              <select
-                id={`${baseId}-obs-supports`}
-                name="supports_insight_uuid"
-                value={obsSupports}
-                onChange={(e) => setObsSupports(e.target.value)}
-                className="form-input"
-              >
-                <option value="">Standalone Signal</option>
-                {insightNodes.map((ins) => (
-                  <option key={ins.uuid} value={ins.uuid}>
-                    {ins.properties.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button
-              type="submit"
-              disabled={running}
-              className="rounded bg-accent px-3 py-2 font-semibold text-white hover:bg-accent-hover cursor-pointer"
-            >
-              {running ? "Publishing…" : "Publish Signal to Earth Trend Graph"}
-            </button>
-            {obsStatus && (
-              <div
-                role="status"
-                aria-live="polite"
-                className="rounded-md border border-emerald-400 bg-emerald-950 p-2.5 font-medium text-emerald-300"
-              >
-                {obsStatus}
-              </div>
-            )}
-          </form>
-          </div>
-        </div>
       </div>
       </div>
     </dialog>

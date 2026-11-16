@@ -83,6 +83,8 @@ export async function GET(req: NextRequest) {
   let resolvedLat: number | null = null;
   let resolvedLng: number | null = null;
   let dataset: ETGDatasetId = "nasa_power";
+  let resolvedStartYear = 1995;
+  let resolvedEndYear = 2025;
 
   try {
     const { searchParams } = new URL(req.url);
@@ -113,6 +115,20 @@ export async function GET(req: NextRequest) {
     const preferFallback =
       searchParams.get("fallback") === "1" ||
       searchParams.get("fallback") === "climatological";
+    const rawEndYear = searchParams.get("end_year");
+    const rawStartYear = searchParams.get("start_year");
+    const parsedEnd =
+      rawEndYear !== null && rawEndYear.trim() !== "" ? Number(rawEndYear) : NaN;
+    if (Number.isFinite(parsedEnd)) {
+      resolvedEndYear = Math.max(1985, Math.min(2026, Math.trunc(parsedEnd)));
+    }
+    const parsedStart =
+      rawStartYear !== null && rawStartYear.trim() !== "" ? Number(rawStartYear) : NaN;
+    if (Number.isFinite(parsedStart)) {
+      resolvedStartYear = Math.max(1981, Math.min(resolvedEndYear - 4, Math.trunc(parsedStart)));
+    }
+    const startYear = resolvedStartYear;
+    const endYear = resolvedEndYear;
     const datasetsParam = searchParams.get("datasets");
     const parsedDatasets = datasetsParam
       ? Array.from(
@@ -148,8 +164,8 @@ export async function GET(req: NextRequest) {
               resolvedLat,
               resolvedLng,
               parsedDatasets,
-              1995,
-              2025,
+              startYear,
+              endYear,
               budget
             ),
             () => ({
@@ -213,8 +229,8 @@ export async function GET(req: NextRequest) {
             coord.lat,
             coord.lng,
             parsedDatasets,
-            1995,
-            2025,
+            startYear,
+            endYear,
             budget
           ),
           () => ({
@@ -246,8 +262,8 @@ export async function GET(req: NextRequest) {
               coord.lat,
               coord.lng,
               singleDs,
-              1995,
-              2025,
+              startYear,
+              endYear,
               budget
             );
             summaries = [primary];
@@ -302,8 +318,8 @@ export async function GET(req: NextRequest) {
               compareLat,
               compareLng,
               compareDataset,
-              1995,
-              2025,
+              startYear,
+              endYear,
               budget
             ).catch(() => null);
           })()
@@ -386,7 +402,9 @@ export async function GET(req: NextRequest) {
         ? buildClimatologicalTrendSummary(
             resolvedLat,
             resolvedLng,
-            primaryApplicable ? dataset : "nasa_power"
+            primaryApplicable ? dataset : "nasa_power",
+            startYear,
+            endYear
           )
         : null;
 
@@ -449,7 +467,9 @@ export async function GET(req: NextRequest) {
       const climatologicalFallback = buildClimatologicalTrendSummary(
         resolvedLat,
         resolvedLng,
-        fallbackSurface.applicable ? dataset : "nasa_power"
+        fallbackSurface.applicable ? dataset : "nasa_power",
+        resolvedStartYear,
+        resolvedEndYear
       );
       return NextResponse.json({
         primary: climatologicalFallback,

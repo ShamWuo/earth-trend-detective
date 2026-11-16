@@ -41,6 +41,9 @@ import {
   SpotScienceAndActionsSection,
 } from "@/components/spot/SpotRelationsAndScienceSection";
 import { SpotTrendChart } from "@/components/spot/SpotTrendChart";
+import { TrendFindingHighlight } from "@/components/spot/TrendFindingHighlight";
+import { TrendGraphDetailModal } from "@/components/spot/TrendGraphDetailModal";
+import type { TrendDatePreset } from "@/components/spot/trendDateUtils";
 
 export type { GuidedCaseStudyItem } from "@/components/spot/spotCardShared";
 
@@ -99,6 +102,8 @@ export function CompactSpotCard({
   onOpenBriefing,
   onSatelliteZoomSpot,
   onOpenSolarForSpot,
+  isWide = false,
+  onToggleWide,
   onGraphUpdated,
   onClose,
 }: CompactSpotCardProps) {
@@ -114,6 +119,10 @@ export function CompactSpotCard({
   const [revDesc, setRevDesc] = useState("");
   const [revRationale, setRevRationale] = useState("");
   const [focusedSummaryKey, setFocusedSummaryKey] = useState<string | null>(null);
+  const [detailOverlayOpen, setDetailOverlayOpen] = useState(false);
+  const [detailTargetId, setDetailTargetId] = useState<string | null>(null);
+  const [detailInitialMode, setDetailInitialMode] = useState<"raw" | "anomaly">("raw");
+  const [detailInitialPreset, setDetailInitialPreset] = useState<TrendDatePreset | null>(null);
 
   const [spotPrediction, setSpotPrediction] = useState<GraphPredictionResult | null>(null);
   const [spotPredLoading, setSpotPredLoading] = useState(false);
@@ -192,6 +201,10 @@ export function CompactSpotCard({
     setSpotPredError(null);
     setSpotPredLoading(false);
     setFocusedSummaryKey(null);
+    setDetailTargetId(null);
+    if (selectionKey === "empty") {
+      setDetailOverlayOpen(false);
+    }
   }, [selectionKey]);
 
   const nodeMap = useMemo(() => new Map(allNodes.map((n) => [n.uuid, n])), [allNodes]);
@@ -657,7 +670,34 @@ export function CompactSpotCard({
     }
   };
 
+  const handleOpenChartDetail = ({
+    mode,
+    focus,
+    preset,
+  }: {
+    mode: "raw" | "anomaly";
+    focus: "both" | "a" | "b";
+    preset?: TrendDatePreset;
+  }) => {
+    const hasOverlay = Boolean(comparison && comparison.alignedPoints.length >= 3);
+    const nextId =
+      hasOverlay && focus === "both"
+        ? "compare:both"
+        : hasOverlay && focus === "b"
+          ? "compare:b"
+          : hasOverlay && focus === "a"
+            ? "compare:a"
+            : activeSummary
+              ? summaryKey(activeSummary)
+              : null;
+    setDetailTargetId(nextId);
+    setDetailInitialMode(mode);
+    setDetailInitialPreset(preset ?? null);
+    setDetailOverlayOpen(true);
+  };
+
   return (
+    <>
     <div className="relative flex max-sm:max-h-[54dvh] sm:max-h-[calc(100dvh-4.25rem)] w-full flex-col overflow-hidden rounded-lg border border-border bg-surface/95 backdrop-blur-md shadow-2xl">
       <SpotCardHeader
         cardTitle={cardTitle}
@@ -672,6 +712,8 @@ export function CompactSpotCard({
         onOpenSolarForSpot={onOpenSolarForSpot}
         mobileCollapsed={mobileCollapsed}
         onToggleMobileCollapse={onToggleMobileCollapse}
+        isWide={isWide}
+        onToggleWide={onToggleWide}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         visibleSummaryCount={visibleSummaries.length}
@@ -685,7 +727,7 @@ export function CompactSpotCard({
         }`}
       >
         {(loading || (!loading && hasTopFetchFailure) || (compareMode && !isComparingTwoSpots)) && (
-          <div className="space-y-1.5 px-3 pt-2">
+          <div className="space-y-2 px-4 pt-3">
             {loading && (
               <div
                 role="progressbar"
@@ -781,7 +823,7 @@ export function CompactSpotCard({
             aria-labelledby="spot-tab-overview"
             hidden={activeTab !== "overview"}
           >
-            <div className="space-y-2.5 px-3 py-2.5">
+            <div className="space-y-3.5 px-4 py-3.5">
               {(current || !loading) && coord && (
                 <SpotCurrentConditionsSection
                   current={current}
@@ -794,19 +836,12 @@ export function CompactSpotCard({
               )}
 
               {activeSummary && (
-                <div className="space-y-1.5 border-t border-border-subtle pt-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-medium text-text-subtle">
-                        {activeDigest
-                          ? `${activeDigest.topicLabel} · ${activeDigest.parameterShort}`
-                          : `${DATASET_BY_ID[activeSummary.dataset]?.shortLabel ?? activeSummary.dataset} · ${activeSummary.parameter}`}
-                      </div>
-                      {activeDigest && (
-                        <div className="mt-0.5 text-[13px] font-medium leading-snug text-text-primary">
-                          {activeDigest.headline}
-                        </div>
-                      )}
+                <div className="space-y-2 border-t border-border-subtle pt-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 text-[10.5px] font-semibold uppercase tracking-wider text-text-subtle">
+                      {activeDigest
+                        ? `${activeDigest.topicLabel} · ${activeDigest.parameterShort}`
+                        : `${DATASET_BY_ID[activeSummary.dataset]?.shortLabel ?? activeSummary.dataset} · ${activeSummary.parameter}`}
                     </div>
                     {visibleSummaries.length > 1 && (
                       <button
@@ -820,6 +855,8 @@ export function CompactSpotCard({
                     )}
                   </div>
 
+                  {activeDigest && <TrendFindingHighlight digest={activeDigest} />}
+
                   <SpotTrendChart
                     summary={activeSummary}
                     secondarySummary={secondary}
@@ -827,6 +864,8 @@ export function CompactSpotCard({
                     labelA={labelA}
                     labelB={labelB}
                     tempUnit={tempUnit}
+                    hideTopicLabel={Boolean(activeDigest)}
+                    onOpenDetail={handleOpenChartDetail}
                   />
                 </div>
               )}
@@ -906,7 +945,7 @@ export function CompactSpotCard({
             aria-labelledby="spot-tab-trends"
             hidden={activeTab !== "trends"}
           >
-            <div className="space-y-2.5 px-3 py-2.5">
+            <div className="space-y-3.5 px-4 py-3.5">
               <SpotLongTermTrendsSection
                 trendLayout={prefs.trendLayout}
                 onChangeTrendLayout={(layout) => updatePref("trendLayout", layout)}
@@ -919,6 +958,14 @@ export function CompactSpotCard({
                 onFocusSummary={(key, dataset) => {
                   setFocusedSummaryKey(key);
                   onFocusSummaryDataset(dataset);
+                }}
+                onOpenTrendDetail={(key, dataset) => {
+                  setFocusedSummaryKey(key);
+                  onFocusSummaryDataset(dataset);
+                  setDetailTargetId(key);
+                  setDetailInitialMode("raw");
+                  setDetailInitialPreset(null);
+                  setDetailOverlayOpen(true);
                 }}
                 tempUnit={tempUnit}
                 hasStoredNodeMetrics={hasStoredNodeMetrics}
@@ -939,6 +986,7 @@ export function CompactSpotCard({
                     labelA={labelA}
                     labelB={labelB}
                     tempUnit={tempUnit}
+                    onOpenDetail={handleOpenChartDetail}
                   />
                 </div>
               )}
@@ -952,7 +1000,7 @@ export function CompactSpotCard({
           aria-labelledby="spot-tab-relations"
           hidden={activeTab !== "relations"}
         >
-          <div className="space-y-2.5 px-3 py-2.5">
+          <div className="space-y-3.5 px-4 py-3.5">
             {isComparingTwoSpots && comparisonDigest && primary && secondary && comparison ? (
               <>
                 <SpotComparisonModeSection
@@ -980,6 +1028,7 @@ export function CompactSpotCard({
                     labelA={labelA}
                     labelB={labelB}
                     tempUnit={tempUnit}
+                    onOpenDetail={handleOpenChartDetail}
                   />
                 </div>
               </>
@@ -1011,7 +1060,7 @@ export function CompactSpotCard({
           aria-labelledby="spot-tab-science"
           hidden={activeTab !== "science"}
         >
-          <div className="space-y-2.5 px-3 py-2.5">
+          <div className="space-y-3.5 px-4 py-3.5">
             <SpotScienceAndActionsSection
               coord={coord}
               selectedNode={selectedNode}
@@ -1067,5 +1116,34 @@ export function CompactSpotCard({
         </div>
       </div>
     </div>
+
+    <TrendGraphDetailModal
+      open={detailOverlayOpen}
+      onClose={() => setDetailOverlayOpen(false)}
+      cardTitle={cardTitle}
+      coord={coord}
+      summaries={visibleSummaries}
+      allSpotSummaries={summaries}
+      primary={primary}
+      secondary={secondary}
+      comparison={comparison}
+      labelA={labelA}
+      labelB={labelB}
+      initialItemId={detailTargetId}
+      initialMode={detailInitialMode}
+      initialPreset={detailInitialPreset}
+      tempUnit={tempUnit}
+      onChangeTempUnit={onChangeTempUnit}
+      onSelectSummary={(key, dataset) => {
+        setFocusedSummaryKey(key);
+        onFocusSummaryDataset(dataset);
+      }}
+      onSaveToGraph={async (summary) => {
+        await onCommitToGraph(summary);
+      }}
+      onOpenInGraphWorkbench={onOpenInGraphWorkbench}
+      selectedNode={selectedNode}
+    />
+    </>
   );
 }

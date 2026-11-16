@@ -104,6 +104,7 @@ export function DetectiveWorkspace({
   const [selectedNodeUuid, setSelectedNodeUuid] = useState<string | null>(null);
   const [selectedEdgeUuid, setSelectedEdgeUuid] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorWide, setInspectorWide] = useState(false);
 
   const openInspectorSafe = useCallback(() => {
     setInspectorOpen(true);
@@ -170,7 +171,6 @@ export function DetectiveWorkspace({
     sourceUuid: string;
     targetUuid: string;
   } | null>(null);
-  const [quickAddNodeOpen, setQuickAddNodeOpen] = useState(false);
   const [traversalFilter, setTraversalFilter] = useState<TraversalFilterState>({
     maxHops: null,
     direction: "both",
@@ -310,7 +310,6 @@ export function DetectiveWorkspace({
     setSelectedNodeUuid,
     setSelectedEdgeUuid,
     setInspectorOpen,
-    setQuickAddNodeOpen,
     setPendingConnectPair,
     setConnectMode,
     setConnectSourceUuid,
@@ -357,7 +356,7 @@ export function DetectiveWorkspace({
 
   // Close Right Inspector Sheet / Cancel Connect or Compare Mode with Escape key
   useEffect(() => {
-    if (!inspectorOpen && !connectMode && !quickAddNodeOpen && !compareMode) return;
+    if (!inspectorOpen && !connectMode && !compareMode) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       if (document.querySelector('[popover]:popover-open, dialog[open], [role="dialog"]')) {
@@ -370,11 +369,10 @@ export function DetectiveWorkspace({
       setConnectMode(false);
       setConnectSourceUuid(null);
       setPendingConnectPair(null);
-      setQuickAddNodeOpen(false);
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [inspectorOpen, connectMode, quickAddNodeOpen, compareMode]);
+  }, [inspectorOpen, connectMode, compareMode]);
 
   const toggleTopic = useCallback((ds: ETGDatasetId) => {
     setActiveTopics((prev) =>
@@ -734,7 +732,6 @@ export function DetectiveWorkspace({
       setActiveCaseStudyId(null);
       setRelationNodePair(null);
       setFocusedSummaryDataset(null);
-      setQuickAddNodeOpen(false);
       setPendingConnectPair(null);
       setConnectSourceUuid(null);
       setConnectMode(false);
@@ -810,6 +807,7 @@ export function DetectiveWorkspace({
       viewMode,
       cancelTelemetryRequests,
       queryTimeSeries,
+      requestRegionalFocus,
       setComparison,
       setFocusedSummaryDataset,
       setTelemetryCurrent,
@@ -879,7 +877,6 @@ export function DetectiveWorkspace({
     setConnectMode(false);
     setConnectSourceUuid(null);
     setPendingConnectPair(null);
-    setQuickAddNodeOpen(false);
     setTelemetryCurrent(null);
     setTelemetrySecondaryCurrent(null);
     setTelemetryDiagnostics(null);
@@ -917,7 +914,6 @@ export function DetectiveWorkspace({
       if (targetNode && targetNode.uuid !== sourceNode.uuid) {
         setPendingConnectPair({ sourceUuid: sourceNode.uuid, targetUuid: targetNode.uuid });
         setSelectedEdgeUuid(null);
-        setQuickAddNodeOpen(false);
         setConnectSourceUuid(null);
         setConnectMode(false);
         openInspectorSafe();
@@ -972,6 +968,11 @@ export function DetectiveWorkspace({
         setTelemetrySummaries(srcEmbedded ? [srcEmbedded] : []);
         setProbedCoord({ lat: src.properties.lat, lng: src.properties.lng });
         setComparePinB({ lat: tgt.properties.lat, lng: tgt.properties.lng });
+        const frame = computeDipoleFramingTarget(
+          { lat: src.properties.lat, lng: src.properties.lng },
+          { lat: tgt.properties.lat, lng: tgt.properties.lng }
+        );
+        requestRegionalFocus(frame.lat, frame.lng, frame.radius);
         void queryTimeSeries(
           src.properties.lat,
           src.properties.lng,
@@ -1000,6 +1001,7 @@ export function DetectiveWorkspace({
       snapshot.nodes,
       cancelTelemetryRequests,
       queryTimeSeries,
+      requestRegionalFocus,
       setComparison,
       setFocusedSummaryDataset,
       setTelemetryCurrent,
@@ -1360,7 +1362,14 @@ export function DetectiveWorkspace({
     ]
   );
 
+  const snapshotNodesCountRef = useRef(snapshot.nodes.length);
+  snapshotNodesCountRef.current = snapshot.nodes.length;
   const demoBootedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      demoBootedRef.current = false;
+    };
+  }, []);
   useEffect(() => {
     if (demoBootedRef.current || !initialDemoMode) return;
     demoBootedRef.current = true;
@@ -1368,14 +1377,13 @@ export function DetectiveWorkspace({
       setSolarTargetLocation(null);
       setSolarGraphOpen(true);
     } else if (initialDemoMode === "spaceapps") {
-      if (snapshot.nodes.length === 0) {
+      if (snapshotNodesCountRef.current === 0) {
         void handleDiscoverGlobalTrends();
       }
       handleRunCaseStudy(GUIDED_DIPOLE_CASES[0]);
     }
   }, [
     initialDemoMode,
-    snapshot.nodes.length,
     handleDiscoverGlobalTrends,
     handleRunCaseStudy,
   ]);
@@ -1549,6 +1557,7 @@ export function DetectiveWorkspace({
               viewMode={viewMode}
               aiStudioOpen={aiStudioOpen}
               inspectorOpen={inspectorOpen}
+              inspectorWide={inspectorWide}
               onDismissStatus={() => setStatusMessage(null)}
               onCancelCompare={() => setCompareMode(false)}
             />
@@ -1584,6 +1593,7 @@ export function DetectiveWorkspace({
               showSuperseded={showSuperseded}
               enabledRelationCategories={enabledRelationCategories}
               inspectorOpen={inspectorOpen}
+              inspectorWide={inspectorWide}
               candidateLinks={candidateLinks}
               traversalFilter={traversalFilter}
               roleByNode={activeTraversal?.roleByNode ?? EMPTY_ROLE_BY_NODE}
@@ -1597,18 +1607,11 @@ export function DetectiveWorkspace({
               onSelectNode={handleSelectNode}
               onSelectEdge={(edge) => {
                 setPendingConnectPair(null);
-                setQuickAddNodeOpen(false);
                 handleSelectEdge(edge);
               }}
               onClearSelection={handleClearSelection}
               onToggleConnectMode={handleToggleConnectMode}
               onStartQuickConnect={handleStartQuickConnect}
-              onOpenQuickAddNode={() => {
-                setQuickAddNodeOpen(true);
-                setPendingConnectPair(null);
-                setSelectedEdgeUuid(null);
-                openInspectorSafe();
-              }}
               onDiscoverLinks={() => void handleDiscoverCandidateLinks()}
               onAcceptCandidateLink={(s) => void handleAcceptCandidateLink(s)}
               onClearCandidateLinks={() => setCandidateLinks([])}
@@ -1631,6 +1634,7 @@ export function DetectiveWorkspace({
               comparisonArcMeta={comparisonArcMeta}
               compareMode={compareMode}
               inspectorOpen={inspectorOpen}
+              inspectorWide={inspectorWide}
               mobileSheetExpanded={inspectorOpen && !mobileSheetCollapsed}
               enabledCategories={enabledRelationCategories}
               onChangeEnabledCategories={setEnabledRelationCategories}
@@ -1701,15 +1705,11 @@ export function DetectiveWorkspace({
             />
           )}
 
-          {snapshot.nodes.length === 0 && viewMode === "graph" && !quickAddNodeOpen && (
+          {snapshot.nodes.length === 0 && viewMode === "graph" && (
             <WorkspaceGraphEmptyPrompt
               discoverBusy={discoverBusy}
               onDiscoverGlobalTrends={() => void handleDiscoverGlobalTrends()}
               onMaterializeSolarGraph={() => void handleMaterializeSolarGraph()}
-              onOpenQuickAddNode={() => {
-                setQuickAddNodeOpen(true);
-                openInspectorSafe();
-              }}
               onOpenAgencyHub={() => {
                 setIngestTab("agencies");
                 setIngestOpen(true);
@@ -1720,10 +1720,14 @@ export function DetectiveWorkspace({
           {/* Compact Auto-Height Floating Spot Card or Flexible Graph Workbench */}
           {inspectorOpen &&
             (viewMode === "graph" &&
-            (selectedNode || selectedEdge || pendingConnectPair || quickAddNodeOpen) ? (
+            (selectedNode || selectedEdge || pendingConnectPair) ? (
               <aside
                 aria-label="Graph workbench"
-                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto max-sm:max-h-[54dvh] max-sm:overflow-y-auto sm:top-2.5 sm:right-2.5 sm:w-[min(348px,calc(100dvw-1.5rem))] xl:w-[min(364px,calc(100dvw-1.5rem))]"
+                className={`pointer-events-auto absolute z-30 transition-[width] duration-200 ease-out max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto max-sm:max-h-[54dvh] max-sm:overflow-y-auto sm:top-2.5 sm:right-2.5 ${
+                  inspectorWide
+                    ? "sm:w-[min(400px,calc(100dvw-1.5rem))] lg:w-[min(520px,calc(100dvw-1.5rem))] xl:w-[min(560px,calc(100dvw-1.5rem))]"
+                    : "sm:w-[min(400px,calc(100dvw-1.5rem))] lg:w-[min(440px,calc(100dvw-1.5rem))] xl:w-[min(472px,calc(100dvw-1.5rem))]"
+                }`}
               >
                 <GraphNodeWorkbenchPanel
                   allNodes={snapshot.nodes}
@@ -1731,20 +1735,19 @@ export function DetectiveWorkspace({
                   selectedNode={selectedNode}
                   selectedEdge={selectedEdge}
                   pendingConnectPair={pendingConnectPair}
-                  quickAddOpen={quickAddNodeOpen}
                   candidateLinks={candidateLinks}
                   microscopeScan={microscopeScan}
                   microscopeByNode={microscopeByNode}
                   traversalHistory={traversalHistory}
                   maxHops={traversalFilter.maxHops ?? 2}
+                  isWide={inspectorWide}
+                  onToggleWide={() => setInspectorWide((v) => !v)}
                   onSelectNode={handleSelectNode}
                   onSelectEdge={(edge) => {
                     setPendingConnectPair(null);
-                    setQuickAddNodeOpen(false);
                     handleSelectEdge(edge);
                   }}
                   onClearPendingConnect={() => setPendingConnectPair(null)}
-                  onCloseQuickAdd={() => setQuickAddNodeOpen(false)}
                   onStartQuickConnect={handleStartQuickConnect}
                   onDiscoverLinksForNode={(anchor) => handleDiscoverCandidateLinks(anchor)}
                   onAcceptCandidateLink={handleAcceptCandidateLink}
@@ -1759,7 +1762,11 @@ export function DetectiveWorkspace({
             ) : viewMode === "globe" ? (
               <aside
                 aria-label="Spot summary"
-                className="pointer-events-auto absolute z-30 max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto sm:top-2.5 sm:right-2.5 sm:w-[min(348px,calc(100dvw-1.5rem))] xl:w-[min(364px,calc(100dvw-1.5rem))]"
+                className={`pointer-events-auto absolute z-30 transition-[width] duration-200 ease-out max-sm:inset-x-2 max-sm:bottom-2 max-sm:top-auto sm:top-2.5 sm:right-2.5 ${
+                  inspectorWide
+                    ? "sm:w-[min(400px,calc(100dvw-1.5rem))] lg:w-[min(520px,calc(100dvw-1.5rem))] xl:w-[min(560px,calc(100dvw-1.5rem))]"
+                    : "sm:w-[min(400px,calc(100dvw-1.5rem))] lg:w-[min(440px,calc(100dvw-1.5rem))] xl:w-[min(472px,calc(100dvw-1.5rem))]"
+                }`}
               >
                 <CompactSpotCard
                   selectedNode={selectedNode}
@@ -1773,6 +1780,8 @@ export function DetectiveWorkspace({
                   microscopeByNode={microscopeByNode}
                   probedCoord={probedCoord}
                   primary={telemetryPrimary}
+                  isWide={inspectorWide}
+                  onToggleWide={() => setInspectorWide((v) => !v)}
                   secondary={telemetrySecondary}
                   summaries={telemetrySummaries}
                   focusedSummaryDataset={focusedSummaryDataset}

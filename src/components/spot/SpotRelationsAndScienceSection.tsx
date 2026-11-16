@@ -140,7 +140,7 @@ export function SpotRelationsSection({
             })}
           </div>
 
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             {filteredLinkedRelations.slice(0, 6).map(({ edge, peer, formatted }) => {
               const styles = relationCategoryStyles(formatted.category);
               const hasPeerCoords =
@@ -158,21 +158,21 @@ export function SpotRelationsSection({
               return (
                 <div
                   key={edge.properties.uuid}
-                  className="rounded-md border border-border bg-surface-inset p-2 space-y-1"
+                  className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2.5"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
-                          className={`rounded-xs border px-1.5 py-0.5 text-[10px] font-semibold ${styles.badge}`}
+                          className={`rounded-xs border px-1.5 py-0.5 text-[10.5px] font-semibold ${styles.badge}`}
                         >
                           {formatted.badgeText}
                         </span>
-                        <span className="ws-numeric text-[11px] font-medium text-text-primary truncate">
+                        <span className="ws-numeric text-xs font-medium leading-snug text-text-primary line-clamp-2">
                           {arrow} {formatted.peerName}
                         </span>
                       </div>
-                      <div className="ws-numeric mt-0.5 flex flex-wrap items-center gap-x-2 text-[10px] text-text-subtle">
+                      <div className="ws-numeric mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-text-subtle">
                         {formatted.peerRegion && <span>{formatted.peerRegion}</span>}
                         {formatted.correlationText && (
                           <span className="font-mono text-text-muted">
@@ -196,7 +196,7 @@ export function SpotRelationsSection({
                         <button
                           type="button"
                           onClick={() => onSelectEdge(edge)}
-                          className="rounded-sm border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                          className="rounded-sm border border-border bg-surface px-2 py-0.5 text-[10.5px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
                         >
                           Focus
                         </button>
@@ -205,7 +205,7 @@ export function SpotRelationsSection({
                         <button
                           type="button"
                           onClick={() => onCompareOpposite(anchorNode, peer)}
-                          className="rounded-sm border border-border bg-surface px-2 py-0.5 text-[10px] font-medium text-sky-300 hover:border-sky-400 cursor-pointer"
+                          className="rounded-sm border border-border bg-surface px-2 py-0.5 text-[10.5px] font-medium text-sky-300 hover:border-sky-400 cursor-pointer"
                         >
                           Compare
                         </button>
@@ -213,7 +213,7 @@ export function SpotRelationsSection({
                     </div>
                   </div>
 
-                  <p className="line-clamp-2 text-[11px] leading-snug text-text-muted">
+                  <p className="line-clamp-2 text-xs leading-relaxed text-text-muted">
                     {formatted.summaryLine}
                   </p>
                 </div>
@@ -365,26 +365,26 @@ export function SpotScienceAndActionsSection({
   onRunRegionalForecast: () => void;
 }) {
   return (
-    <div className="space-y-2 border-t border-border pt-2">
+    <div className="space-y-2.5 border-t border-border pt-2.5">
       {activeDigest && (
-        <div className="ws-numeric grid grid-cols-2 gap-1.5 font-mono text-[11px]">
-          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
+        <div className="ws-numeric grid grid-cols-2 gap-2 font-mono text-[11px]">
+          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
             <span className="block font-sans text-[10px] text-text-subtle">Window</span>
             <span className="text-text-primary">
               {activeDigest.periodRange} ({activeDigest.windowYears} pts)
             </span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
+          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
             <span className="block font-sans text-[10px] text-text-subtle">Range</span>
             <span className="text-text-primary">{activeDigest.rangeFormatted}</span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
+          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
             <span className="block font-sans text-[10px] text-text-subtle">Mean / Δ</span>
             <span className="text-text-primary">
               {activeDigest.meanFormatted} ({activeDigest.anomalyFormatted})
             </span>
           </div>
-          <div className="rounded-sm border border-border bg-surface-inset px-2 py-1">
+          <div className="rounded-sm border border-border bg-surface-inset px-2.5 py-1.5">
             <span className="block font-sans text-[10px] text-text-subtle">Anomaly Z</span>
             <span className="text-text-primary">{activeDigest.anomalyZFormatted ?? "—"}</span>
           </div>
@@ -538,13 +538,13 @@ export function SpotScienceAndActionsSection({
 
       {/* Regional Multi-Scale Graph Forecast */}
       {(coord || selectedNode) && (
-        <div className="rounded-md border border-sky-400 bg-sky-950 p-2 space-y-1.5">
+        <div className="space-y-2 rounded-md border border-sky-400 bg-sky-950 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="text-[11px] font-semibold text-sky-200">
+              <div className="text-xs font-semibold text-sky-200">
                 Regional Multi-Scale Graph Forecast
               </div>
-              <div className="text-[10px] text-text-muted">
+              <div className="text-[11px] leading-snug text-text-muted">
                 Uses global teleconnections, nearby sensors &amp; multi-scale ETG weights
               </div>
             </div>
@@ -552,9 +552,9 @@ export function SpotScienceAndActionsSection({
               type="button"
               disabled={spotPredLoading}
               onClick={onRunRegionalForecast}
-              className="inline-flex items-center gap-1 rounded-sm border border-sky-400 bg-sky-900 px-2.5 py-1 text-[11px] font-medium text-sky-100 hover:border-sky-300 cursor-pointer disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-sm border border-sky-400 bg-sky-900 px-2.5 py-1 text-[11.5px] font-medium text-sky-100 hover:border-sky-300 cursor-pointer disabled:opacity-60"
             >
-              <TrendingUp className="h-3 w-3" aria-hidden="true" />
+              <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
               {spotPredLoading ? "Predicting…" : "Predict Region Trajectory"}
             </button>
           </div>

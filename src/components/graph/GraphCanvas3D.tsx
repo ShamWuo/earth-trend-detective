@@ -55,6 +55,7 @@ export function GraphCanvas3D({
   searchQuery,
   isLightTheme,
   inspectorOpen = false,
+  inspectorWide = false,
   candidateLinks = [],
   roleByNode = {},
   microscopeByNode = {},
@@ -85,6 +86,8 @@ export function GraphCanvas3D({
   isOrbitingRef.current = isOrbiting;
   const inspectorOpenRef = useRef(inspectorOpen);
   inspectorOpenRef.current = inspectorOpen;
+  const inspectorWideRef = useRef(inspectorWide);
+  inspectorWideRef.current = inspectorWide;
 
   const rotationRef = useRef({
     pitch: DEFAULT_ORBIT_3D.pitch,
@@ -98,7 +101,7 @@ export function GraphCanvas3D({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const cameraPositionRef = useRef(new THREE.Vector3(0, 0, DEFAULT_ORBIT_3D.radius));
   const currentLookAtRef = useRef(new THREE.Vector3(0, 0, 0));
-  const freeFlightRef = useRef(false);
+  const freeFlightRef = useRef(true);
   const cameraGlideRef = useRef<CameraGlideState>({
     active: false,
     startTime: 0,
@@ -138,6 +141,13 @@ export function GraphCanvas3D({
       targetZ: target.z,
     };
     orbitRadiusRef.current = { val: radius, target: radius };
+    const initCamPos = computeOrbitCameraPosition(
+      target,
+      radius,
+      rotationRef.current.pitch,
+      rotationRef.current.yaw
+    );
+    cameraPositionRef.current.set(initCamPos.x, initCamPos.y, initCamPos.z);
   }, [layoutPositions, overviewFraming]);
 
   const regionClusters = useMemo(
@@ -285,7 +295,7 @@ export function GraphCanvas3D({
     const height = host.clientHeight || 640;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(44, width / height, 1, 4500);
+    const camera = new THREE.PerspectiveCamera(44, width / height, 1, 100000);
     cameraRef.current = camera;
 
     const initCamPos = computeOrbitCameraPosition(
@@ -439,17 +449,22 @@ export function GraphCanvas3D({
         const mid = { x: (pts[0].x + pts[1].x) * 0.5, y: (pts[0].y + pts[1].y) * 0.5 };
         if (prevPinchDist !== null && prevPinchDist > 4) {
           const zoomDelta = (prevPinchDist - dist) * 0.75;
-          orbitRadiusRef.current.target = Math.max(
-            42,
-            Math.min(1100, orbitRadiusRef.current.target + zoomDelta)
-          );
-          if (cameraGlideRef.current.active) {
-            cameraGlideRef.current.targetRadius = orbitRadiusRef.current.target;
+          if (freeFlightRef.current) {
+            const forward = new THREE.Vector3();
+            camera.getWorldDirection(forward);
+            cameraPositionRef.current.addScaledVector(forward, -zoomDelta);
+          } else {
+            orbitRadiusRef.current.target = Math.max(
+              42,
+              orbitRadiusRef.current.target + zoomDelta
+            );
+            if (cameraGlideRef.current.active) {
+              cameraGlideRef.current.targetRadius = orbitRadiusRef.current.target;
+            }
           }
         }
         if (prevPinchMid) {
           cameraGlideRef.current.active = false;
-          freeFlightRef.current = false;
           const delta = computeCameraPanDelta(
             mid.x - prevPinchMid.x,
             mid.y - prevPinchMid.y,
@@ -457,9 +472,15 @@ export function GraphCanvas3D({
             rotationRef.current.targetYaw,
             orbitRadiusRef.current.val
           );
-          panTargetRef.current.targetX += delta.x;
-          panTargetRef.current.targetY += delta.y;
-          panTargetRef.current.targetZ += delta.z;
+          if (freeFlightRef.current) {
+            cameraPositionRef.current.x += delta.x;
+            cameraPositionRef.current.y += delta.y;
+            cameraPositionRef.current.z += delta.z;
+          } else {
+            panTargetRef.current.targetX += delta.x;
+            panTargetRef.current.targetY += delta.y;
+            panTargetRef.current.targetZ += delta.z;
+          }
         }
         prevPinchDist = dist;
         prevPinchMid = mid;
@@ -473,7 +494,6 @@ export function GraphCanvas3D({
 
         if (isPanning) {
           cameraGlideRef.current.active = false;
-          freeFlightRef.current = false;
           const delta = computeCameraPanDelta(
             dx,
             dy,
@@ -481,9 +501,15 @@ export function GraphCanvas3D({
             rotationRef.current.targetYaw,
             orbitRadiusRef.current.val
           );
-          panTargetRef.current.targetX += delta.x;
-          panTargetRef.current.targetY += delta.y;
-          panTargetRef.current.targetZ += delta.z;
+          if (freeFlightRef.current) {
+            cameraPositionRef.current.x += delta.x;
+            cameraPositionRef.current.y += delta.y;
+            cameraPositionRef.current.z += delta.z;
+          } else {
+            panTargetRef.current.targetX += delta.x;
+            panTargetRef.current.targetY += delta.y;
+            panTargetRef.current.targetZ += delta.z;
+          }
         } else {
           const targetYawDelta = -dx * 0.0052;
           const targetPitchDelta = dy * 0.0052;
@@ -569,7 +595,7 @@ export function GraphCanvas3D({
       }
       orbitRadiusRef.current.target = Math.max(
         42,
-        Math.min(1100, orbitRadiusRef.current.target + e.deltaY * 0.24)
+        orbitRadiusRef.current.target + e.deltaY * 0.24
       );
       if (cameraGlideRef.current.active) {
         cameraGlideRef.current.targetRadius = orbitRadiusRef.current.target;
@@ -671,7 +697,7 @@ export function GraphCanvas3D({
         }
       }
 
-      if (isOrbitingRef.current && !isDragging && !freeFlightRef.current) {
+      if (isOrbitingRef.current && !isDragging) {
         rotationRef.current.targetYaw += delta * 0.065;
       }
 
@@ -695,7 +721,9 @@ export function GraphCanvas3D({
 
       const targetOffsetX =
         inspectorOpenRef.current && w >= 1024
-          ? Math.round(Math.min(368, w * 0.30) * 0.34)
+          ? Math.round(
+              Math.min(inspectorWideRef.current ? 556 : 468, w * 0.4) * 0.36
+            )
           : 0;
       currentViewOffsetX += (targetOffsetX - currentViewOffsetX) * 0.12;
       if (Math.abs(currentViewOffsetX) > 0.5) {
@@ -775,6 +803,7 @@ export function GraphCanvas3D({
         viewportWidth: w,
         viewportHeight: h,
         inspectorOpen: inspectorOpenRef.current,
+        inspectorWide: inspectorWideRef.current,
         nodeObjects: nodeObjectsRef.current,
         edgeObjects: edgeObjectsRef.current,
         regionClusters: regionClustersRef.current,
@@ -881,11 +910,16 @@ export function GraphCanvas3D({
   }, [prefersReducedMotion]);
 
   const handleStepRotate = useCallback(() => {
-    freeFlightRef.current = false;
     rotationRef.current.targetYaw += (35 * Math.PI) / 180;
   }, []);
 
   const handleZoomIn = useCallback(() => {
+    if (freeFlightRef.current && cameraRef.current) {
+      const forward = new THREE.Vector3();
+      cameraRef.current.getWorldDirection(forward);
+      cameraPositionRef.current.addScaledVector(forward, 36);
+      return;
+    }
     orbitRadiusRef.current.target = Math.max(42, orbitRadiusRef.current.target - 36);
     if (cameraGlideRef.current.active) {
       cameraGlideRef.current.targetRadius = orbitRadiusRef.current.target;
@@ -893,7 +927,16 @@ export function GraphCanvas3D({
   }, []);
 
   const handleZoomOut = useCallback(() => {
-    orbitRadiusRef.current.target = Math.min(1100, orbitRadiusRef.current.target + 36);
+    if (freeFlightRef.current && cameraRef.current) {
+      const forward = new THREE.Vector3();
+      cameraRef.current.getWorldDirection(forward);
+      cameraPositionRef.current.addScaledVector(forward, -36);
+      return;
+    }
+    orbitRadiusRef.current.target = Math.max(
+      orbitRadiusRef.current.target + 36,
+      orbitRadiusRef.current.target * 1.18
+    );
     if (cameraGlideRef.current.active) {
       cameraGlideRef.current.targetRadius = orbitRadiusRef.current.target;
     }
@@ -935,12 +978,13 @@ export function GraphCanvas3D({
         })}
         {nodes.map((node) => {
           const isSelected = node.uuid === selectedNodeUuid || node.uuid === connectSourceUuid;
+          const isFocusedPreview = isSelected || node.uuid === hoveredUuid;
           const color = resolveEtgNodeColor(node);
           const role = roleByNode[node.uuid];
           const slopeInfo = formatTrendStat(node, isLightTheme);
           const cleanName = humanizeNodeText(node.properties.name);
           const displayName =
-            cleanName.length > 32 ? `${cleanName.slice(0, 30)}…` : cleanName;
+            cleanName.length > 64 ? `${cleanName.slice(0, 62)}…` : cleanName;
           const isSuperseded =
             node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
           const microBadge = resolveMicroscopeNodeBadge(microscopeByNode[node.uuid], isLightTheme);
@@ -979,48 +1023,113 @@ export function GraphCanvas3D({
                 left: 0,
                 borderColor: isSelected ? color : undefined,
               }}
-              className={`ws-numeric absolute inline-flex items-center gap-1.5 rounded-sm border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap shadow-md transition-opacity duration-150 cursor-pointer ${
-                isSuperseded ? "border-dashed opacity-85" : ""
-              } ${
-                isSelected
-                  ? "border-accent-fg bg-surface text-text-primary"
+              className={`ws-numeric absolute rounded-md border transition-opacity duration-150 cursor-pointer ${
+                isFocusedPreview
+                  ? "z-10 flex max-w-[min(356px,80vw)] flex-col items-start gap-1 px-3.5 py-2 text-left shadow-xl backdrop-blur-md"
+                  : "inline-flex max-w-[280px] items-center gap-2 px-3 py-1 text-xs font-medium whitespace-nowrap shadow-md"
+              } ${isSuperseded ? "border-dashed opacity-85" : ""} ${
+                isFocusedPreview
+                  ? "border-accent-fg bg-surface/95 text-text-primary"
                   : "border-border bg-surface-elevated text-text-primary hover:border-border-strong"
               }`}
             >
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{ backgroundColor: color }}
-                aria-hidden="true"
-              />
-              <span className={isSuperseded ? "line-through decoration-1 opacity-80" : undefined}>
-                {displayName}
-              </span>
-              {role === "upstream" && (
-                <span className="rounded-xs bg-teal-950 px-1 font-mono text-[9px] text-teal-300">
-                  driver
-                </span>
-              )}
-              {role === "downstream" && (
-                <span className="rounded-xs bg-amber-950 px-1 font-mono text-[9px] text-amber-300">
-                  impact
-                </span>
-              )}
-              {isSuperseded && (
-                <span className="rounded-xs bg-surface-band px-1 font-mono text-[8.5px] uppercase text-text-muted">
-                  superseded
-                </span>
-              )}
-              {microBadge && (
-                <span
-                  className={`rounded-xs px-1 font-mono text-[8.5px] font-semibold ${microBadge.pillClass}`}
-                >
-                  {microBadge.text}
-                </span>
-              )}
-              {node.properties.theil_sen_slope !== undefined && (
-                <span className="font-mono text-[9px]" style={{ color: slopeInfo.color }}>
-                  {node.properties.theil_sen_slope >= 0 ? "↑" : "↓"}
-                </span>
+              {isFocusedPreview ? (
+                <>
+                  <span className="flex w-full items-start gap-2">
+                    <span
+                      className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: color }}
+                      aria-hidden="true"
+                    />
+                    <span
+                      className={`text-[12.5px] font-semibold leading-snug text-text-primary whitespace-normal line-clamp-2 ${
+                        isSuperseded ? "line-through decoration-1 opacity-80" : ""
+                      }`}
+                    >
+                      {displayName}
+                    </span>
+                  </span>
+                  <span className="flex flex-wrap items-center gap-1.5 pl-4 text-[11px] text-text-muted">
+                    <span className="font-medium text-text-subtle">{node.label}</span>
+                    {node.properties.region && (
+                      <span className="max-w-[140px] truncate text-text-subtle">
+                        · {node.properties.region}
+                      </span>
+                    )}
+                    {node.properties.theil_sen_slope !== undefined && (
+                      <span
+                        className="font-mono ws-numeric font-semibold"
+                        style={{ color: slopeInfo.color }}
+                      >
+                        {slopeInfo.label}
+                      </span>
+                    )}
+                    {role === "upstream" && (
+                      <span className="rounded-xs bg-teal-950 px-1.5 py-0.5 font-mono text-[10px] text-teal-300">
+                        driver
+                      </span>
+                    )}
+                    {role === "downstream" && (
+                      <span className="rounded-xs bg-amber-950 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
+                        impact
+                      </span>
+                    )}
+                    {isSuperseded && (
+                      <span className="rounded-xs bg-surface-band px-1.5 py-0.5 font-mono text-[10px] uppercase text-text-muted">
+                        superseded
+                      </span>
+                    )}
+                    {microBadge && (
+                      <span
+                        className={`rounded-xs px-1.5 py-0.5 font-mono text-[10px] font-semibold ${microBadge.pillClass}`}
+                      >
+                        {microBadge.text}
+                      </span>
+                    )}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: color }}
+                    aria-hidden="true"
+                  />
+                  <span
+                    className={`truncate ${
+                      isSuperseded ? "line-through decoration-1 opacity-80" : ""
+                    }`}
+                  >
+                    {displayName}
+                  </span>
+                  {role === "upstream" && (
+                    <span className="rounded-xs bg-teal-950 px-1.5 py-0.5 font-mono text-[10px] text-teal-300">
+                      driver
+                    </span>
+                  )}
+                  {role === "downstream" && (
+                    <span className="rounded-xs bg-amber-950 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
+                      impact
+                    </span>
+                  )}
+                  {isSuperseded && (
+                    <span className="rounded-xs bg-surface-band px-1.5 py-0.5 font-mono text-[10px] uppercase text-text-muted">
+                      superseded
+                    </span>
+                  )}
+                  {microBadge && (
+                    <span
+                      className={`rounded-xs px-1.5 py-0.5 font-mono text-[10px] font-semibold ${microBadge.pillClass}`}
+                    >
+                      {microBadge.text}
+                    </span>
+                  )}
+                  {node.properties.theil_sen_slope !== undefined && (
+                    <span className="font-mono text-[10.5px]" style={{ color: slopeInfo.color }}>
+                      {node.properties.theil_sen_slope >= 0 ? "↑" : "↓"}
+                    </span>
+                  )}
+                </>
               )}
             </button>
           );
@@ -1029,8 +1138,12 @@ export function GraphCanvas3D({
         {/* Floating clickable + Wire pill suggestions for discovered candidate links in 3D */}
         {candidateLinks.length > 0 && onAcceptCandidateLink && (
           <div
-            className={`pointer-events-auto absolute bottom-3 z-20 flex max-w-sm flex-col gap-1 ${
-              inspectorOpen ? "right-3 sm:right-[23rem] xl:right-[24rem]" : "right-3"
+            className={`pointer-events-auto absolute bottom-3 z-20 flex max-w-md flex-col gap-1.5 ${
+              inspectorOpen
+                ? inspectorWide
+                  ? "right-3 sm:right-[26rem] lg:right-[33.5rem] xl:right-[36rem]"
+                  : "right-3 sm:right-[26rem] lg:right-[28.5rem] xl:right-[30.5rem]"
+                : "right-3"
             }`}
           >
             {candidateLinks.slice(0, 3).map((cand) => (
@@ -1039,21 +1152,21 @@ export function GraphCanvas3D({
                 type="button"
                 onClick={() => onAcceptCandidateLink(cand)}
                 title={`+ Wire: ${humanizeNodeText(cand.sourceName)} → ${humanizeNodeText(cand.targetName)}`}
-                className="etg-hud-pill flex items-center justify-between gap-1.5 rounded-md border border-violet-400 bg-surface px-2.5 py-1 text-left text-[10.5px] hover:border-violet-300 cursor-pointer"
+                className="etg-hud-pill flex items-center justify-between gap-2 rounded-md border border-violet-400 bg-surface px-3 py-1.5 text-left text-[11.5px] hover:border-violet-300 cursor-pointer"
               >
-                <span className="flex min-w-0 items-center gap-1 text-text-primary">
+                <span className="flex min-w-0 items-center gap-1.5 text-text-primary">
                   <span className="shrink-0 font-semibold text-violet-300">+ Wire:</span>
-                  <span className="min-w-0 max-w-[7.75rem] truncate">
+                  <span className="min-w-0 max-w-[9rem] truncate">
                     {humanizeNodeText(cand.sourceName)}
                   </span>
                   <span className="shrink-0 text-text-muted" aria-hidden="true">
                     →
                   </span>
-                  <span className="min-w-0 max-w-[7.75rem] truncate">
+                  <span className="min-w-0 max-w-[9rem] truncate">
                     {humanizeNodeText(cand.targetName)}
                   </span>
                 </span>
-                <span className="shrink-0 font-mono ws-numeric text-[10px] text-violet-300">
+                <span className="shrink-0 font-mono ws-numeric text-[11px] text-violet-300">
                   {cand.pearsonR !== undefined ? `r=${cand.pearsonR.toFixed(2)}` : `${Math.round(cand.score * 100)}%`}
                 </span>
               </button>
@@ -1071,7 +1184,7 @@ export function GraphCanvas3D({
         const src = nodeById.get(activeEdge.source_uuid);
         const tgt = nodeById.get(activeEdge.target_uuid);
         return (
-          <div className="etg-hud-pill pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded-md bg-surface px-2.5 py-1 text-[11px] shadow-lg">
+          <div className="etg-hud-pill pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 space-y-1 rounded-lg bg-surface px-3.5 py-2 text-xs shadow-lg">
             <div
               className={`flex items-center gap-2 font-semibold ${
                 activeEdge.type === "drives_opposite"
@@ -1104,7 +1217,7 @@ export function GraphCanvas3D({
                 <span className="text-text-muted">· {activeEdge.properties.mechanism}</span>
               )}
             </div>
-            <div className="mt-0.5 text-[11px] text-text-muted">
+            <div className="text-xs text-text-muted">
               {src?.properties.name ?? activeEdge.source_uuid} ↔{" "}
               {tgt?.properties.name ?? activeEdge.target_uuid}
             </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
-import { BookOpen, GitBranchPlus, Globe2, Sparkles, X } from "lucide-react";
+import { BookOpen, GitBranchPlus, Globe2, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import { ETG_LABEL_PALETTE, resolveEtgNodeColor } from "@/lib/graph/graphVisuals";
 import { useIsLightTheme } from "@/components/graph/graphViewShared";
@@ -13,7 +13,6 @@ import type {
   TrendMicroscopeScanResult,
 } from "@/types/etg";
 import type { WorkbenchTab } from "@/components/workbench/workbenchShared";
-import { WorkbenchQuickAddNodeForm } from "@/components/workbench/WorkbenchQuickAddNodeForm";
 import { WorkbenchEdgeComposerForm } from "@/components/workbench/WorkbenchEdgeComposerForm";
 import { WorkbenchTraverseTab } from "@/components/workbench/WorkbenchTraverseTab";
 import { WorkbenchPredictTab } from "@/components/workbench/WorkbenchPredictTab";
@@ -25,16 +24,16 @@ interface GraphNodeWorkbenchPanelProps {
   selectedNode: ETGNode | null;
   selectedEdge: ETGEdge | null;
   pendingConnectPair: { sourceUuid: string; targetUuid: string } | null;
-  quickAddOpen: boolean;
   candidateLinks: CandidateLinkSuggestion[];
   microscopeScan?: TrendMicroscopeScanResult | null;
   microscopeByNode?: Record<string, NodeTrendMicroscopeCue>;
   traversalHistory: Array<{ uuid: string; name: string }>;
   maxHops: number;
+  isWide?: boolean;
+  onToggleWide?: () => void;
   onSelectNode: (node: ETGNode) => void;
   onSelectEdge: (edge: ETGEdge) => void;
   onClearPendingConnect: () => void;
-  onCloseQuickAdd: () => void;
   onStartQuickConnect: (sourceNode: ETGNode, targetNode?: ETGNode) => void;
   onDiscoverLinksForNode: (anchorUuid: string) => Promise<void>;
   onAcceptCandidateLink: (suggestion: CandidateLinkSuggestion) => Promise<void>;
@@ -52,16 +51,16 @@ export function GraphNodeWorkbenchPanel({
   selectedNode,
   selectedEdge,
   pendingConnectPair,
-  quickAddOpen,
   candidateLinks,
   microscopeScan = null,
   microscopeByNode,
   traversalHistory,
   maxHops,
+  isWide = false,
+  onToggleWide,
   onSelectNode,
   onSelectEdge,
   onClearPendingConnect,
-  onCloseQuickAdd,
   onStartQuickConnect,
   onDiscoverLinksForNode,
   onAcceptCandidateLink,
@@ -205,19 +204,6 @@ export function GraphNodeWorkbenchPanel({
     }
   };
 
-  // Mode A: Quick Phenomenon Node Creator
-  if (quickAddOpen) {
-    return (
-      <WorkbenchQuickAddNodeForm
-        baseId={baseId}
-        allNodes={allNodes}
-        onCloseQuickAdd={onCloseQuickAdd}
-        onSelectNode={onSelectNode}
-        onSnapshotChange={onSnapshotChange}
-      />
-    );
-  }
-
   // Mode B: Edge Connection Composer / Editor
   if (pendingConnectPair || selectedEdge) {
     return (
@@ -263,12 +249,12 @@ export function GraphNodeWorkbenchPanel({
   return (
     <div className="etg-hud-pill flex max-h-[calc(100dvh-4.25rem)] flex-col overflow-hidden rounded-lg bg-surface/95 backdrop-blur-md shadow-2xl">
       {/* Workbench Header */}
-      <div className="border-b border-border px-3 py-2 space-y-1.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 space-y-0.5">
-            <div className="flex flex-wrap items-center gap-1">
+      <div className="border-b border-border px-4 pt-3.5 pb-3 space-y-2.5">
+        <div className="flex items-start justify-between gap-2.5">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span
-                className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-semibold"
+                className="inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] font-semibold"
                 style={{
                   backgroundColor: isLightTheme ? labelStyle.pillBgLight : labelStyle.pillBgDark,
                   color: pillColor,
@@ -276,7 +262,7 @@ export function GraphNodeWorkbenchPanel({
               >
                 {selectedNode.label}
               </span>
-              <span className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+              <span className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 font-mono text-[11px] text-text-muted">
                 {isHuman
                   ? "Human"
                   : selectedNode.properties.authored_by === "ai"
@@ -284,49 +270,71 @@ export function GraphNodeWorkbenchPanel({
                     : "NASA / Sensor"}
               </span>
               {selectedNode.properties.phenomenon_type && (
-                <span className="rounded-sm border border-border bg-surface-inset px-1.5 py-0.5 text-[10px] text-text-subtle">
+                <span className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[11px] text-text-subtle">
                   {selectedNode.properties.phenomenon_type.replaceAll("_", " ")}
+                </span>
+              )}
+              {selectedNode.properties.region && (
+                <span className="rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[11px] text-text-subtle">
+                  {selectedNode.properties.region}
                 </span>
               )}
               {(selectedNode.properties.status === "Superseded" ||
                 Boolean(selectedNode.properties.superseded_by)) && (
-                <span className="rounded-sm border border-purple-400 bg-purple-950 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-purple-300">
+                <span className="rounded-sm border border-purple-400/70 bg-purple-950/75 px-2 py-0.5 font-mono text-[11px] font-semibold text-purple-300">
                   Superseded
                 </span>
               )}
             </div>
-            <h2 className="truncate text-[13px] font-semibold text-text-primary">
+            <h2 className="text-[15px] sm:text-base font-semibold leading-snug text-text-primary">
               {selectedNode.properties.name}
             </h2>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close node workbench"
-            className="etg-hud-btn inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {onToggleWide && (
+              <button
+                type="button"
+                onClick={onToggleWide}
+                title={isWide ? "Restore standard panel width" : "Expand panel width"}
+                aria-label={isWide ? "Restore standard panel width" : "Expand panel width"}
+                className="etg-hud-btn hidden lg:inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
+              >
+                {isWide ? (
+                  <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close node workbench"
+              className="etg-hud-btn inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-sm text-text-muted hover:bg-surface-band hover:text-text-primary cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-2 pt-0.5">
           <button
             type="button"
             onClick={() => onStartQuickConnect(selectedNode)}
             title="Connect From Here"
-            className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-amber-400 bg-amber-950 px-2 text-[10.5px] font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
+            className="etg-hud-btn inline-flex h-7 items-center gap-1.5 rounded-sm border border-amber-400/55 bg-amber-950/75 px-2.5 text-[11.5px] font-semibold text-amber-300 hover:border-amber-300 cursor-pointer"
           >
-            <GitBranchPlus className="h-3 w-3" aria-hidden="true" />
+            <GitBranchPlus className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Connect</span>
           </button>
           <button
             type="button"
             onClick={() => void onDiscoverLinksForNode(selectedNode.uuid)}
             title="Discover Links"
-            className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-purple-400 bg-purple-950 px-2 text-[10.5px] font-semibold text-purple-300 hover:border-purple-300 cursor-pointer"
+            className="etg-hud-btn inline-flex h-7 items-center gap-1.5 rounded-sm border border-purple-400/55 bg-purple-950/75 px-2.5 text-[11.5px] font-semibold text-purple-300 hover:border-purple-300 cursor-pointer"
           >
-            <Sparkles className="h-3 w-3" aria-hidden="true" />
+            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Links</span>
           </button>
           {typeof selectedNode.properties.lat === "number" &&
@@ -336,9 +344,9 @@ export function GraphNodeWorkbenchPanel({
                 type="button"
                 onClick={() => onLocateOnGlobe(selectedNode)}
                 title="Locate on 3D Earth"
-                className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-sky-400 bg-sky-950 px-2 text-[10.5px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
+                className="etg-hud-btn inline-flex h-7 items-center gap-1.5 rounded-sm border border-sky-400/55 bg-sky-950/75 px-2.5 text-[11.5px] font-semibold text-sky-300 hover:border-sky-300 cursor-pointer"
               >
-                <Globe2 className="h-3 w-3" aria-hidden="true" />
+                <Globe2 className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Earth</span>
               </button>
             )}
@@ -347,9 +355,9 @@ export function GraphNodeWorkbenchPanel({
               type="button"
               onClick={() => onOpenBriefing(selectedNode.uuid)}
               title="Open Scientific Research Briefing & Literature Citations"
-              className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-emerald-400 bg-emerald-950 px-2 text-[10.5px] font-semibold text-emerald-300 hover:border-emerald-300 cursor-pointer"
+              className="etg-hud-btn inline-flex h-7 items-center gap-1.5 rounded-sm border border-emerald-400/55 bg-emerald-950/75 px-2.5 text-[11.5px] font-semibold text-emerald-300 hover:border-emerald-300 cursor-pointer"
             >
-              <BookOpen className="h-3 w-3" aria-hidden="true" />
+              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
               <span>Briefing</span>
             </button>
           )}
@@ -357,7 +365,7 @@ export function GraphNodeWorkbenchPanel({
       </div>
 
       {/* Single-Row Accessible Tablist (.etg-tablist / .etg-tab) */}
-      <div role="tablist" aria-label="Node workbench sections" className="etg-tablist shrink-0 px-3">
+      <div role="tablist" aria-label="Node workbench sections" className="etg-tablist shrink-0 px-4">
         {tabs.map((tab, idx) => (
           <button
             key={tab.id}
@@ -424,7 +432,6 @@ export function GraphNodeWorkbenchPanel({
             baseId={baseId}
             active={
               activeTab === "predict" &&
-              !quickAddOpen &&
               !pendingConnectPair &&
               !selectedEdge
             }

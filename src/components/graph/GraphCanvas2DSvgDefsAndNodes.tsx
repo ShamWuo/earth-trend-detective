@@ -57,27 +57,35 @@ export function Graph2DSvgDefs({
           fill={isLightTheme ? "rgba(24, 24, 27, 0.14)" : "rgba(255, 255, 255, 0.12)"}
         />
       </pattern>
-      <clipPath id="etg-card-clip-full">
+      <clipPath id="etg-card-clip-meta-full">
         <rect
-          x={-CARD_WIDTH / 2 + 24}
+          x={-CARD_WIDTH / 2 + 25}
           y={-CARD_HEIGHT / 2}
-          width={CARD_WIDTH - 36}
-          height={CARD_HEIGHT}
+          width={CARD_WIDTH - 40}
+          height={32}
         />
       </clipPath>
-      <clipPath id="etg-card-clip-badged">
+      <clipPath id="etg-card-clip-meta-badged">
         <rect
-          x={-CARD_WIDTH / 2 + 24}
+          x={-CARD_WIDTH / 2 + 25}
           y={-CARD_HEIGHT / 2}
-          width={CARD_WIDTH - 80}
-          height={CARD_HEIGHT}
+          width={CARD_WIDTH - 96}
+          height={32}
         />
       </clipPath>
-      <clipPath id="etg-card-clip-double">
+      <clipPath id="etg-card-clip-meta-double">
         <rect
-          x={-CARD_WIDTH / 2 + 24}
+          x={-CARD_WIDTH / 2 + 25}
           y={-CARD_HEIGHT / 2}
-          width={CARD_WIDTH - 128}
+          width={CARD_WIDTH - 152}
+          height={32}
+        />
+      </clipPath>
+      <clipPath id="etg-card-clip-title">
+        <rect
+          x={-CARD_WIDTH / 2 + 14}
+          y={-CARD_HEIGHT / 2}
+          width={CARD_WIDTH - 28}
           height={CARD_HEIGHT}
         />
       </clipPath>
@@ -159,7 +167,38 @@ export function Graph2DSvgDefs({
   );
 }
 
-/** Semantic-zoom 2D node element rendered either as a labeled dot or a 248x64 ETG card. */
+function splitCardTitleLines(text: string, maxPerLine = 36): [string, string | null] {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxPerLine) return [trimmed, null];
+  const words = trimmed.split(/\s+/);
+  let line1 = "";
+  let idx = 0;
+  while (idx < words.length) {
+    const candidate = line1 ? `${line1} ${words[idx]}` : words[idx];
+    if (candidate.length <= maxPerLine) {
+      line1 = candidate;
+      idx += 1;
+    } else {
+      break;
+    }
+  }
+  if (!line1) {
+    line1 = trimmed.slice(0, maxPerLine);
+    const rest = trimmed.slice(maxPerLine).trim();
+    if (!rest) return [line1, null];
+    const line2 = rest.length > maxPerLine ? `${rest.slice(0, maxPerLine - 1).trimEnd()}…` : rest;
+    return [line1, line2];
+  }
+  const remaining = words.slice(idx).join(" ");
+  if (!remaining) return [line1, null];
+  const line2 =
+    remaining.length > maxPerLine
+      ? `${remaining.slice(0, maxPerLine - 1).trimEnd()}…`
+      : remaining;
+  return [line1, line2];
+}
+
+/** Semantic-zoom 2D node element rendered either as a labeled dot or a 296x76 ETG card. */
 export function Graph2DNodeItem({
   node,
   position,
@@ -216,8 +255,12 @@ export function Graph2DNodeItem({
     const isSupersededDot =
       node.properties.status === "Superseded" || Boolean(node.properties.superseded_by);
     const clean = humanizeNodeText(node.properties.name);
-    const shortLabel = clean.length > 28 ? `${clean.slice(0, 26)}…` : clean;
+    const shortLabel = clean.length > 44 ? `${clean.slice(0, 42)}…` : clean;
     const effectiveShow = isSelected || isHovered || isSearchHit || showDotLabel;
+    const scale = Math.min(2, dotScale2D);
+    const pillW = Math.max(72 * scale, shortLabel.length * 6.3 * scale + 20 * scale);
+    const pillH = 20 * scale;
+    const labelY = r + 17 * scale;
 
     return (
       <g
@@ -232,10 +275,10 @@ export function Graph2DNodeItem({
       >
         {isConnectSource && (
           <circle
-            r={r + 5 * Math.min(2, dotScale2D)}
+            r={r + 5 * scale}
             fill="none"
             stroke="#fbbf24"
-            strokeWidth={2 * Math.min(2, dotScale2D)}
+            strokeWidth={2 * scale}
             strokeDasharray="4 3"
             strokeOpacity={0.75}
           />
@@ -245,18 +288,32 @@ export function Graph2DNodeItem({
           fill={color}
           stroke={isLightTheme ? "#ffffff" : "#0b0c10"}
           strokeDasharray={isSupersededDot ? "3 2" : undefined}
-          strokeWidth={1.8 * Math.min(2, dotScale2D)}
+          strokeWidth={1.8 * scale}
         />
         {effectiveShow && (
-          <text
-            y={r + 14 * Math.min(2, dotScale2D)}
-            textAnchor="middle"
-            fontSize={10.5 * Math.min(2, dotScale2D)}
-            fontWeight={500}
-            fill={cardTitle}
-          >
-            {shortLabel}
-          </text>
+          <g pointerEvents="none">
+            <rect
+              x={-pillW / 2}
+              y={labelY - pillH / 2}
+              width={pillW}
+              height={pillH}
+              rx={5 * scale}
+              fill={cardBg}
+              fillOpacity={0.92}
+              stroke={isSelected || isHovered ? color : cardBorder}
+              strokeWidth={1 * scale}
+            />
+            <text
+              y={labelY}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fontSize={11 * scale}
+              fontWeight={500}
+              fill={cardTitle}
+            >
+              {shortLabel}
+            </text>
+          </g>
         )}
       </g>
     );
@@ -302,14 +359,16 @@ export function Graph2DNodeItem({
 
   const badgeCount = (roleBadge ? 1 : 0) + (statusOrMicroBadge ? 1 : 0);
   const cleanName = humanizeNodeText(node.properties.name);
-  const maxChars = badgeCount === 2 ? 14 : badgeCount === 1 ? 20 : 28;
-  let titleText = cleanName;
-  if (cleanName.length > maxChars) {
-    const sliced = cleanName.slice(0, maxChars);
-    const lastSpace = sliced.lastIndexOf(" ");
-    const cutoff = lastSpace >= Math.floor(maxChars * 0.55) ? lastSpace : maxChars - 1;
-    titleText = `${cleanName.slice(0, cutoff).trimEnd()}…`;
-  }
+  const [titleLine1, titleLine2] = splitCardTitleLines(cleanName, 36);
+  const metaLabel = node.properties.region
+    ? `${node.label} · ${node.properties.region}`
+    : node.label;
+  const metaClip =
+    badgeCount === 2
+      ? "url(#etg-card-clip-meta-double)"
+      : badgeCount === 1
+        ? "url(#etg-card-clip-meta-badged)"
+        : "url(#etg-card-clip-meta-full)";
 
   return (
     <g
@@ -325,11 +384,11 @@ export function Graph2DNodeItem({
       {/* Dashed ring for active Connect source */}
       {isConnectSource && (
         <rect
-          x={-CARD_WIDTH / 2 - 3.5}
-          y={-CARD_HEIGHT / 2 - 3.5}
-          width={CARD_WIDTH + 7}
-          height={CARD_HEIGHT + 7}
-          rx={10}
+          x={-CARD_WIDTH / 2 - 4}
+          y={-CARD_HEIGHT / 2 - 4}
+          width={CARD_WIDTH + 8}
+          height={CARD_HEIGHT + 8}
+          rx={12}
           fill="none"
           stroke="#fbbf24"
           strokeDasharray="5 3"
@@ -338,49 +397,42 @@ export function Graph2DNodeItem({
         />
       )}
 
-      {/* Single-row card: ontology dot + node name */}
+      {/* Spacious 2-row card: top ontology/region + badges row, bottom 1–2 line title */}
       <rect
         x={-CARD_WIDTH / 2}
         y={-CARD_HEIGHT / 2}
         width={CARD_WIDTH}
         height={CARD_HEIGHT}
-        rx={8}
+        rx={10}
         fill={cardBg}
         stroke={isConnectSource ? "#fbbf24" : isSelected || isHovered ? color : cardBorder}
         strokeDasharray={isSuperseded ? "5 3" : undefined}
         strokeWidth={isSelected || isConnectSource ? 1.6 : 1}
       />
 
-      <circle cx={-CARD_WIDTH / 2 + 15} cy={0} r={4.5} fill={color} />
+      <circle cx={-CARD_WIDTH / 2 + 15} cy={-21} r={4.5} fill={color} />
 
       <text
-        x={-CARD_WIDTH / 2 + 27}
-        y={0}
+        x={-CARD_WIDTH / 2 + 25}
+        y={-21}
         dominantBaseline="central"
-        fontSize={12}
-        fontWeight={600}
-        fill={cardTitle}
-        textDecoration={isSuperseded ? "line-through" : undefined}
-        clipPath={
-          badgeCount === 2
-            ? "url(#etg-card-clip-double)"
-            : badgeCount === 1
-              ? "url(#etg-card-clip-badged)"
-              : "url(#etg-card-clip-full)"
-        }
+        fontSize={10}
+        fontWeight={500}
+        fill={isLightTheme ? "#52525b" : "#94a3b8"}
+        clipPath={metaClip}
       >
-        {titleText}
+        {metaLabel}
       </text>
 
       {statusOrMicroBadge && (
-        <g transform={`translate(${roleBadge ? CARD_WIDTH / 2 - 98 : CARD_WIDTH / 2 - 52}, 0)`}>
-          <rect x={0} y={-8} width={42} height={16} rx={4} fill={statusOrMicroBadge.bg} />
+        <g transform={`translate(${roleBadge ? CARD_WIDTH / 2 - 118 : CARD_WIDTH / 2 - 62}, 0)`}>
+          <rect x={0} y={-30} width={50} height={18} rx={4.5} fill={statusOrMicroBadge.bg} />
           <text
-            x={21}
-            y={0}
+            x={25}
+            y={-21}
             textAnchor="middle"
             dominantBaseline="central"
-            fontSize={7.5}
+            fontSize={9.5}
             fontWeight={700}
             fill={statusOrMicroBadge.fg}
           >
@@ -390,20 +442,62 @@ export function Graph2DNodeItem({
       )}
 
       {roleBadge && (
-        <g transform={`translate(${CARD_WIDTH / 2 - 52}, 0)`}>
-          <rect x={0} y={-8} width={42} height={16} rx={4} fill={roleBadge.bg} />
+        <g transform={`translate(${CARD_WIDTH / 2 - 62}, 0)`}>
+          <rect x={0} y={-30} width={50} height={18} rx={4.5} fill={roleBadge.bg} />
           <text
-            x={21}
-            y={0}
+            x={25}
+            y={-21}
             textAnchor="middle"
             dominantBaseline="central"
-            fontSize={8}
+            fontSize={9.5}
             fontWeight={700}
             fill={roleBadge.fg}
           >
             {roleBadge.text}
           </text>
         </g>
+      )}
+
+      {titleLine2 ? (
+        <>
+          <text
+            x={-CARD_WIDTH / 2 + 15}
+            y={3}
+            dominantBaseline="central"
+            fontSize={12.5}
+            fontWeight={600}
+            fill={cardTitle}
+            textDecoration={isSuperseded ? "line-through" : undefined}
+            clipPath="url(#etg-card-clip-title)"
+          >
+            {titleLine1}
+          </text>
+          <text
+            x={-CARD_WIDTH / 2 + 15}
+            y={20}
+            dominantBaseline="central"
+            fontSize={12.5}
+            fontWeight={600}
+            fill={cardTitle}
+            textDecoration={isSuperseded ? "line-through" : undefined}
+            clipPath="url(#etg-card-clip-title)"
+          >
+            {titleLine2}
+          </text>
+        </>
+      ) : (
+        <text
+          x={-CARD_WIDTH / 2 + 15}
+          y={10}
+          dominantBaseline="central"
+          fontSize={13}
+          fontWeight={600}
+          fill={cardTitle}
+          textDecoration={isSuperseded ? "line-through" : undefined}
+          clipPath="url(#etg-card-clip-title)"
+        >
+          {titleLine1}
+        </text>
       )}
 
       {/* Clickable '+' output link port on right card edge */}

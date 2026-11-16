@@ -40,6 +40,7 @@ export interface GraphCanvasProps {
   searchQuery: string;
   isLightTheme: boolean;
   inspectorOpen?: boolean;
+  inspectorWide?: boolean;
   candidateLinks?: CandidateLinkSuggestion[];
   traversalFilter?: TraversalFilterState;
   roleByNode?: Record<string, SubgraphNodeRole>;

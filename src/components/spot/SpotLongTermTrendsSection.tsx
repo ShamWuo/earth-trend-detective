@@ -6,6 +6,7 @@ import {
   GitBranch,
   LayoutGrid,
   List,
+  Maximize2,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -31,6 +32,7 @@ import {
   summaryKey,
 } from "@/components/spot/spotCardShared";
 import { MiniSparkline } from "@/components/spot/SpotTrendChart";
+import { getTrendToneStyles } from "@/components/spot/TrendFindingHighlight";
 
 /**
  * Multi-year Earth trends section supporting Cards & Table formats, active dataset filter notice,
@@ -46,6 +48,7 @@ export function SpotLongTermTrendsSection({
   activeSummary,
   activeDigest,
   onFocusSummary,
+  onOpenTrendDetail,
   tempUnit,
   hasStoredNodeMetrics,
   selectedNode,
@@ -65,6 +68,7 @@ export function SpotLongTermTrendsSection({
   activeSummary: TrendAnalysisSummary | null;
   activeDigest: ReturnType<typeof describeTrendPlainly> | null;
   onFocusSummary: (key: string, dataset: ETGDatasetId) => void;
+  onOpenTrendDetail?: (key: string, dataset: ETGDatasetId) => void;
   tempUnit: TemperatureUnit;
   hasStoredNodeMetrics: boolean;
   selectedNode: ETGNode | null;
@@ -80,29 +84,43 @@ export function SpotLongTermTrendsSection({
         <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
           Long-Term Trends
         </div>
-        <div
-          className="inline-flex rounded-md border border-border bg-surface-inset p-0.5"
-          role="group"
-          aria-label="Trend layout format"
-        >
-          <button
-            type="button"
-            aria-pressed={trendLayout === "cards"}
-            onClick={() => onChangeTrendLayout("cards")}
-            className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
+        <div className="flex items-center gap-1.5">
+          {onOpenTrendDetail && activeSummary && visibleSummaries.length > 0 && (
+            <button
+              type="button"
+              onClick={() => onOpenTrendDetail(summaryKey(activeSummary), activeSummary.dataset)}
+              aria-label="Open active trend graph in detail overlay"
+              title="Open trend graph in detail overlay"
+              className="inline-flex items-center gap-1 rounded-sm border border-border bg-surface-inset px-2 py-0.5 text-[10px] font-medium text-text-muted transition-colors hover:border-accent-fg hover:text-text-primary cursor-pointer"
+            >
+              <Maximize2 className="h-3 w-3" aria-hidden="true" />
+              <span>Detail</span>
+            </button>
+          )}
+          <div
+            className="inline-flex rounded-md border border-border bg-surface-inset p-0.5"
+            role="group"
+            aria-label="Trend layout format"
           >
-            <LayoutGrid className="h-3 w-3" aria-hidden="true" />
-            <span>Cards</span>
-          </button>
-          <button
-            type="button"
-            aria-pressed={trendLayout === "table"}
-            onClick={() => onChangeTrendLayout("table")}
-            className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
-          >
-            <List className="h-3 w-3" aria-hidden="true" />
-            <span>Table</span>
-          </button>
+            <button
+              type="button"
+              aria-pressed={trendLayout === "cards"}
+              onClick={() => onChangeTrendLayout("cards")}
+              className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
+            >
+              <LayoutGrid className="h-3 w-3" aria-hidden="true" />
+              <span>Cards</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={trendLayout === "table"}
+              onClick={() => onChangeTrendLayout("table")}
+              className="inline-flex items-center gap-1 rounded-xs px-2 py-0.5 text-[10px] font-medium text-text-muted aria-pressed:bg-surface-elevated aria-pressed:text-text-primary cursor-pointer"
+            >
+              <List className="h-3 w-3" aria-hidden="true" />
+              <span>Table</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -213,16 +231,32 @@ export function SpotLongTermTrendsSection({
                         </span>
                       </td>
                       <td className="px-1.5 py-1.5 text-right font-mono tabular-nums whitespace-nowrap">
-                        <span
-                          className={
-                            d.isSignificant
-                              ? d.tone === "rising"
-                                ? "etg-tone-rise"
-                                : "etg-tone-cool"
-                              : "text-text-subtle"
-                          }
-                        >
-                          {dirSymbol} {d.ratePerDecade.replace(" / decade", "/dec")}
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <span
+                            className={
+                              d.isSignificant
+                                ? d.tone === "rising"
+                                  ? "etg-tone-rise"
+                                  : "etg-tone-cool"
+                                : "text-text-subtle"
+                            }
+                          >
+                            {dirSymbol} {d.ratePerDecade.replace(" / decade", "/dec")}
+                          </span>
+                          {onOpenTrendDetail && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenTrendDetail(key, item.dataset);
+                              }}
+                              aria-label={`Open ${d.topicLabel} ${d.parameterShort} trend graph in detail`}
+                              title="Open trend graph in detail overlay"
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-xs border border-border bg-surface text-text-muted transition-colors hover:border-accent-fg hover:text-text-primary cursor-pointer"
+                            >
+                              <Maximize2 className="h-3 w-3" aria-hidden="true" />
+                            </button>
+                          )}
                         </span>
                       </td>
                     </tr>
@@ -245,18 +279,21 @@ export function SpotLongTermTrendsSection({
               const isFocused = activeSummary ? summaryKey(activeSummary) === key : false;
               const dirSymbol = d.isSignificant ? (d.tone === "rising" ? "↑" : "↓") : "—";
               return (
-                <button
+                <div
                   key={key}
-                  type="button"
-                  onClick={() => onFocusSummary(key, item.dataset)}
-                  className={`w-full space-y-1 rounded-md border px-2.5 py-1.5 text-left transition-colors cursor-pointer ${
+                  className={`w-full space-y-1 rounded-md border px-2.5 py-1.5 text-left transition-colors ${
                     isFocused
                       ? "border-accent-fg bg-surface-elevated"
                       : "border-border bg-surface-inset hover:border-border-strong"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      aria-pressed={isFocused}
+                      onClick={() => onFocusSummary(key, item.dataset)}
+                      className="min-w-0 flex-1 text-left cursor-pointer"
+                    >
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
                           className="h-2 w-2 shrink-0 rounded-full"
@@ -284,13 +321,31 @@ export function SpotLongTermTrendsSection({
                           </span>
                         )}
                       </div>
-                      <div className="mt-1 font-semibold text-text-primary">{d.headline}</div>
-                    </div>
+                      <div className={`mt-1 text-[13px] font-bold tracking-tight ${getTrendToneStyles(d).headline}`}>
+                        {d.headline}
+                      </div>
+                    </button>
 
-                    <MiniSparkline points={item.points} color={meta?.color ?? "#e2a856"} />
+                    {onOpenTrendDetail ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenTrendDetail(key, item.dataset)}
+                        aria-label={`Open ${d.topicLabel} ${d.parameterShort} trend graph in detail`}
+                        title="Open trend graph in detail overlay"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border bg-surface px-1.5 py-1 text-text-muted transition-colors hover:border-accent-fg hover:text-text-primary cursor-pointer"
+                      >
+                        <MiniSparkline points={item.points} color={meta?.color ?? "#e2a856"} />
+                        <Maximize2 className="h-3 w-3 shrink-0" aria-hidden="true" />
+                      </button>
+                    ) : (
+                      <MiniSparkline points={item.points} color={meta?.color ?? "#e2a856"} />
+                    )}
                   </div>
 
-                  <div className="ws-numeric grid grid-cols-3 gap-1.5 border-t border-border-subtle pt-1 font-mono text-[10px]">
+                  <div
+                    onClick={() => onFocusSummary(key, item.dataset)}
+                    className="ws-numeric grid cursor-pointer grid-cols-3 gap-1.5 border-t border-border-subtle pt-1 font-mono text-[10px]"
+                  >
                     <div>
                       <span className="block text-[9px] font-sans uppercase text-text-subtle">
                         Recent
@@ -327,7 +382,7 @@ export function SpotLongTermTrendsSection({
                       </span>
                     </div>
                   </div>
-                </button>
+                </div>
               );
             })}
 
@@ -376,7 +431,7 @@ export function SpotLongTermTrendsSection({
                   ) : (
                     <Activity className="h-4 w-4 shrink-0 text-text-subtle" aria-hidden="true" />
                   )}
-                  <span className="text-[13px] font-semibold text-text-primary">
+                  <span className={`text-[15px] font-bold tracking-tight ${getTrendToneStyles(activeDigest).headline}`}>
                     {activeDigest.headline}
                   </span>
                 </div>
@@ -409,12 +464,32 @@ export function SpotLongTermTrendsSection({
                 </div>
               </div>
 
-              <MiniSparkline
-                points={activeSummary.points}
-                color={DATASET_BY_ID[activeSummary.dataset]?.color ?? "#e2a856"}
-                width={68}
-                height={24}
-              />
+              {onOpenTrendDetail ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenTrendDetail(summaryKey(activeSummary), activeSummary.dataset)
+                  }
+                  aria-label={`Open ${activeDigest.topicLabel} ${activeDigest.parameterShort} trend graph in detail`}
+                  title="Open trend graph in detail overlay"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-border bg-surface px-2 py-1 text-text-muted transition-colors hover:border-accent-fg hover:text-text-primary cursor-pointer"
+                >
+                  <MiniSparkline
+                    points={activeSummary.points}
+                    color={DATASET_BY_ID[activeSummary.dataset]?.color ?? "#e2a856"}
+                    width={68}
+                    height={24}
+                  />
+                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              ) : (
+                <MiniSparkline
+                  points={activeSummary.points}
+                  color={DATASET_BY_ID[activeSummary.dataset]?.color ?? "#e2a856"}
+                  width={68}
+                  height={24}
+                />
+              )}
             </div>
 
             <div className="ws-numeric grid grid-cols-2 gap-1.5 font-mono text-[11px]">

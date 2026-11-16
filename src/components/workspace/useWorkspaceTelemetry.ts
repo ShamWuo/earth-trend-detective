@@ -238,7 +238,7 @@ export function useWorkspaceTelemetry({
         if (telemetryAbortRef.current === controller) {
           telemetryAbortRef.current = null;
         }
-        if (!controller.signal.aborted && reqId === telemetryReqSeqRef.current) {
+        if (reqId === telemetryReqSeqRef.current) {
           setTelemetryLoading(false);
         }
       }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus } from "lucide-react";
 import { buildRegionAssignmentMap, filterEtgGraphData } from "@/lib/graph/graphVisuals";
 import type { RegionOption } from "@/lib/graph/regionalSubgraph";
 import type {
@@ -36,6 +35,7 @@ export interface EarthTrendGraphViewProps {
   showSuperseded?: boolean;
   enabledRelationCategories?: ReadonlyArray<RelationCategory>;
   inspectorOpen?: boolean;
+  inspectorWide?: boolean;
   candidateLinks?: CandidateLinkSuggestion[];
   traversalFilter?: TraversalFilterState;
   roleByNode?: Record<string, SubgraphNodeRole>;
@@ -51,7 +51,6 @@ export interface EarthTrendGraphViewProps {
   onClearSelection?: () => void;
   onToggleConnectMode?: () => void;
   onStartQuickConnect?: (sourceNode: ETGNode, targetNode?: ETGNode) => void;
-  onOpenQuickAddNode?: () => void;
   onDiscoverLinks?: () => void;
   onAcceptCandidateLink?: (suggestion: CandidateLinkSuggestion) => void;
   onClearCandidateLinks?: () => void;
@@ -76,6 +75,7 @@ export function EarthTrendGraphView({
   showSuperseded = true,
   enabledRelationCategories,
   inspectorOpen = false,
+  inspectorWide = false,
   candidateLinks = [],
   traversalFilter = DEFAULT_TRAVERSAL_FILTER,
   roleByNode = {},
@@ -91,7 +91,6 @@ export function EarthTrendGraphView({
   onClearSelection,
   onToggleConnectMode,
   onStartQuickConnect,
-  onOpenQuickAddNode,
   onDiscoverLinks,
   onAcceptCandidateLink,
   onClearCandidateLinks,
@@ -191,32 +190,22 @@ export function EarthTrendGraphView({
               ? "No cross-region opposite-trend pairs match the current filter"
               : "No Earth signals match this filter"}
           </p>
-          <p className="mt-1 text-xs text-text-muted">
-            {isEmptyOpposite
-              ? "Disable the Opposite Trends filter, widen the timeline scrubber, or discover candidate teleconnections."
-              : "Widen the timeline scrubber, switch datasets, or add a new phenomenon directly."}
-          </p>
-          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-            {isEmptyOpposite && onResetOppositeFilter && (
-              <button
-                type="button"
-                onClick={onResetOppositeFilter}
-                className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface-inset px-3.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover cursor-pointer"
-              >
-                <span>Show All Relationships</span>
-              </button>
-            )}
-            {onOpenQuickAddNode && (
-              <button
-                type="button"
-                onClick={onOpenQuickAddNode}
-                className="inline-flex items-center gap-1.5 rounded-sm bg-accent px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-accent-hover cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Create Phenomenon Node</span>
-              </button>
-            )}
-          </div>
+            <p className="mt-1 text-xs text-text-muted">
+              {isEmptyOpposite
+                ? "Disable the Opposite Trends filter, widen the timeline scrubber, or discover candidate teleconnections."
+                : "Widen the timeline scrubber or switch datasets to reveal local graph nodes."}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+              {isEmptyOpposite && onResetOppositeFilter && (
+                <button
+                  type="button"
+                  onClick={onResetOppositeFilter}
+                  className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface-inset px-3.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover cursor-pointer"
+                >
+                  <span>Show All Relationships</span>
+                </button>
+              )}
+            </div>
         </div>
       </div>
     );
@@ -261,10 +250,10 @@ export function EarthTrendGraphView({
         candidateCount={candidateLinks.length}
         traversalFilter={traversalFilter}
         inspectorOpen={inspectorOpen}
+        inspectorWide={inspectorWide}
         regionOptions={regionOptions}
         selectedRegionScope={selectedRegionScope}
         onToggleConnectMode={onToggleConnectMode}
-        onOpenQuickAddNode={onOpenQuickAddNode}
         onDiscoverLinks={onDiscoverLinks}
         onClearCandidateLinks={onClearCandidateLinks}
         onChangeTraversalFilter={onChangeTraversalFilter}
@@ -275,7 +264,11 @@ export function EarthTrendGraphView({
       {renderMode === "2d" ? (
         <GraphCanvas2D {...sharedCanvasProps} />
       ) : (
-        <GraphCanvas3D {...sharedCanvasProps} inspectorOpen={inspectorOpen} />
+        <GraphCanvas3D
+          {...sharedCanvasProps}
+          inspectorOpen={inspectorOpen}
+          inspectorWide={inspectorWide}
+        />
       )}
     </div>
   );
