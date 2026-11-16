@@ -186,14 +186,22 @@ export function DetectiveWorkspace({
     const max = Math.max(...times);
     return {
       minMs: Number.isFinite(min) ? min : Date.UTC(2024, 0, 1),
-      maxMs: Number.isFinite(max) ? max : Date.UTC(2026, 0, 1),
+      maxMs: Number.isFinite(max) ? max : Date.now(),
     };
   }, [snapshot.nodes]);
 
   const [cutoffMs, setCutoffMs] = useState<number>(maxMs);
+  const prevMaxMsRef = useRef(maxMs);
+  const prevNodeCountForTimelineRef = useRef(snapshot.nodes.length);
   useEffect(() => {
-    setCutoffMs((prev) => (prev >= maxMs - 60_000 ? maxMs : prev));
-  }, [maxMs]);
+    const wasEmptyNowLoaded =
+      prevNodeCountForTimelineRef.current === 0 && snapshot.nodes.length > 0;
+    setCutoffMs((prev) =>
+      wasEmptyNowLoaded || prev >= prevMaxMsRef.current - 60_000 ? maxMs : prev
+    );
+    prevMaxMsRef.current = maxMs;
+    prevNodeCountForTimelineRef.current = snapshot.nodes.length;
+  }, [maxMs, snapshot.nodes.length]);
 
   const telemetry = useWorkspaceTelemetry({
     inspectorOpen,
@@ -478,44 +486,50 @@ export function DetectiveWorkspace({
     [viewMode, selectedNodeUuid, briefingsNodeUuid, syncBriefingUrlParam]
   );
 
-  // Filtered nodes & edges based on active topic filters + timeline cutoff
+  // Filtered nodes & edges based on active topic filters (globe also honors timeline scrubber cutoffMs)
   const { visibleNodes, visibleEdges, globeNodes, globeEdges } = useMemo(() => {
-    const timeFiltered = snapshot.nodes.filter((n) => {
+    const allNodes = snapshot.nodes;
+    const allEdges = snapshot.edges;
+    const timeFiltered = allNodes.filter((n) => {
       const ts = getNodeTimestampMs(n);
       if (n.label === "Rule") return true;
       return ts <= cutoffMs;
     });
 
     if (activeTopics.length === 0) {
-      const idSet = new Set(timeFiltered.map((n) => n.uuid));
-      const edges = snapshot.edges.filter(
-        (e) => idSet.has(e.source_uuid) && idSet.has(e.target_uuid)
+      const globeIdSet = new Set(timeFiltered.map((n) => n.uuid));
+      const gEdges = allEdges.filter(
+        (e) => globeIdSet.has(e.source_uuid) && globeIdSet.has(e.target_uuid)
       );
       return {
-        visibleNodes: timeFiltered,
-        visibleEdges: edges,
+        visibleNodes: allNodes,
+        visibleEdges: allEdges,
         globeNodes: timeFiltered,
-        globeEdges: edges,
+        globeEdges: gEdges,
       };
     }
 
     const topicSet = new Set(activeTopics);
-    const strictIds = new Set(
+    const strictGlobeIds = new Set(
       timeFiltered
         .filter((n) => n.properties.dataset && topicSet.has(n.properties.dataset))
         .map((n) => n.uuid)
     );
-
-    const strictGlobeNodes = timeFiltered.filter((n) => strictIds.has(n.uuid));
-    const strictGlobeEdges = snapshot.edges.filter(
-      (e) => strictIds.has(e.source_uuid) && strictIds.has(e.target_uuid)
+    const strictGlobeNodes = timeFiltered.filter((n) => strictGlobeIds.has(n.uuid));
+    const strictGlobeEdges = allEdges.filter(
+      (e) => strictGlobeIds.has(e.source_uuid) && strictGlobeIds.has(e.target_uuid)
     );
 
-    const graphIds = new Set(strictIds);
-    for (const e of snapshot.edges) {
-      if (strictIds.has(e.source_uuid) || strictIds.has(e.target_uuid)) {
-        const srcNode = timeFiltered.find((n) => n.uuid === e.source_uuid);
-        const tgtNode = timeFiltered.find((n) => n.uuid === e.target_uuid);
+    const strictGraphIds = new Set(
+      allNodes
+        .filter((n) => n.properties.dataset && topicSet.has(n.properties.dataset))
+        .map((n) => n.uuid)
+    );
+    const graphIds = new Set(strictGraphIds);
+    for (const e of allEdges) {
+      if (strictGraphIds.has(e.source_uuid) || strictGraphIds.has(e.target_uuid)) {
+        const srcNode = allNodes.find((n) => n.uuid === e.source_uuid);
+        const tgtNode = allNodes.find((n) => n.uuid === e.target_uuid);
         if (srcNode && (srcNode.label === "Rule" || srcNode.label === "Concept")) {
           graphIds.add(srcNode.uuid);
         }
@@ -525,9 +539,9 @@ export function DetectiveWorkspace({
       }
     }
 
-    const filteredGraphNodes = timeFiltered.filter((n) => graphIds.has(n.uuid));
+    const filteredGraphNodes = allNodes.filter((n) => graphIds.has(n.uuid));
     const filteredGraphSet = new Set(filteredGraphNodes.map((n) => n.uuid));
-    const filteredGraphEdges = snapshot.edges.filter(
+    const filteredGraphEdges = allEdges.filter(
       (e) => filteredGraphSet.has(e.source_uuid) && filteredGraphSet.has(e.target_uuid)
     );
 
@@ -1364,6 +1378,15 @@ export function DetectiveWorkspace({
 
   const snapshotNodesCountRef = useRef(snapshot.nodes.length);
   snapshotNodesCountRef.current = snapshot.nodes.length;
+  const autoGraphLoadedRef = useRef(false);
+  useEffect(() => {
+    if (autoGraphLoadedRef.current) return;
+    if (snapshotNodesCountRef.current === 0 && initialDemoMode !== "veritas") {
+      autoGraphLoadedRef.current = true;
+      void handleDiscoverGlobalTrends();
+    }
+  }, [initialDemoMode, handleDiscoverGlobalTrends]);
+
   const demoBootedRef = useRef(false);
   useEffect(() => {
     return () => {
@@ -1377,7 +1400,8 @@ export function DetectiveWorkspace({
       setSolarTargetLocation(null);
       setSolarGraphOpen(true);
     } else if (initialDemoMode === "spaceapps") {
-      if (snapshotNodesCountRef.current === 0) {
+      if (snapshotNodesCountRef.current === 0 && !autoGraphLoadedRef.current) {
+        autoGraphLoadedRef.current = true;
         void handleDiscoverGlobalTrends();
       }
       handleRunCaseStudy(GUIDED_DIPOLE_CASES[0]);
@@ -1776,6 +1800,7 @@ export function DetectiveWorkspace({
                   allNodes={snapshot.nodes}
                   allEdges={snapshot.edges}
                   visibleNodes={globeNodes}
+                  timelineCutoffMs={cutoffMs < maxMs - 60_000 ? cutoffMs : null}
                   microscopeScan={microscopeScan}
                   microscopeByNode={microscopeByNode}
                   probedCoord={probedCoord}

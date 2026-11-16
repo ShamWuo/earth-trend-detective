@@ -9,9 +9,13 @@ export async function POST(req: NextRequest) {
   const budget = createTelemetryBudget(1600);
   const store = getEtgStore();
   try {
-    let body: { clearExisting?: boolean; maxEonetSites?: number } = {};
+    let body: { clearExisting?: boolean; maxEonetSites?: number; compact?: boolean } = {};
     try {
-      body = (await req.json()) as { clearExisting?: boolean; maxEonetSites?: number };
+      body = (await req.json()) as {
+        clearExisting?: boolean;
+        maxEonetSites?: number;
+        compact?: boolean;
+      };
     } catch {
       body = {};
     }
@@ -19,6 +23,7 @@ export async function POST(req: NextRequest) {
     const result = await budget.raceWithFallback(
       discoverGlobalEarthTrends(store, {
         clearExisting: body.clearExisting,
+        compact: Boolean(body.compact),
         maxEonetSites:
           typeof body.maxEonetSites === "number"
             ? Math.max(3, Math.min(12, Math.floor(body.maxEonetSites)))

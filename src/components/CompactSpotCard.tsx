@@ -43,7 +43,11 @@ import {
 import { SpotTrendChart } from "@/components/spot/SpotTrendChart";
 import { TrendFindingHighlight } from "@/components/spot/TrendFindingHighlight";
 import { TrendGraphDetailModal } from "@/components/spot/TrendGraphDetailModal";
-import type { TrendDatePreset } from "@/components/spot/trendDateUtils";
+import {
+  buildWindowedComparison,
+  buildWindowedTrendSummary,
+  type TrendDatePreset,
+} from "@/components/spot/trendDateUtils";
 
 export type { GuidedCaseStudyItem } from "@/components/spot/spotCardShared";
 
@@ -59,14 +63,15 @@ export function CompactSpotCard({
   allNodes,
   allEdges,
   visibleNodes,
+  timelineCutoffMs = null,
   microscopeScan = null,
   microscopeByNode,
   probedCoord,
-  primary,
-  secondary,
-  summaries,
+  primary: rawPrimary,
+  secondary: rawSecondary,
+  summaries: rawSummaries,
   focusedSummaryDataset,
-  comparison,
+  comparison: rawComparison,
   current = null,
   secondaryCurrent = null,
   tempUnit = "C",
@@ -208,6 +213,60 @@ export function CompactSpotCard({
   }, [selectionKey]);
 
   const nodeMap = useMemo(() => new Map(allNodes.map((n) => [n.uuid, n])), [allNodes]);
+
+  const cutoffEndDate = useMemo(() => {
+    if (typeof timelineCutoffMs !== "number" || !Number.isFinite(timelineCutoffMs)) {
+      return null;
+    }
+    return new Date(timelineCutoffMs).toISOString().slice(0, 10);
+  }, [timelineCutoffMs]);
+
+  const summaries = useMemo(() => {
+    if (!cutoffEndDate) return rawSummaries;
+    return rawSummaries.map(
+      (s) =>
+        buildWindowedTrendSummary({
+          baseSummary: s,
+          startDate: null,
+          endDate: cutoffEndDate,
+          seasonFilter: "all",
+          resolution: "monthly",
+        }).summary
+    );
+  }, [rawSummaries, cutoffEndDate]);
+
+  const primary = useMemo(() => {
+    if (!rawPrimary || !cutoffEndDate) return rawPrimary;
+    return buildWindowedTrendSummary({
+      baseSummary: rawPrimary,
+      startDate: null,
+      endDate: cutoffEndDate,
+      seasonFilter: "all",
+      resolution: "monthly",
+    }).summary;
+  }, [rawPrimary, cutoffEndDate]);
+
+  const secondary = useMemo(() => {
+    if (!rawSecondary || !cutoffEndDate) return rawSecondary;
+    return buildWindowedTrendSummary({
+      baseSummary: rawSecondary,
+      startDate: null,
+      endDate: cutoffEndDate,
+      seasonFilter: "all",
+      resolution: "monthly",
+    }).summary;
+  }, [rawSecondary, cutoffEndDate]);
+
+  const comparison = useMemo(() => {
+    if (!rawComparison || !primary || !secondary || !cutoffEndDate) return rawComparison;
+    return buildWindowedComparison({
+      primary,
+      secondary,
+      baseComparison: rawComparison,
+      startDate: null,
+      endDate: cutoffEndDate,
+    }).comparison;
+  }, [rawComparison, primary, secondary, cutoffEndDate]);
 
   const coord = useMemo(() => {
     if (probedCoord) return probedCoord;

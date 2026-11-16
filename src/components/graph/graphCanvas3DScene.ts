@@ -197,8 +197,23 @@ export function populateGraphGroup3D(params: {
     return tex;
   };
 
+  const isCompactNodes = nodes.length <= 36;
   const nodeScaleFor = (node: ETGNode): number =>
-    node.label === "Insight" ? 13.5 : node.label === "Concept" ? 11.5 : node.label === "Rule" ? 10 : 9;
+    isCompactNodes
+      ? node.label === "Insight"
+        ? 15.5
+        : node.label === "Concept"
+          ? 12.5
+          : node.label === "Rule"
+            ? 10.5
+            : 10.5
+      : node.label === "Insight"
+        ? 13.5
+        : node.label === "Concept"
+          ? 11.5
+          : node.label === "Rule"
+            ? 10
+            : 9;
 
   const addedChildren: THREE.Object3D[] = [];
   const nodeObjects: SceneNodeObject3D[] = [];
@@ -450,12 +465,31 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     item.sprite.scale.set(s, s, 1);
 
     const haloMat = item.halo.material as THREE.SpriteMaterial;
-    haloMat.opacity = 0;
+    haloMat.opacity =
+      isSelected || isHovered
+        ? 0.58
+        : item.node.label === "Insight" && !activeFocusUuid
+          ? 0.24
+          : 0;
 
-    const shouldShowLabel = isSelected || isHovered || (hasSearchFilter && isSearchHit);
+    const isSupersededNode =
+      item.node.properties.status === "Superseded" || Boolean(item.node.properties.superseded_by);
+    const nodeDegree = nbrMap.get(uuid)?.size ?? 0;
+    const isRestingCandidate =
+      !activeFocusUuid &&
+      !hasSearchFilter &&
+      currentNodes.length <= 40 &&
+      !isSupersededNode &&
+      (item.node.label === "Insight" || nodeDegree >= 2 || dipoleSet.has(uuid));
+    const shouldShowLabel = hasSearchFilter
+      ? isSearchHit || isSelected || isHovered
+      : activeFocusUuid !== null
+        ? isSelected || isHovered || isNeighbor
+        : isRestingCandidate;
+
     if (shouldShowLabel) {
       projVec.copy(item.worldPos).project(camera);
-      if (projVec.z < 1 && opacity > 0.3) {
+      if (projVec.z < 1 && opacity > 0.22) {
         const camDist = Math.max(1, camera.position.distanceTo(item.worldPos));
         const halfFovTan = Math.tan((camera.fov * Math.PI) / 360);
         const projectedRadiusPx = ((s * 0.42) / (camDist * halfFovTan)) * (h * 0.5);
@@ -475,8 +509,6 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
           const displayTitle = cleanTitle.length > 64 ? `${cleanTitle.slice(0, 62)}…` : cleanTitle;
           const nodeRole = rolesMap[uuid];
           const microCue = microMap[uuid];
-          const isSupersededNode =
-            item.node.properties.status === "Superseded" || Boolean(item.node.properties.superseded_by);
           const microBadge = resolveMicroscopeNodeBadge(microCue, lightThemeNow);
 
           let extraWidthPx = 0;
@@ -485,7 +517,10 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
           if (microBadge) extraWidthPx += 54;
           if (item.node.properties.theil_sen_slope !== undefined) extraWidthPx += 20;
 
-          let priority = (1 - depthRatio) * 120;
+          let priority = (1 - depthRatio) * 120 + nodeDegree * 14;
+          if (item.node.label === "Insight") priority += 260;
+          if (dipoleSet.has(uuid)) priority += 75;
+          if (isNeighbor) priority += 320;
           if (isSearchHit) priority += 450;
           if (isHovered) priority += 800;
           if (isSelected) priority += 1000;
@@ -541,15 +576,18 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     } else {
       const d = (camera.position.distanceTo(eo.midPoint) - minCamDist) / distSpan;
       const tier = Math.min(7, Math.max(0, Math.floor(d * 8)));
-      const baseOpacity = 0.28 - tier * 0.028;
+      const isCompactScene = currentNodes.length <= 36;
+      const baseOpacity = (isCompactScene ? 0.54 : 0.34) - tier * 0.03;
       const typeBoost = isOpposite
-        ? 0.26
-        : eo.edge.type === "teleconnects"
-          ? 0.16
+        ? 0.28
+        : eo.edge.type === "teleconnects" || eo.edge.type === "amplifies" || eo.edge.type === "leads"
+          ? 0.18
           : isSupersedes
-            ? 0.1
+            ? 0.14
             : 0;
-      eo.material.opacity = Math.min(0.62, Math.max(0.06, baseOpacity + typeBoost));
+      eo.material.opacity = isCompactScene
+        ? Math.min(0.86, Math.max(0.24, baseOpacity + typeBoost))
+        : Math.min(0.65, Math.max(0.08, baseOpacity + typeBoost));
     }
   }
 
@@ -560,7 +598,8 @@ export function updateGraph3DFrameVisibilityAndLabels(params: {
     el.style.pointerEvents = "none";
   }
 
-  const placed = selectNonOverlappingLabels(labelCandidates, 14, 18, 12);
+  const maxRestingLabels = activeFocusUuid ? 10 : currentNodes.length <= 28 ? 13 : 10;
+  const placed = selectNonOverlappingLabels(labelCandidates, maxRestingLabels, 18, 14);
   const placedById = new Map(placed.map((p) => [p.uuid, p]));
 
   for (const [uuid, el] of labelEls.entries()) {

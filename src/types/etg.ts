@@ -297,6 +297,7 @@ export type TrendProvenanceSource =
   | "NOAA/NSIDC Sea Ice v4 (Live)"
   | "NOAA/NSIDC Sea Ice v4 (Climatological Fallback)"
   | "NOAA NCEI CDO (Live)"
+  | "NOAA PSL / KNMI (Live)"
   | "KNMI Climate Explorer (Live)"
   | "CSA / Geo.ca Hydrometric & AHCCD (Live)"
   | "USGS / NASA SeaWiFS Coastal Plume (Live)"

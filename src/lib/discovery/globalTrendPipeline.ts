@@ -54,6 +54,7 @@ import {
   deseasonalizeMonthlySeries,
   type SpatialMoransIResult,
 } from "@/lib/stats/trendEngine";
+import { discoverCompactStarterEarthTrends } from "@/lib/discovery/starterEarthGraph";
 import type {
   CrossRegionComparison,
   ETGDatasetId,
@@ -143,11 +144,22 @@ function formatSlope(slope: number, unit: string): string {
 
 export async function discoverGlobalEarthTrends(
   store: EtgStoreInstance,
-  options?: { clearExisting?: boolean; maxEonetSites?: number; enrichLiterature?: boolean }
+  options?: {
+    clearExisting?: boolean;
+    maxEonetSites?: number;
+    enrichLiterature?: boolean;
+    compact?: boolean;
+  }
 ): Promise<{
   summary: GlobalDiscoverySummary;
   snapshot: EtgGraphSnapshot;
 }> {
+  if (options?.compact) {
+    return discoverCompactStarterEarthTrends(store, {
+      clearExisting: options.clearExisting,
+    });
+  }
+
   if (options?.clearExisting) {
     store.clearGraph(false);
   }

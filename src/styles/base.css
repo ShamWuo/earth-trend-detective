@@ -482,6 +482,18 @@ input[type="range"].etg-slider:focus-visible {
   }
 }
 
+@media (max-width: 639px) {
+  .etg-popover[popover] {
+    position: fixed;
+    position-area: none;
+    inset-block-start: 3.25rem;
+    inset-inline: 0.625rem;
+    margin: 0 auto;
+    inline-size: calc(100dvw - 1.25rem);
+    max-inline-size: calc(100dvw - 1.25rem);
+  }
+}
+
 /* ─── Timeline Scrubber Container Query ─── */
 .etg-scrubber-cq {
   container: scrubber / inline-size;

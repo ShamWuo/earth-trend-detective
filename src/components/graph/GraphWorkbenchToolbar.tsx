@@ -112,7 +112,7 @@ export function GraphWorkbenchToolbar({
         role="toolbar"
         aria-label="Knowledge Graph Workbench"
         {...({ focusgroup: "toolbar wrap" } as Record<string, string>)}
-        className="etg-hud-pill pointer-events-auto flex max-w-full flex-nowrap items-center gap-0.5 overflow-x-auto [scrollbar-width:none] rounded-lg bg-surface px-1.5 py-0.5 text-[10.5px] shadow-lg"
+        className="etg-hud-pill pointer-events-auto flex max-w-full max-sm:flex-nowrap max-sm:overflow-x-auto sm:flex-wrap sm:justify-center items-center gap-0.5 [scrollbar-width:none] rounded-lg bg-surface px-1.5 py-0.5 text-[10.5px] shadow-lg"
       >
         <div role="group" aria-label="Graph authoring actions" className="flex shrink-0 items-center gap-0.5">
           {onToggleConnectMode && (

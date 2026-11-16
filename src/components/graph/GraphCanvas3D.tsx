@@ -119,18 +119,26 @@ export function GraphCanvas3D({
   const layoutPositions = useMemo(() => computeLayout3D(nodes, edges), [nodes, edges]);
   const overviewFraming = useMemo(() => {
     const sphere = computeGraphBoundingSphere3D(layoutPositions);
+    const radiusScale = nodes.length <= 36 ? 1.95 : 2.35;
     return {
       target: sphere.center,
-      radius: Math.max(195, Math.min(820, sphere.radius * 2.35)),
+      radius: Math.max(150, Math.min(760, sphere.radius * radiusScale)),
     };
-  }, [layoutPositions]);
+  }, [layoutPositions, nodes.length]);
   const overviewFramingRef = useRef(overviewFraming);
   overviewFramingRef.current = overviewFraming;
 
   const hasFramedInitial3DRef = useRef(false);
+  const lastFramedNodeCountRef = useRef(0);
   useEffect(() => {
-    if (hasFramedInitial3DRef.current || layoutPositions.size === 0) return;
+    if (layoutPositions.size === 0) return;
+    const countShiftedSignificantly =
+      Math.abs(layoutPositions.size - lastFramedNodeCountRef.current) >= 4;
+    if (hasFramedInitial3DRef.current && (selectedNodeUuid || !countShiftedSignificantly)) {
+      return;
+    }
     hasFramedInitial3DRef.current = true;
+    lastFramedNodeCountRef.current = layoutPositions.size;
     const { target, radius } = overviewFraming;
     panTargetRef.current = {
       x: target.x,
@@ -148,7 +156,7 @@ export function GraphCanvas3D({
       rotationRef.current.yaw
     );
     cameraPositionRef.current.set(initCamPos.x, initCamPos.y, initCamPos.z);
-  }, [layoutPositions, overviewFraming]);
+  }, [layoutPositions, overviewFraming, selectedNodeUuid]);
 
   const regionClusters = useMemo(
     () => computeRegionClusters3D(nodes, layoutPositions),
