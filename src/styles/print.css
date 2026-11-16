@@ -13,4 +13,24 @@
   .no-print {
     display: none !important;
   }
+
+  .etg-paper-scroll-root,
+  .etg-paper-sheet {
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+    height: auto !important;
+    max-width: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+
+  .etg-paper-toolbar {
+    display: none !important;
+  }
+
+  figure {
+    break-inside: avoid;
+  }
 }

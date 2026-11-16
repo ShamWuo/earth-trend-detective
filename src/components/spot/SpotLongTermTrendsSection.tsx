@@ -155,13 +155,13 @@ export function SpotLongTermTrendsSection({
               } as React.CSSProperties
             }
           >
-            <table className="w-full table-fixed text-[11px]">
+            <table className="w-full text-[11px]">
               <thead>
                 <tr>
-                  <th scope="col" className="w-[30%] px-1.5 py-1 text-left">Metric</th>
-                  <th scope="col" className="w-[23%] px-1.5 py-1 text-right">Recent</th>
-                  <th scope="col" className="w-[22%] px-1.5 py-1 text-right">Δ Avg</th>
-                  <th scope="col" className="w-[25%] px-1.5 py-1 text-right">Rate/dec</th>
+                  <th scope="col" className="px-1.5 py-1 text-left">Metric</th>
+                  <th scope="col" className="px-1.5 py-1 text-right">Recent</th>
+                  <th scope="col" className="px-1.5 py-1 text-right">Δ Avg</th>
+                  <th scope="col" className="px-1.5 py-1 text-right">Rate/dec</th>
                 </tr>
               </thead>
               <tbody>
@@ -183,7 +183,7 @@ export function SpotLongTermTrendsSection({
                         isFocused ? "bg-surface-elevated" : ""
                       }`}
                     >
-                      <th scope="row" className="px-1.5 py-1.5 text-left font-medium">
+                      <th scope="row" className="max-w-[130px] px-1.5 py-1.5 text-left font-medium">
                         <div className="flex items-center gap-1.5">
                           <span
                             className="h-2 w-2 shrink-0 rounded-full"

@@ -1,5 +1,5 @@
 import type { ETGNode, ETGScientificCitation } from "@/types/etg";
-import { sanitizeCitation } from "@/lib/research/dossierUtils";
+import { decodeHtmlEntities, sanitizeCitation } from "@/lib/research/dossierUtils";
 
 const USER_AGENT = "EarthTrends/1.0 (https://earthtrends.local; mailto:research@earthtrends.local)";
 const CACHE_TTL_VERIFIED_MS = 1000 * 60 * 60 * 6;
@@ -72,15 +72,11 @@ export interface ClaimStanceContext {
 }
 
 function stripHtmlAndJats(raw: string, maxLen = 620): string {
-  const cleaned = raw
-    .replace(/<jats:title[^>]*>[\s\S]*?<\/jats:title>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, "\"")
-    .replace(/&#39;/gi, "'")
-    .replace(/&nbsp;/gi, " ")
+  const cleaned = decodeHtmlEntities(
+    raw
+      .replace(/<jats:title[^>]*>[\s\S]*?<\/jats:title>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+  )
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned.length <= maxLen) return cleaned;
@@ -240,9 +236,12 @@ export function evaluateCitationClaimStance(
     ) {
       claim_stance = "challenges";
       stance_rationale = `${hasAbstract ? "Abstract" : "Title"} emphasizes upward/warming trajectory opposing a decreasing claim.`;
-    } else if (topicHits >= 2 && (downwardMatches.length > 0 || dipoleMatches.length > 0)) {
+    } else if (topicHits >= 2 && downwardMatches.length >= 1) {
       claim_stance = "supports";
       stance_rationale = `${hasAbstract ? "Abstract" : "Title"} aligns with declining/cooling trend (${matchedTerms.slice(0, 3).join(", ")}; ${downwardMatches.length} decline/cooling cue(s)).`;
+    } else if (topicHits >= 2 && dipoleMatches.length >= 1 && explicitCoolingMatches.length >= 1) {
+      claim_stance = "supports";
+      stance_rationale = `${hasAbstract ? "Abstract" : "Title"} links coupled regime shift to cooling/decline (${matchedTerms.slice(0, 3).join(", ")}; ${dipoleMatches.length} coupled-dipole cue(s)).`;
     } else if (!hasAbstract) {
       stance_rationale = "Abstract unavailable in bibliographic record; manual full-text check recommended.";
     } else {
@@ -262,12 +261,21 @@ export function evaluateCitationClaimStance(
     ) {
       claim_stance = "challenges";
       stance_rationale = `${hasAbstract ? "Abstract" : "Title"} reports cooling/slowdown signals contrasting with an increasing trend.`;
-    } else if (topicHits >= 2 && (upwardMatches.length > 0 || dipoleMatches.length > 0)) {
+    } else if (
+      topicHits >= 2 &&
+      upwardMatches.length >= 1 &&
+      (hasAbstract || topicHits >= 4)
+    ) {
       claim_stance = "supports";
       stance_rationale = `${hasAbstract ? "Abstract" : "Title"} entails increasing/intensifying trend (${matchedTerms.slice(0, 3).join(", ")}; ${upwardMatches.length} intensification cue(s)).`;
-    } else if (!hasAbstract && topicHits >= 3) {
+    } else if (
+      hasAbstract &&
+      topicHits >= 2 &&
+      dipoleMatches.length >= 2 &&
+      upwardMatches.length >= 1
+    ) {
       claim_stance = "supports";
-      stance_rationale = `Title strongly matches topic and region (${matchedTerms.slice(0, 3).join(", ")}; abstract unavailable in metadata).`;
+      stance_rationale = `Abstract connects teleconnection dipole and upward trend (${matchedTerms.slice(0, 3).join(", ")}; ${dipoleMatches.length} dipole cue(s), ${upwardMatches.length} intensification cue(s)).`;
     } else if (!hasAbstract) {
       stance_rationale = "Abstract unavailable in bibliographic record; manual full-text check recommended.";
     } else {
@@ -332,14 +340,17 @@ function parseCrossrefWorkToCitation(
 ): ETGScientificCitation | null {
   const doi = normalizeDoiIdentifier(item.DOI);
   const rawTitle = Array.isArray(item.title) ? item.title[0] : "";
-  const title = rawTitle ? rawTitle.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "";
+  const title = rawTitle
+    ? decodeHtmlEntities(rawTitle.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()
+    : "";
   if (!title) return null;
 
   const authors = formatCrossrefAuthors(item.author);
-  const journal =
+  const rawJournal =
     (Array.isArray(item["container-title"]) && item["container-title"][0]?.trim()) ||
     item.publisher?.trim() ||
     undefined;
+  const journal = rawJournal ? decodeHtmlEntities(rawJournal) : undefined;
   const year = extractCrossrefYear(item);
   const citationCount =
     typeof item["is-referenced-by-count"] === "number" &&
@@ -529,9 +540,12 @@ async function searchEuropePmc(
   for (const item of items) {
     const doi = normalizeDoiIdentifier(item.doi);
     const title = typeof item.title === "string"
-      ? item.title.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().replace(/\.$/, "")
+      ? decodeHtmlEntities(item.title.replace(/<[^>]+>/g, " "))
+          .replace(/\s+/g, " ")
+          .trim()
+          .replace(/\.$/, "")
       : "";
-    const authors = typeof item.authorString === "string" ? item.authorString.trim() : "";
+    const authors = typeof item.authorString === "string" ? decodeHtmlEntities(item.authorString).trim() : "";
     const year = Number(item.pubYear);
     if (!title || !authors || !Number.isFinite(year) || year < 1900 || year > 2100) continue;
     const url = doi
@@ -546,7 +560,9 @@ async function searchEuropePmc(
     const cit = sanitizeCitation({
       title,
       authors,
-      journal: item.journalTitle?.trim() || "Europe PMC Indexed Literature",
+      journal: item.journalTitle?.trim()
+        ? decodeHtmlEntities(item.journalTitle.trim())
+        : "Europe PMC Indexed Literature",
       year,
       doi,
       url,
@@ -595,21 +611,22 @@ async function searchOpenAlexWorks(
   const out: ETGScientificCitation[] = [];
   for (const w of items) {
     const doi = normalizeDoiIdentifier(w.doi);
-    const title = typeof w.title === "string" ? w.title.trim() : "";
+    const title = typeof w.title === "string" ? decodeHtmlEntities(w.title).trim() : "";
     const authors = Array.isArray(w.authorships) && w.authorships.length > 0
       ? w.authorships
           .slice(0, 6)
-          .map((a) => a.author?.display_name?.trim())
+          .map((a) => (a.author?.display_name ? decodeHtmlEntities(a.author.display_name).trim() : ""))
           .filter(Boolean)
           .join(", ") + (w.authorships.length > 6 ? ", et al." : "")
       : "";
     const year = Number(w.publication_year);
     if (!title || !authors || !Number.isFinite(year) || year < 1900) continue;
     const abstractSnippet = reconstructOpenAlexAbstract(w.abstract_inverted_index);
+    const rawJournal = w.primary_location?.source?.display_name?.trim();
     const cit = sanitizeCitation({
       title,
       authors,
-      journal: w.primary_location?.source?.display_name?.trim(),
+      journal: rawJournal ? decodeHtmlEntities(rawJournal) : undefined,
       year,
       doi,
       url: doi ? `https://doi.org/${doi}` : undefined,
@@ -625,6 +642,72 @@ async function searchOpenAlexWorks(
     if (cit) out.push(cit);
   }
   return out;
+}
+
+const BIOMED_OR_BOTANICAL_OFFTOPIC_RE =
+  /\b(leishmaniasis|malaria|dengue|tuberculosis|carcinoma|oncology|tumor|tumour|clinical trial|patients?|surgery|surgical|psychiatr|dental|orthoped|autosuccession|phippsia|mice|mouse|rat|in vitro|apoptosis|chemotherapy)\b/i;
+
+const EARTH_SCIENCE_DOMAIN_RE =
+  /\b(climate|warm(?:ing|ed|s)?|cool(?:ing|ed|s)?|heat(?:ing|ed|wave)?|temperature|precipitat|drought|aridity|monsoon|ocean|sst|sea ice|glacier|permafrost|discharge|streamflow|runoff|hydrolog|wildfire|vapor pressure|co2|carbon|radiative|atmosphere|teleconnect|dipole|oscillation|enso|amoc|wind|cyclone|flood|anomal|albedo|cryosphere|tropospher|stratospher|glob(?:e|al)|environment(?:al)?)\b/i;
+
+const QUERY_ANCHOR_RULES: Array<{ queryRe: RegExp; matchRe: RegExp }> = [
+  { queryRe: /\barctic\b/i, matchRe: /\b(arctic|boreal|high-latitude|polar|circum-?polar)\b/i },
+  { queryRe: /\bantarctic\b/i, matchRe: /\b(antarctic|southern ocean)\b/i },
+  { queryRe: /\bchile\b/i, matchRe: /\b(chile|andes|south america|subtropical)\b/i },
+  { queryRe: /\bandes\b/i, matchRe: /\b(andes|chile|south america)\b/i },
+  { queryRe: /\bmackenzie\b/i, matchRe: /\b(mackenzie|arctic|boreal|permafrost|river discharge)\b/i },
+  { queryRe: /\bindian ocean\b/i, matchRe: /\b(indian ocean|indo-pacific|\biod\b|east africa)\b/i },
+  { queryRe: /\beast africa\b/i, matchRe: /\b(east africa|horn of africa|ethiopia|kenya|somalia|indian ocean)\b/i },
+  { queryRe: /\bhorn of africa\b/i, matchRe: /\b(horn of africa|east africa|indian ocean)\b/i },
+  { queryRe: /\bmadagascar\b/i, matchRe: /\b(madagascar|indian ocean|southern africa)\b/i },
+  { queryRe: /\bsahel\b/i, matchRe: /\b(sahel|west africa|monsoon|atlantic)\b/i },
+  { queryRe: /\bamoc\b/i, matchRe: /\b(amoc|atlantic meridional|warming hole|subpolar)\b/i },
+  { queryRe: /\bsubpolar\b/i, matchRe: /\b(subpolar|north atlantic|amoc|warming hole)\b/i },
+  { queryRe: /\bmauna loa\b/i, matchRe: /\b(mauna loa|keeling|atmospheric co2|carbon dioxide)\b/i },
+  { queryRe: /\bmelbourne\b/i, matchRe: /\b(melbourne|australia|victoria|murray)\b/i },
+  { queryRe: /\baustralia\b/i, matchRe: /\b(australia|australian|murray|tasman|indo-pacific)\b/i },
+  { queryRe: /\bboulder\b/i, matchRe: /\b(boulder|colorado|front range|western north america|rocky)\b/i },
+  { queryRe: /\bcolorado\b/i, matchRe: /\b(colorado|western north america|rocky|upper colorado|front range)\b/i },
+  { queryRe: /\b(?:enso|el nino)\b/i, matchRe: /\b(enso|el nino|el niño|la nina|la niña|southern oscillation|pacific)\b/i },
+  { queryRe: /\bnorth atlantic oscillation\b/i, matchRe: /\b(north atlantic oscillation|\bnao\b|north atlantic)\b/i },
+];
+
+/**
+ * Gates scholarly search results so biomedical/clinical/botanical-taxonomy papers
+ * and off-region matches do not pollute Earth Trend dossiers.
+ */
+export function isCitationRelevantToEarthQuery(
+  cit: ETGScientificCitation,
+  query: string
+): boolean {
+  const hay = `${cit.title} ${cit.abstract_snippet ?? ""} ${cit.journal ?? ""}`;
+  if (BIOMED_OR_BOTANICAL_OFFTOPIC_RE.test(hay) && !BIOMED_OR_BOTANICAL_OFFTOPIC_RE.test(query)) {
+    return false;
+  }
+
+  const queryWords = Array.from(
+    new Set(
+      (query.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []).filter(
+        (w) => !STANCE_STOPWORDS.has(w) && !/^\d+$/.test(w)
+      )
+    )
+  );
+  const textLower = `${cit.title} ${cit.abstract_snippet ?? ""} ${cit.journal ?? ""}`.toLowerCase();
+  const queryWordHits = queryWords.filter((w) => textLower.includes(w)).length;
+
+  if (!EARTH_SCIENCE_DOMAIN_RE.test(textLower) && queryWordHits < 2) {
+    return false;
+  }
+
+  for (const rule of QUERY_ANCHOR_RULES) {
+    if (rule.queryRe.test(query)) {
+      if (!rule.matchRe.test(textLower) && queryWordHits < 3) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -661,7 +744,7 @@ export async function searchPeerReviewedEarthLiterature(
   const combined: ETGScientificCitation[] = [];
   for (const r of settled) {
     if (r.status === "fulfilled") {
-      combined.push(...r.value);
+      combined.push(...r.value.filter((cit) => isCitationRelevantToEarthQuery(cit, cleanQuery)));
     }
   }
 
@@ -759,7 +842,10 @@ export async function verifyAndFilterCitations(
         const merged: ETGScientificCitation = {
           ...cit,
           ...outcome.citation,
-          abstract_snippet: outcome.citation.abstract_snippet ?? cit.abstract_snippet,
+          abstract_snippet:
+            cit.source === "curated" && cit.abstract_snippet
+              ? cit.abstract_snippet
+              : (outcome.citation.abstract_snippet ?? cit.abstract_snippet),
           claim_stance: outcome.citation.claim_stance ?? cit.claim_stance,
           stance_rationale: outcome.citation.stance_rationale ?? cit.stance_rationale,
         };

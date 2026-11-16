@@ -68,7 +68,7 @@ export interface WorkspaceHeaderProps {
   onSelectSearchTarget: (target: EarthPlaceTarget) => void;
   onOpenMissionGuide: () => void;
   onOpenSolarGraph?: () => void;
-  onOpenBriefings: () => void;
+  onOpenBriefings?: () => void;
   onToggleAiStudio: () => void;
   onOpenAddData: () => void;
 }
@@ -89,7 +89,6 @@ export function WorkspaceHeader({
   onChangeSearchQuery,
   onSelectSearchTarget,
   onOpenMissionGuide,
-  onOpenBriefings,
   onToggleAiStudio,
   onOpenAddData,
 }: WorkspaceHeaderProps) {
@@ -130,9 +129,15 @@ export function WorkspaceHeader({
       <div className="flex min-w-0 shrink items-center gap-1 sm:gap-1.5">
         <div className="flex items-center gap-1.5 pr-0.5" title="Earth Trend Detective">
           <span className="h-2 w-2 shrink-0 rounded-full bg-accent-fg" aria-hidden="true" />
-          <h1 className="whitespace-nowrap font-outfit text-[13.5px] font-semibold tracking-tight text-text-primary">
-            <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
-          </h1>
+          {viewMode === "briefings" ? (
+            <span className="whitespace-nowrap font-outfit text-[13.5px] font-semibold tracking-tight text-text-primary">
+              <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
+            </span>
+          ) : (
+            <h1 className="whitespace-nowrap font-outfit text-[13.5px] font-semibold tracking-tight text-text-primary">
+              <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
+            </h1>
+          )}
         </div>
 
         <div
@@ -393,22 +398,6 @@ export function WorkspaceHeader({
 
         <button
           type="button"
-          onClick={onOpenBriefings}
-          title="Open Earth Trend Research Briefings, Mechanisms & Peer-Reviewed DOIs"
-          aria-label="Open Earth Trend Research Briefings"
-          className="etg-hud-btn inline-flex min-h-7 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-surface-elevated/70 px-2 py-0.5 text-[11.5px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
-        >
-          <BookOpenText className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
-          <span className="hidden xl:inline">Briefings</span>
-          {briefingsCount > 0 && (
-            <span className="ws-numeric font-mono text-[10.5px] text-text-subtle">
-              {briefingsCount}
-            </span>
-          )}
-        </button>
-
-        <button
-          type="button"
           onClick={onToggleAiStudio}
           aria-expanded={aiStudioOpen}
           title="Toggle AI Graph Chat Studio"
@@ -482,6 +471,7 @@ export interface WorkspacePopoversProps {
   discoverBusy: boolean;
   eonetBusy: boolean;
   activity: EtgGraphSnapshot["activity"];
+  briefingsCount?: number;
   onResetAllFilters: () => void;
   onToggleTopic: (ds: ETGDatasetId) => void;
   onResetTopics: () => void;
@@ -496,6 +486,7 @@ export interface WorkspacePopoversProps {
   onSelectEdge: (edge: ETGEdge) => void;
   onSelectCascade: (chain: EarthCascadeChain) => void;
   onOpenSolarGraph: () => void;
+  onOpenBriefings?: () => void;
   onDiscoverGlobalTrends: () => void;
   onSyncEonet: () => void;
   onOpenIngestModal: (tab: IngestionTabId) => void;
@@ -520,6 +511,7 @@ export function WorkspacePopovers({
   discoverBusy,
   eonetBusy,
   activity,
+  briefingsCount = 0,
   onResetAllFilters,
   onToggleTopic,
   onResetTopics,
@@ -534,6 +526,7 @@ export function WorkspacePopovers({
   onSelectEdge,
   onSelectCascade,
   onOpenSolarGraph,
+  onOpenBriefings,
   onDiscoverGlobalTrends,
   onSyncEonet,
   onOpenIngestModal,
@@ -932,6 +925,23 @@ export function WorkspacePopovers({
             <span>Agency Hub (12), Citations &amp; AI Disclosure</span>
             <Globe2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
           </button>
+
+          {onOpenBriefings && (
+            <button
+              type="button"
+              onClick={() => {
+                hidePopoverById("etg-more-popover");
+                onOpenBriefings();
+              }}
+              className="flex w-full items-center justify-between rounded-sm border border-border bg-surface-inset px-2.5 py-1.5 text-[11.5px] font-medium text-text-muted hover:border-border-strong hover:text-text-primary cursor-pointer"
+            >
+              <span>
+                Research Papers &amp; Briefings
+                {briefingsCount > 0 ? ` (${briefingsCount})` : ""}
+              </span>
+              <BookOpenText className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+            </button>
+          )}
 
           <button
             type="button"

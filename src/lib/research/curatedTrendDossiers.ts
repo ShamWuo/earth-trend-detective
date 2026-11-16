@@ -80,6 +80,8 @@ export const VERIFIED_CITATIONS = {
     year: 2021,
     doi: "10.1017/9781009157896",
     url: "https://doi.org/10.1017/9781009157896",
+    abstract_snippet:
+      "IPCC Sixth Assessment Report (AR6 WG1) establishes that human-induced greenhouse gas emissions have unequivocally warmed the global surface, driving amplified Arctic warming, accelerating sea-ice and glacier retreat, increasing vapor pressure deficit, altering ocean heat uptake and AMOC stability, and intensifying regional droughts, river discharge shifts, and extreme heat events.",
     source: "curated",
   },
 } satisfies Record<string, ETGScientificCitation>;

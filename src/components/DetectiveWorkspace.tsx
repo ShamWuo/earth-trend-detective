@@ -34,7 +34,7 @@ import { CompactSpotCard, type GuidedCaseStudyItem } from "@/components/CompactS
 import { IngestionModal, type IngestionTabId } from "@/components/IngestionModal";
 import { SolarMicrogridPanel } from "@/components/SolarMicrogridPanel";
 import { AiGraphChatPanel } from "@/components/AiGraphChatPanel";
-import { TrendBriefingsModal } from "@/components/TrendBriefingsModal";
+import { TrendBriefingsView } from "@/components/TrendBriefingsView";
 import {
   DEFAULT_MULTI_TOPICS,
   EMPTY_CASCADE_EDGE_UUIDS,
@@ -77,13 +77,22 @@ export {
 export function DetectiveWorkspace({
   initialSnapshot,
   initialDemoMode = null,
+  initialBriefingUuid = null,
 }: {
   initialSnapshot: EtgGraphSnapshot;
   initialDemoMode?: "spaceapps" | "veritas" | null;
+  initialBriefingUuid?: string | null;
 }) {
   const bundleInputId = useId();
+  const hasInitialBriefing = Boolean(
+    initialBriefingUuid &&
+      initialSnapshot.nodes.some((n) => n.uuid === initialBriefingUuid)
+  );
   const [snapshot, setSnapshot] = useState<EtgGraphSnapshot>(initialSnapshot);
-  const [viewMode, setViewMode] = useState<WorkspaceViewMode>("globe");
+  const [viewMode, setViewMode] = useState<WorkspaceViewMode>(
+    hasInitialBriefing ? "briefings" : "globe"
+  );
+  const lastCanvasModeRef = useRef<"globe" | "graph">("globe");
   const [graphRenderMode, setGraphRenderMode] = useState<GraphRenderMode>("3d");
 
   const [activeTopics, setActiveTopics] = useState<ETGDatasetId[]>([]);
@@ -110,6 +119,7 @@ export function DetectiveWorkspace({
     targetUuid?: string;
   } | null>(null);
   const [activeCascade, setActiveCascade] = useState<EarthCascadeChain | null>(null);
+  const [highlightedPathEdgeUuids, setHighlightedPathEdgeUuids] = useState<string[]>([]);
   const [activeCaseStudyId, setActiveCaseStudyId] = useState<string | null>(null);
   const [solarGraphOpen, setSolarGraphOpen] = useState(false);
   const [solarTargetLocation, setSolarTargetLocation] = useState<{
@@ -118,11 +128,30 @@ export function DetectiveWorkspace({
     name: string;
   } | null>(null);
   const [aiStudioOpen, setAiStudioOpen] = useState<boolean>(false);
-  const [briefingsOpen, setBriefingsOpen] = useState(false);
-  const [briefingsNodeUuid, setBriefingsNodeUuid] = useState<string | null>(null);
+  const [briefingsNodeUuid, setBriefingsNodeUuid] = useState<string | null>(
+    hasInitialBriefing ? (initialBriefingUuid ?? null) : null
+  );
   const [regionalFocusRequest, setRegionalFocusRequest] =
     useState<RegionalFocusRequest | null>(null);
   const regionalFocusSeqRef = useRef(0);
+
+  const syncBriefingUrlParam = useCallback((uuid: string | null) => {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      const existing = url.searchParams.get("briefing");
+      if (uuid) {
+        if (existing === uuid) return;
+        url.searchParams.set("briefing", uuid);
+      } else {
+        if (!existing) return;
+        url.searchParams.delete("briefing");
+      }
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      // Ignore URL sync failures in headless/non-browser environments
+    }
+  }, []);
 
   const requestRegionalFocus = useCallback((lat: number, lng: number, radius = 132) => {
     regionalFocusSeqRef.current += 1;
@@ -146,6 +175,7 @@ export function DetectiveWorkspace({
     maxHops: null,
     direction: "both",
     layoutMode: "force",
+    showProvenanceHubs: false,
   });
   const [selectedRegionScope, setSelectedRegionScope] = useState<string | null>(null);
 
@@ -361,6 +391,21 @@ export function DetectiveWorkspace({
     (nextMode: WorkspaceViewMode) => {
       if (nextMode === viewMode) return;
 
+      if (viewMode === "globe" || viewMode === "graph") {
+        lastCanvasModeRef.current = viewMode;
+      }
+
+      if (nextMode === "briefings") {
+        const targetUuid = selectedNodeUuid ?? briefingsNodeUuid;
+        if (targetUuid) {
+          setBriefingsNodeUuid(targetUuid);
+          syncBriefingUrlParam(targetUuid);
+        }
+      } else {
+        lastCanvasModeRef.current = nextMode;
+        syncBriefingUrlParam(null);
+      }
+
       const focusStageHeading = () => {
         viewHeadingRef.current?.focus({ preventScroll: true });
       };
@@ -385,7 +430,11 @@ export function DetectiveWorkspace({
         Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
       const transitionType =
-        nextMode === "graph" ? "coalesce-to-graph" : "expand-to-globe";
+        nextMode === "graph"
+          ? "coalesce-to-graph"
+          : nextMode === "briefings"
+            ? "open-briefings"
+            : "expand-to-globe";
 
       if (
         !prefersReducedMotion &&
@@ -428,7 +477,7 @@ export function DetectiveWorkspace({
         });
       }
     },
-    [viewMode]
+    [viewMode, selectedNodeUuid, briefingsNodeUuid, syncBriefingUrlParam]
   );
 
   // Filtered nodes & edges based on active topic filters + timeline cutoff
@@ -515,6 +564,19 @@ export function DetectiveWorkspace({
     return { graphNodes: scopedNodes, graphEdges: scopedEdges };
   }, [visibleNodes, visibleEdges, traversalFilter.maxHops, activeTraversal]);
 
+  const alwaysIncludeGraphUuids = useMemo(() => {
+    const keep = new Set<string>();
+    if (selectedNodeUuid) keep.add(selectedNodeUuid);
+    if (selectedEdgeUuid) {
+      const edge = snapshot.edges.find((e) => e.properties.uuid === selectedEdgeUuid);
+      if (edge) {
+        keep.add(edge.source_uuid);
+        keep.add(edge.target_uuid);
+      }
+    }
+    return keep;
+  }, [selectedNodeUuid, selectedEdgeUuid, snapshot.edges]);
+
   const filteredGraphSubset = useMemo(
     () =>
       filterEtgGraphData(
@@ -522,10 +584,32 @@ export function DetectiveWorkspace({
         graphEdges,
         onlyOpposite,
         showSuperseded,
-        enabledRelationCategories
+        enabledRelationCategories,
+        {
+          showProvenanceHubs: Boolean(traversalFilter.showProvenanceHubs),
+          alwaysIncludeNodeUuids: alwaysIncludeGraphUuids,
+        }
       ),
-    [graphNodes, graphEdges, onlyOpposite, showSuperseded, enabledRelationCategories]
+    [
+      graphNodes,
+      graphEdges,
+      onlyOpposite,
+      showSuperseded,
+      enabledRelationCategories,
+      traversalFilter.showProvenanceHubs,
+      alwaysIncludeGraphUuids,
+    ]
   );
+
+  const mergedCascadeEdgeUuids = useMemo(() => {
+    if (highlightedPathEdgeUuids.length === 0) {
+      return activeCascade?.edgeUuids ?? EMPTY_CASCADE_EDGE_UUIDS;
+    }
+    if (!activeCascade || activeCascade.edgeUuids.length === 0) {
+      return highlightedPathEdgeUuids;
+    }
+    return Array.from(new Set([...activeCascade.edgeUuids, ...highlightedPathEdgeUuids]));
+  }, [activeCascade, highlightedPathEdgeUuids]);
 
   const nodeRegionMap = useMemo(
     () => assignNodeRegions(filteredGraphSubset.visibleNodes),
@@ -644,6 +728,7 @@ export function DetectiveWorkspace({
       }
       setSelectedNodeUuid(node.uuid);
       setSelectedEdgeUuid(null);
+      setHighlightedPathEdgeUuids([]);
       setComparePinB(null);
       setCompareMode(false);
       setActiveCaseStudyId(null);
@@ -770,10 +855,14 @@ export function DetectiveWorkspace({
 
   const handleOpenBriefing = useCallback(
     (nodeUuid?: string) => {
-      setBriefingsNodeUuid(nodeUuid ?? selectedNodeUuid);
-      setBriefingsOpen(true);
+      const targetUuid = nodeUuid ?? selectedNodeUuid ?? briefingsNodeUuid;
+      if (targetUuid) {
+        setBriefingsNodeUuid(targetUuid);
+        syncBriefingUrlParam(targetUuid);
+      }
+      handleSwitchView("briefings");
     },
-    [selectedNodeUuid]
+    [selectedNodeUuid, briefingsNodeUuid, syncBriefingUrlParam, handleSwitchView]
   );
 
   const handleClearSelection = useCallback(() => {
@@ -781,6 +870,7 @@ export function DetectiveWorkspace({
     setSelectedNodeUuid(null);
     setSelectedEdgeUuid(null);
     setActiveCascade(null);
+    setHighlightedPathEdgeUuids([]);
     setActiveCaseStudyId(null);
     setCompareMode(false);
     setComparePinB(null);
@@ -841,7 +931,7 @@ export function DetectiveWorkspace({
           setStatusMessage(null);
         } else {
           setStatusMessage(
-            `Selected source "${sourceNode.properties.name}" — now click a target node.`
+            `Selected "${sourceNode.properties.name}". Now click a target node.`
           );
         }
       }
@@ -1291,9 +1381,11 @@ export function DetectiveWorkspace({
   ]);
 
   const stageTitle =
-    viewMode === "graph"
-      ? `Earth Trend Knowledge Graph (${graphRenderMode.toUpperCase()})`
-      : "Interactive 3D Earth Globe";
+    viewMode === "briefings"
+      ? "Scientific Paper & Briefing Reader"
+      : viewMode === "graph"
+        ? `Earth Trend Knowledge Graph (${graphRenderMode.toUpperCase()})`
+        : "Interactive 3D Earth Globe";
 
   const activeFilterCount =
     (activeTopics.length > 0 ? 1 : 0) +
@@ -1354,16 +1446,20 @@ export function DetectiveWorkspace({
           setSolarTargetLocation(null);
           setSolarGraphOpen(true);
         }}
-        onOpenBriefings={() => handleOpenBriefing()}
-        onToggleAiStudio={() =>
+        onToggleAiStudio={() => {
+          if (viewMode === "briefings") {
+            handleSwitchView(lastCanvasModeRef.current);
+            setAiStudioOpen(true);
+            return;
+          }
           setAiStudioOpen((prev) => {
             const next = !prev;
             if (next && typeof window !== "undefined" && window.innerWidth < 1024) {
               setInspectorOpen(false);
             }
             return next;
-          })
-        }
+          });
+        }}
         onOpenAddData={() => {
           setIngestTab("dataset");
           setIngestOpen(true);
@@ -1408,6 +1504,8 @@ export function DetectiveWorkspace({
           setSolarTargetLocation(null);
           setSolarGraphOpen(true);
         }}
+        briefingsCount={briefingsCount}
+        onOpenBriefings={() => handleOpenBriefing()}
         onDiscoverGlobalTrends={() => void handleDiscoverGlobalTrends()}
         onSyncEonet={() => void handleSyncEonet()}
         onOpenIngestModal={(tab) => {
@@ -1422,7 +1520,7 @@ export function DetectiveWorkspace({
       {/* Full-Bleed Center Canvas + Docked AI Graph Studio */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <AiGraphChatPanel
-          open={aiStudioOpen}
+          open={aiStudioOpen && viewMode !== "briefings"}
           onClose={() => setAiStudioOpen(false)}
           snapshot={snapshot}
           selectedNode={selectedNode}
@@ -1443,24 +1541,43 @@ export function DetectiveWorkspace({
             {stageTitle}
           </h2>
 
-          <WorkspaceStageBanner
-            statusMessage={statusMessage}
-            compareMode={compareMode}
-            compareStep={probedCoord || telemetryPrimary ? 2 : 1}
-            viewMode={viewMode}
-            aiStudioOpen={aiStudioOpen}
-            inspectorOpen={inspectorOpen}
-            onDismissStatus={() => setStatusMessage(null)}
-            onCancelCompare={() => setCompareMode(false)}
-          />
+          {viewMode !== "briefings" && (
+            <WorkspaceStageBanner
+              statusMessage={statusMessage}
+              compareMode={compareMode}
+              compareStep={probedCoord || telemetryPrimary ? 2 : 1}
+              viewMode={viewMode}
+              aiStudioOpen={aiStudioOpen}
+              inspectorOpen={inspectorOpen}
+              onDismissStatus={() => setStatusMessage(null)}
+              onCancelCompare={() => setCompareMode(false)}
+            />
+          )}
 
-          {viewMode === "graph" ? (
+          {viewMode === "briefings" ? (
+            <TrendBriefingsView
+              nodes={snapshot.nodes}
+              edges={snapshot.edges}
+              initialNodeUuid={briefingsNodeUuid}
+              backLabel={lastCanvasModeRef.current === "graph" ? "Back to Graph" : "Back to Earth"}
+              onActiveArticleChange={(uuid) => {
+                setBriefingsNodeUuid(uuid);
+                syncBriefingUrlParam(uuid);
+              }}
+              onLocateOnGlobe={handleLocateOnGlobe}
+              onOpenInGraph={(node) => handleOpenInGraphWorkbench(node.uuid)}
+              onBackToCanvas={() => handleSwitchView(lastCanvasModeRef.current)}
+              onRefreshGraph={async () => {
+                await refreshGraph();
+              }}
+            />
+          ) : viewMode === "graph" ? (
             <EarthTrendGraphView
               nodes={graphNodes}
               edges={graphEdges}
               selectedNodeUuid={selectedNodeUuid}
               selectedEdgeUuid={selectedEdgeUuid}
-              cascadeEdgeUuids={activeCascade?.edgeUuids ?? EMPTY_CASCADE_EDGE_UUIDS}
+              cascadeEdgeUuids={mergedCascadeEdgeUuids}
               searchQuery={searchQuery}
               renderMode={graphRenderMode}
               onlyOpposite={onlyOpposite}
@@ -1506,7 +1623,7 @@ export function DetectiveWorkspace({
               selectedNodeUuid={selectedNodeUuid}
               probedAnchorUuid={probedAnchorUuid}
               selectedEdgeUuid={selectedEdgeUuid}
-              cascadeEdgeUuids={activeCascade?.edgeUuids ?? []}
+              cascadeEdgeUuids={mergedCascadeEdgeUuids}
               microscopeScan={microscopeScan}
               microscopeByNode={microscopeByNode}
               probedCoord={probedCoord}
@@ -1634,6 +1751,7 @@ export function DetectiveWorkspace({
                   onMaterializeSolarGraph={handleMaterializeSolarGraph}
                   onLocateOnGlobe={handleLocateOnGlobe}
                   onOpenBriefing={handleOpenBriefing}
+                  onHighlightCascadeEdges={(uuids) => setHighlightedPathEdgeUuids(uuids)}
                   onSnapshotChange={handleSnapshotChange}
                   onClose={handleClearSelection}
                 />
@@ -1756,23 +1874,6 @@ export function DetectiveWorkspace({
           requestRegionalFocus(lat, lng, 128);
         }}
         onMaterializeInGraph={handleMaterializeSolarGraph}
-      />
-
-      <TrendBriefingsModal
-        open={briefingsOpen}
-        initialNodeUuid={briefingsNodeUuid}
-        nodes={snapshot.nodes}
-        edges={snapshot.edges}
-        onClose={() => setBriefingsOpen(false)}
-        onLocateOnGlobe={(node) => {
-          setBriefingsOpen(false);
-          handleLocateOnGlobe(node);
-        }}
-        onOpenInGraph={(uuid) => {
-          setBriefingsOpen(false);
-          handleOpenInGraphWorkbench(uuid);
-        }}
-        onSnapshotChange={handleSnapshotChange}
       />
     </div>
   );

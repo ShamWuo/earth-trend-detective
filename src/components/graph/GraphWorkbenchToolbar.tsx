@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowRight, GitBranchPlus, Plus, Sparkles, Waypoints, X } from "lucide-react";
+import { ArrowRight, Database, GitBranchPlus, Plus, Sparkles, Waypoints, X } from "lucide-react";
 import type { RegionOption } from "@/lib/graph/regionalSubgraph";
 import type { TraversalFilterState } from "@/components/graph/graphViewShared";
 
@@ -235,6 +235,26 @@ export function GraphWorkbenchToolbar({
                 </div>
               </>
             )}
+
+            <div role="separator" aria-orientation="vertical" className="mx-0.5 h-3.5 shrink-0 border-l border-border" />
+            <div role="group" aria-label="Provenance and governance hubs" className="flex shrink-0 items-center">
+              <button
+                type="button"
+                aria-pressed={Boolean(traversalFilter.showProvenanceHubs)}
+                title="Show or hide satellite catalog Concept hubs, statistical Rule gates, and monitors/verified_by spokes"
+                aria-label="Show provenance hubs"
+                onClick={() =>
+                  onChangeTraversalFilter({
+                    ...traversalFilter,
+                    showProvenanceHubs: !traversalFilter.showProvenanceHubs,
+                  })
+                }
+                className="etg-hud-btn inline-flex h-6 shrink-0 items-center gap-1 rounded-sm border border-transparent px-2 text-[10px] font-medium text-text-muted hover:text-text-primary aria-pressed:border-violet-400 aria-pressed:bg-violet-950 aria-pressed:text-violet-300 cursor-pointer"
+              >
+                <Database className="h-3 w-3" aria-hidden="true" />
+                <span>Provenance</span>
+              </button>
+            </div>
           </>
         )}
 

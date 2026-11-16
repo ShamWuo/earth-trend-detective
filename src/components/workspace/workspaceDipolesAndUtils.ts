@@ -20,7 +20,7 @@ import {
 import type { ComparisonArcVisualMeta } from "@/components/EarthGlobe3D";
 import type { GuidedCaseStudyItem } from "@/components/CompactSpotCard";
 
-export type WorkspaceViewMode = "graph" | "globe";
+export type WorkspaceViewMode = "graph" | "globe" | "briefings";
 export type GraphRenderMode = "3d" | "2d";
 export type RelationPopoverFilter =
   | "all"

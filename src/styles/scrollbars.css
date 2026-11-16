@@ -1,4 +1,4 @@
-/* ─── Scrollbar Colors (No transition on scrollbar-color to avoid WebKit flicker) ─── */
+/* Scrollbar Colors (No transition on scrollbar-color to avoid WebKit flicker) */
 :root {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;

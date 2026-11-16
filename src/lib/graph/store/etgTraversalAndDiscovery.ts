@@ -280,6 +280,24 @@ export function queryGraphOp(
   };
 }
 
+const ADMINISTRATIVE_HUB_EDGES = new Set<ETGRelationshipType>(["monitors", "verified_by"]);
+
+/**
+ * Identifies metadata/governance hubs (statistical verification Rule nodes or zero-series
+ * satellite catalog Concept nodes) that should not act as transitive transit shortcuts
+ * between physical Earth-system nodes.
+ */
+export function isAdministrativeCatalogHub(node: ETGNode | undefined): boolean {
+  if (!node) return false;
+  if (node.label === "Rule") return true;
+  if (node.label === "Concept") {
+    const count = node.properties.series_count ?? 0;
+    const hasInline = Array.isArray(node.properties.series) && node.properties.series.length > 0;
+    return count === 0 && !hasInline;
+  }
+  return false;
+}
+
 export function traceShortestPathOp(
   ctx: EtgStoreContext,
   fromUuid: string,
@@ -292,47 +310,76 @@ export function traceShortestPathOp(
     return [{ nodeUuid: n.uuid, name: n.properties.name, label: n.label, depth: 0 }];
   }
 
-  const adj = new Map<string, Array<{ next: string; type: ETGRelationshipType }>>();
-  for (const e of ctx.edges.values()) {
-    const fwd = adj.get(e.source_uuid) ?? [];
-    fwd.push({ next: e.target_uuid, type: e.type });
-    adj.set(e.source_uuid, fwd);
+  const fromIsHub = isAdministrativeCatalogHub(ctx.nodes.get(fromUuid));
+  const toIsHub = isAdministrativeCatalogHub(ctx.nodes.get(toUuid));
 
-    const rev = adj.get(e.target_uuid) ?? [];
-    rev.push({ next: e.source_uuid, type: e.type });
-    adj.set(e.target_uuid, rev);
-  }
-
-  const visited = new Set<string>([fromUuid]);
-  let frontier: Array<Array<{ id: string; via?: ETGRelationshipType }>> = [[{ id: fromUuid }]];
-
-  for (let depth = 1; depth <= maxHops; depth++) {
-    const nextFrontier: typeof frontier = [];
-    for (const pathItems of frontier) {
-      const tail = pathItems[pathItems.length - 1].id;
-      for (const edge of adj.get(tail) ?? []) {
-        if (visited.has(edge.next)) continue;
-        const extended = [...pathItems, { id: edge.next, via: edge.type }];
-        if (edge.next === toUuid) {
-          return extended.map((item, idx) => {
-            const node = ctx.nodes.get(item.id)!;
-            return {
-              nodeUuid: node.uuid,
-              name: node.properties.name,
-              label: node.label,
-              edgeType: item.via,
-              depth: idx,
-            };
-          });
-        }
-        visited.add(edge.next);
-        nextFrontier.push(extended);
+  const runBfs = (allowAdminEdges: boolean): ProvenanceHop[] | null => {
+    const adj = new Map<string, Array<{ next: string; type: ETGRelationshipType }>>();
+    for (const e of ctx.edges.values()) {
+      if (!allowAdminEdges && ADMINISTRATIVE_HUB_EDGES.has(e.type)) {
+        const directEndpointHub =
+          (fromIsHub && (e.source_uuid === fromUuid || e.target_uuid === fromUuid)) ||
+          (toIsHub && (e.source_uuid === toUuid || e.target_uuid === toUuid));
+        if (!directEndpointHub) continue;
       }
+      const fwd = adj.get(e.source_uuid) ?? [];
+      fwd.push({ next: e.target_uuid, type: e.type });
+      adj.set(e.source_uuid, fwd);
+
+      const rev = adj.get(e.target_uuid) ?? [];
+      rev.push({ next: e.source_uuid, type: e.type });
+      adj.set(e.target_uuid, rev);
     }
-    if (nextFrontier.length === 0) return null;
-    frontier = nextFrontier;
+
+    const visited = new Set<string>([fromUuid]);
+    let frontier: Array<Array<{ id: string; via?: ETGRelationshipType }>> = [[{ id: fromUuid }]];
+
+    for (let depth = 1; depth <= maxHops; depth++) {
+      const nextFrontier: typeof frontier = [];
+      for (const pathItems of frontier) {
+        const tail = pathItems[pathItems.length - 1].id;
+        for (const edge of adj.get(tail) ?? []) {
+          if (visited.has(edge.next)) continue;
+          const nextNode = ctx.nodes.get(edge.next);
+          if (edge.next !== toUuid && nextNode?.properties.status === "Superseded") {
+            continue;
+          }
+          if (
+            !allowAdminEdges &&
+            edge.next !== toUuid &&
+            isAdministrativeCatalogHub(nextNode)
+          ) {
+            continue;
+          }
+          const extended = [...pathItems, { id: edge.next, via: edge.type }];
+          if (edge.next === toUuid) {
+            return extended.map((item, idx) => {
+              const node = ctx.nodes.get(item.id)!;
+              return {
+                nodeUuid: node.uuid,
+                name: node.properties.name,
+                label: node.label,
+                edgeType: item.via,
+                depth: idx,
+              };
+            });
+          }
+          visited.add(edge.next);
+          nextFrontier.push(extended);
+        }
+      }
+      if (nextFrontier.length === 0) return null;
+      frontier = nextFrontier;
+    }
+    return null;
+  };
+
+  // Prefer scientific/epistemic paths without administrative hub shortcuts; fall back only if endpoints are hubs
+  const scientific = runBfs(false);
+  if (scientific || (!fromIsHub && !toIsHub)) {
+    return scientific;
   }
-  return null;
+  return runBfs(true);
 }
 
 export function isBidirectionalTraversalEdge(edge: ETGEdge): boolean {
@@ -342,7 +389,8 @@ export function isBidirectionalTraversalEdge(edge: ETGEdge): boolean {
 }
 
 /**
- * Traverses a k-hop neighborhood from `rootUuid` respecting causal direction (`upstream`, `downstream`, or `both`).
+ * Traverses a k-hop neighborhood from `rootUuid` respecting causal direction (`upstream`, `downstream`, or `both`),
+ * excluding administrative hub shortcuts (`monitors` / `verified_by` / catalog hubs) unless explicitly requested.
  */
 export function traverseSubgraphOp(
   ctx: EtgStoreContext,
@@ -369,7 +417,18 @@ export function traverseSubgraphOp(
     };
   }
 
+  const explicitAdminOnly =
+    allowedTypes !== null &&
+    allowedTypes.size > 0 &&
+    Array.from(allowedTypes).every((t) => ADMINISTRATIVE_HUB_EDGES.has(t));
+  const allowProvenanceHubs =
+    Boolean(options.includeProvenanceHubs) ||
+    isAdministrativeCatalogHub(rootNode) ||
+    explicitAdminOnly;
+
   const canTraverseEdge = (edge: ETGEdge): boolean => {
+    if (!allowProvenanceHubs && ADMINISTRATIVE_HUB_EDGES.has(edge.type)) return false;
+    if (!includeSuperseded && edge.type === "supersedes") return false;
     if (allowedTypes && !allowedTypes.has(edge.type)) return false;
     if (ctx.getEdgeWeight(edge) < minWeight) return false;
     const src = ctx.nodes.get(edge.source_uuid);
@@ -390,6 +449,13 @@ export function traverseSubgraphOp(
       const curr = queue[head++];
       const d = dist.get(curr)!;
       if (d >= maxHops) continue;
+      if (
+        !allowProvenanceHubs &&
+        curr !== options.rootUuid &&
+        isAdministrativeCatalogHub(ctx.nodes.get(curr))
+      ) {
+        continue;
+      }
 
       for (const edge of ctx.edges.values()) {
         if (!canTraverseEdge(edge)) continue;
@@ -415,6 +481,12 @@ export function traverseSubgraphOp(
         }
 
         if (next && !dist.has(next)) {
+          if (
+            !allowProvenanceHubs &&
+            isAdministrativeCatalogHub(ctx.nodes.get(next))
+          ) {
+            continue;
+          }
           dist.set(next, d + 1);
           queue.push(next);
         }
@@ -454,17 +526,28 @@ export function traverseSubgraphOp(
     (e) => allIds.has(e.source_uuid) && allIds.has(e.target_uuid) && canTraverseEdge(e)
   );
 
-  // Rank top causal paths radiating up/down from root
+  // Rank top scientific causal paths radiating up/down from root (never transiting admin hubs)
   const causalPaths: CausalPathSummary[] = [];
   const buildPathsFromRoot = (mode: "upstream" | "downstream") => {
-    const dfs = (curr: string, pathNodes: string[], pathEdges: string[], lagSum: number, scoreProd: number) => {
+    const dfs = (
+      curr: string,
+      pathNodes: string[],
+      pathEdges: string[],
+      pathTypes: ETGRelationshipType[],
+      lagSum: number,
+      scoreProd: number,
+      absRSum: number
+    ) => {
       if (pathEdges.length >= 1) {
         const orderedNodes = mode === "upstream" ? [...pathNodes].reverse() : pathNodes;
         const orderedEdges = mode === "upstream" ? [...pathEdges].reverse() : pathEdges;
+        const orderedTypes = mode === "upstream" ? [...pathTypes].reverse() : pathTypes;
         const labels = orderedNodes.map((id) => ctx.nodes.get(id)?.properties.name ?? id);
         causalPaths.push({
           nodeUuids: orderedNodes,
           edgeUuids: orderedEdges,
+          edgeTypes: orderedTypes,
+          meanAbsR: Number((absRSum / orderedEdges.length).toFixed(3)),
           cumulativeLagSteps: lagSum,
           score: Number(scoreProd.toFixed(3)),
           summary: labels.join(" → "),
@@ -472,6 +555,7 @@ export function traverseSubgraphOp(
       }
       if (pathEdges.length >= maxHops) return;
       for (const edge of inducedEdges) {
+        if (ADMINISTRATIVE_HUB_EDGES.has(edge.type) || edge.type === "supersedes") continue;
         if (pathEdges.includes(edge.properties.uuid)) continue;
         const next =
           mode === "downstream" && edge.source_uuid === curr
@@ -482,10 +566,21 @@ export function traverseSubgraphOp(
         if (!next || pathNodes.includes(next)) continue;
         const w = ctx.getEdgeWeight(edge);
         const lag = Math.abs(edge.properties.optimal_lag_steps ?? 0);
-        dfs(next, [...pathNodes, next], [...pathEdges, edge.properties.uuid], lagSum + lag, scoreProd * w);
+        const absR = Math.abs(
+          edge.properties.detrended_r ?? edge.properties.correlation_r ?? w
+        );
+        dfs(
+          next,
+          [...pathNodes, next],
+          [...pathEdges, edge.properties.uuid],
+          [...pathTypes, edge.type],
+          lagSum + lag,
+          scoreProd * w,
+          absRSum + absR
+        );
       }
     };
-    dfs(options.rootUuid, [options.rootUuid], [], 0, 1);
+    dfs(options.rootUuid, [options.rootUuid], [], [], 0, 1, 0);
   };
 
   if (direction !== "downstream") buildPathsFromRoot("upstream");
@@ -506,7 +601,9 @@ export function traverseSubgraphOp(
 }
 
 /**
- * Returns top weighted simple paths between two nodes (up to 6 results).
+ * Returns top weighted simple paths between two nodes (up to 6 results),
+ * refusing administrative hub shortcuts (`monitors`, `verified_by`, `supersedes`)
+ * unless one of the queried endpoints is itself a catalog/rule hub.
  */
 export function findAllPathsOp(
   ctx: EtgStoreContext,
@@ -514,17 +611,32 @@ export function findAllPathsOp(
   toUuid: string,
   maxHops = 5
 ): CausalPathSummary[] {
-  if (!ctx.nodes.has(fromUuid) || !ctx.nodes.has(toUuid)) return [];
+  const fromNode = ctx.nodes.get(fromUuid);
+  const toNode = ctx.nodes.get(toUuid);
+  if (!fromNode || !toNode) return [];
+
+  const allowHubEndpoints =
+    isAdministrativeCatalogHub(fromNode) || isAdministrativeCatalogHub(toNode);
   const results: CausalPathSummary[] = [];
   const clampedHops = Math.max(1, Math.min(6, maxHops));
 
-  const dfs = (curr: string, visited: string[], viaEdges: string[], lagSum: number, scoreProd: number) => {
+  const dfs = (
+    curr: string,
+    visited: string[],
+    viaEdges: string[],
+    viaTypes: ETGRelationshipType[],
+    lagSum: number,
+    scoreProd: number,
+    absRSum: number
+  ) => {
     if (results.length >= 24) return;
     if (curr === toUuid && viaEdges.length > 0) {
       const names = visited.map((id) => ctx.nodes.get(id)?.properties.name ?? id);
       results.push({
         nodeUuids: visited,
         edgeUuids: viaEdges,
+        edgeTypes: viaTypes,
+        meanAbsR: Number((absRSum / viaEdges.length).toFixed(3)),
         cumulativeLagSteps: lagSum,
         score: Number(Math.pow(scoreProd, 1 / viaEdges.length).toFixed(3)),
         summary: names.join(" → "),
@@ -534,6 +646,8 @@ export function findAllPathsOp(
     if (viaEdges.length >= clampedHops) return;
 
     for (const edge of ctx.edges.values()) {
+      if (edge.type === "supersedes") continue;
+      if (!allowHubEndpoints && ADMINISTRATIVE_HUB_EDGES.has(edge.type)) continue;
       const next =
         edge.source_uuid === curr
           ? edge.target_uuid
@@ -541,17 +655,27 @@ export function findAllPathsOp(
             ? edge.source_uuid
             : null;
       if (!next || visited.includes(next)) continue;
+      const nextNode = ctx.nodes.get(next);
+      if (next !== toUuid && nextNode?.properties.status === "Superseded") continue;
+      if (next !== toUuid && isAdministrativeCatalogHub(nextNode)) continue;
+
+      const w = ctx.getEdgeWeight(edge);
+      const absR = Math.abs(
+        edge.properties.detrended_r ?? edge.properties.correlation_r ?? w
+      );
       dfs(
         next,
         [...visited, next],
         [...viaEdges, edge.properties.uuid],
+        [...viaTypes, edge.type],
         lagSum + Math.abs(edge.properties.optimal_lag_steps ?? 0),
-        scoreProd * ctx.getEdgeWeight(edge)
+        scoreProd * w,
+        absRSum + absR
       );
     }
   };
 
-  dfs(fromUuid, [fromUuid], [], 0, 1);
+  dfs(fromUuid, [fromUuid], [], [], 0, 1, 0);
   results.sort((a, b) => b.score - a.score || a.edgeUuids.length - b.edgeUuids.length);
   return results.slice(0, 6);
 }

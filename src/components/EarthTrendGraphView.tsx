@@ -101,6 +101,19 @@ export function EarthTrendGraphView({
 }: EarthTrendGraphViewProps) {
   const isLightTheme = useIsLightTheme();
   const [regionFocusNonce, setRegionFocusNonce] = useState(0);
+  const alwaysIncludeNodeUuids = useMemo(() => {
+    const keep = new Set<string>();
+    if (selectedNodeUuid) keep.add(selectedNodeUuid);
+    if (selectedEdgeUuid) {
+      const edge = edges.find((e) => e.properties.uuid === selectedEdgeUuid);
+      if (edge) {
+        keep.add(edge.source_uuid);
+        keep.add(edge.target_uuid);
+      }
+    }
+    return keep;
+  }, [selectedNodeUuid, selectedEdgeUuid, edges]);
+
   const { visibleNodes, visibleEdges } = useMemo(
     () =>
       filterEtgGraphData(
@@ -108,9 +121,21 @@ export function EarthTrendGraphView({
         edges,
         onlyOpposite,
         showSuperseded,
-        enabledRelationCategories
+        enabledRelationCategories,
+        {
+          showProvenanceHubs: Boolean(traversalFilter.showProvenanceHubs),
+          alwaysIncludeNodeUuids,
+        }
       ),
-    [nodes, edges, onlyOpposite, showSuperseded, enabledRelationCategories]
+    [
+      nodes,
+      edges,
+      onlyOpposite,
+      showSuperseded,
+      enabledRelationCategories,
+      traversalFilter.showProvenanceHubs,
+      alwaysIncludeNodeUuids,
+    ]
   );
 
   const regionSpotlight = useMemo<RegionSpotlightState | null>(() => {

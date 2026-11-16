@@ -82,8 +82,8 @@ export function GraphCameraDock({
           onClick={onToggleOrbit}
           title={
             isOrbiting
-              ? "Slow camera orbit (active — click to pause)"
-              : "Slow camera orbit (paused — click to resume)"
+              ? "Slow camera orbit (active, click to pause)"
+              : "Slow camera orbit (paused, click to resume)"
           }
           aria-label="Slow camera orbit"
           aria-pressed={isOrbiting}

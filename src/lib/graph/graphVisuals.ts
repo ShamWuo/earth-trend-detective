@@ -257,6 +257,16 @@ export function buildRegionAssignmentMap(
   return assignNodeRegions(nodes, maxSnapKm);
 }
 
+function isProvenanceCatalogHub(node: ETGNode): boolean {
+  if (node.label === "Rule") return true;
+  if (node.label === "Concept") {
+    const count = node.properties.series_count ?? 0;
+    const hasSeries = Array.isArray(node.properties.series) && node.properties.series.length > 0;
+    return count === 0 && !hasSeries;
+  }
+  return false;
+}
+
 /**
  * Filters ETG nodes and edges consistently across graph toolbar counters, region dropdowns,
  * and 3D/2D canvases so UI region filters never diverge from rendered clusters.
@@ -266,11 +276,23 @@ export function filterEtgGraphData(
   edges: readonly ETGEdge[],
   onlyOpposite: boolean,
   showSuperseded: boolean,
-  enabledRelationCategories?: ReadonlyArray<RelationCategory>
+  enabledRelationCategories?: ReadonlyArray<RelationCategory>,
+  options?: {
+    showProvenanceHubs?: boolean;
+    alwaysIncludeNodeUuids?: ReadonlySet<string>;
+  }
 ): { visibleNodes: ETGNode[]; visibleEdges: ETGEdge[] } {
-  const filteredNodes = showSuperseded
-    ? [...nodes]
-    : nodes.filter((n) => n.properties.status !== "Superseded");
+  const showProvenanceHubs = options?.showProvenanceHubs ?? true;
+  const alwaysKeep = options?.alwaysIncludeNodeUuids;
+
+  const filteredNodes = (
+    showSuperseded ? [...nodes] : nodes.filter((n) => n.properties.status !== "Superseded")
+  ).filter((n) => {
+    if (showProvenanceHubs) return true;
+    if (alwaysKeep?.has(n.uuid)) return true;
+    return !isProvenanceCatalogHub(n);
+  });
+
   const nodeIds = new Set(filteredNodes.map((n) => n.uuid));
   const allowedCatSet = enabledRelationCategories
     ? new Set(enabledRelationCategories)
@@ -278,6 +300,14 @@ export function filterEtgGraphData(
 
   const validEdges = edges.filter((e) => {
     if (!nodeIds.has(e.source_uuid) || !nodeIds.has(e.target_uuid)) return false;
+    if (
+      !showProvenanceHubs &&
+      (e.type === "monitors" || e.type === "verified_by") &&
+      !alwaysKeep?.has(e.source_uuid) &&
+      !alwaysKeep?.has(e.target_uuid)
+    ) {
+      return false;
+    }
     if (onlyOpposite && e.type !== "drives_opposite") return false;
     if (!onlyOpposite && allowedCatSet && !allowedCatSet.has(classifyRelationCategory(e.type))) {
       return false;
@@ -601,14 +631,15 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
       }
     }
 
-    // Spring attraction: strong within region, gentle across regions so regions stay distinct
+    // Spring attraction: strong within region, gentle across regions & provenance spokes so clusters stay distinct
     for (const e of edges) {
       const pa = pos.get(e.source_uuid);
       const pb = pos.get(e.target_uuid);
       if (!pa || !pb) continue;
       const sameRegion = nodeRegionId.get(e.source_uuid) === nodeRegionId.get(e.target_uuid);
-      const idealLen = sameRegion ? 46 : 155;
-      const springStrength = sameRegion ? 0.048 : 0.005;
+      const isAdminSpoke = e.type === "monitors" || e.type === "verified_by";
+      const idealLen = isAdminSpoke ? 165 : sameRegion ? 46 : 155;
+      const springStrength = isAdminSpoke ? 0.008 : sameRegion ? 0.048 : 0.005;
 
       const fa = forces.get(e.source_uuid)!;
       const fb = forces.get(e.target_uuid)!;
@@ -847,8 +878,9 @@ export function computeLayout2D(
         const pb = pos.get(e.target_uuid);
         if (!pa || !pb) continue;
         const sameRegion = nodeRegionId.get(e.source_uuid) === nodeRegionId.get(e.target_uuid);
-        const ideal = sameRegion ? 235 : 460;
-        const strength = sameRegion ? 0.048 : 0.01;
+        const isAdminSpoke = e.type === "monitors" || e.type === "verified_by";
+        const ideal = isAdminSpoke ? 420 : sameRegion ? 235 : 460;
+        const strength = isAdminSpoke ? 0.006 : sameRegion ? 0.048 : 0.01;
         const fa = forces.get(e.source_uuid)!;
         const fb = forces.get(e.target_uuid)!;
         const dx = pb.x - pa.x;

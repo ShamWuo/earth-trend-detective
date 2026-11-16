@@ -738,8 +738,8 @@ export function GlobeHudOverlays({
             >
               <span>
                 {regionalHud.aerialActive
-                  ? "Failed to fetch high-res satellite tiles — showing base globe + geodesic rings."
-                  : "Failed to fetch NASA GIBS satellite tile — showing Blue Marble + geodesic rings."}
+                  ? "Could not load high-res satellite tiles; showing base globe and geodesic rings."
+                  : "Could not load NASA GIBS satellite tile; showing Blue Marble and geodesic rings."}
               </span>
               <button
                 type="button"

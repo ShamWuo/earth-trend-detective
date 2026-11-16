@@ -257,7 +257,7 @@ export function WorkbenchEvidenceTab({
           </p>
         ) : (
           <p className="text-[11px] leading-relaxed text-text-subtle">
-            No curated research dossier is attached yet. Open the briefing reader or synthesize mechanisms and DOIs with AI.
+            No curated research dossier is attached yet. Open the working paper or synthesize mechanisms and DOIs with AI.
           </p>
         )}
         <div className="flex flex-wrap items-center gap-1.5">
@@ -265,10 +265,10 @@ export function WorkbenchEvidenceTab({
             <button
               type="button"
               onClick={() => onOpenBriefing(selectedNode.uuid)}
-              className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-sm border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+              className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-sm border border-border bg-transparent px-2.5 py-1.5 text-[11px] font-medium text-text-muted hover:border-border-strong hover:text-text-primary cursor-pointer"
             >
-              <BookOpenText className="h-3.5 w-3.5 text-accent-fg" aria-hidden="true" />
-              <span>{selectedNode.properties.dossier ? "Read / Edit Briefing" : "Open Briefing"}</span>
+              <BookOpenText className="h-3.5 w-3.5 text-text-muted" aria-hidden="true" />
+              <span>{selectedNode.properties.dossier ? "Read Paper" : "Open Paper"}</span>
             </button>
           )}
           <button

@@ -10,6 +10,11 @@ import {
   haversineKm,
 } from "@/lib/graph/etgStore";
 import { predictFromGraph } from "@/lib/graph/graphPredictor";
+import { decodeHtmlEntities, sanitizeCitation } from "@/lib/research/dossierUtils";
+import {
+  evaluateCitationClaimStance,
+  isCitationRelevantToEarthQuery,
+} from "@/lib/research/scholarlyLiteratureClient";
 
 describe("Earth Trend Graph Store (ETG)", () => {
   beforeEach(() => {
@@ -729,5 +734,251 @@ describe("Earth Trend Graph Store (ETG)", () => {
         lng: 5,
       })
     ).toThrow(/latitude/i);
+  });
+
+  it("blocks provenance hub shortcut transit in traverseSubgraph, traceShortestPath, and findAllPaths by default", () => {
+    const store = getEtgStore();
+    const regionConcept = store.createNode({
+      uuid: "concept-hub-global",
+      label: "Concept",
+      properties: {
+        name: "NASA Global Catalog Hub",
+        description: "Administrative catalog concept without time series",
+      },
+    });
+    const rule = store.createNode({
+      uuid: "rule-corroboration-hub",
+      label: "Rule",
+      properties: {
+        name: "Multi-Source Gate",
+        description: "Corroboration governance rule",
+      },
+    });
+    const insightA = store.createNode({
+      uuid: "insight-a-arctic",
+      label: "Insight",
+      properties: {
+        name: "Arctic Amplification",
+        description: "Observed warming trend",
+        series: [
+          { date: "2020-01", t: 2020.0, value: 1.0 },
+          { date: "2021-01", t: 2021.0, value: 1.2 },
+          { date: "2022-01", t: 2022.0, value: 1.4 },
+        ],
+      },
+    });
+    const insightB = store.createNode({
+      uuid: "insight-b-chile",
+      label: "Insight",
+      properties: {
+        name: "Central Chile Megadrought",
+        description: "Observed drying trend",
+        series: [
+          { date: "2020-01", t: 2020.0, value: -1.0 },
+          { date: "2021-01", t: 2021.0, value: -1.2 },
+          { date: "2022-01", t: 2022.0, value: -1.4 },
+        ],
+      },
+    });
+    const insightC = store.createNode({
+      uuid: "insight-c-amoc",
+      label: "Insight",
+      properties: {
+        name: "Subpolar Atlantic Warming Hole",
+        description: "Coupled AMOC cooling",
+        series: [
+          { date: "2020-01", t: 2020.0, value: -0.2 },
+          { date: "2021-01", t: 2021.0, value: -0.4 },
+          { date: "2022-01", t: 2022.0, value: -0.6 },
+        ],
+      },
+    });
+
+    // Administrative hub shortcuts linking A and B through a catalog Concept & Rule
+    store.createEdge({
+      source_uuid: regionConcept.uuid,
+      target_uuid: insightA.uuid,
+      type: "monitors",
+      rationale: "Catalog link",
+    });
+    store.createEdge({
+      source_uuid: regionConcept.uuid,
+      target_uuid: insightB.uuid,
+      type: "monitors",
+      rationale: "Catalog link",
+    });
+    store.createEdge({
+      source_uuid: insightA.uuid,
+      target_uuid: rule.uuid,
+      type: "verified_by",
+      rationale: "Governance link",
+    });
+    store.createEdge({
+      source_uuid: insightB.uuid,
+      target_uuid: rule.uuid,
+      type: "verified_by",
+      rationale: "Governance link",
+    });
+
+    // Real 2-hop scientific chain A -> C -> B
+    store.createEdge({
+      source_uuid: insightA.uuid,
+      target_uuid: insightC.uuid,
+      type: "drives_opposite",
+      correlation_r: -0.62,
+      rationale: "Arctic-AMOC coupling",
+    });
+    store.createEdge({
+      source_uuid: insightC.uuid,
+      target_uuid: insightB.uuid,
+      type: "leads",
+      correlation_r: 0.54,
+      rationale: "Hemispheric circulation teleconnection",
+    });
+
+    const cleanSubgraph = store.traverseSubgraph({
+      rootUuid: insightA.uuid,
+      maxHops: 2,
+      direction: "both",
+    });
+    const cleanIds = new Set(cleanSubgraph.nodes.map((n) => n.uuid));
+    expect(cleanIds.has(regionConcept.uuid)).toBe(false);
+    expect(cleanIds.has(rule.uuid)).toBe(false);
+    expect(cleanIds.has(insightC.uuid)).toBe(true);
+    expect(cleanIds.has(insightB.uuid)).toBe(true);
+
+    const shortest = store.traceShortestPath(insightA.uuid, insightB.uuid);
+    expect(shortest).not.toBeNull();
+    expect(shortest?.map((h) => h.nodeUuid)).toEqual([
+      insightA.uuid,
+      insightC.uuid,
+      insightB.uuid,
+    ]);
+
+    const paths = store.findAllPaths(insightA.uuid, insightB.uuid, 4);
+    expect(paths.length).toBe(1);
+    expect(paths[0].nodeUuids).toEqual([insightA.uuid, insightC.uuid, insightB.uuid]);
+    expect(paths[0].edgeTypes).toEqual(["drives_opposite", "leads"]);
+    expect(paths[0].meanAbsR).toBeCloseTo(0.58, 2);
+
+    // Explicitly opting into provenance hubs exposes them
+    const withHubs = store.traverseSubgraph({
+      rootUuid: insightA.uuid,
+      maxHops: 1,
+      direction: "both",
+      includeProvenanceHubs: true,
+    });
+    const hubIds = new Set(withHubs.nodes.map((n) => n.uuid));
+    expect(hubIds.has(regionConcept.uuid)).toBe(true);
+    expect(hubIds.has(rule.uuid)).toBe(true);
+
+    // Explicit hub endpoint remains inspectable
+    const ruleDirect = store.traverseSubgraph({
+      rootUuid: rule.uuid,
+      maxHops: 1,
+      direction: "both",
+    });
+    expect(ruleDirect.nodes.some((n) => n.uuid === insightA.uuid)).toBe(true);
+  });
+
+  it("decodes HTML entities, blocks off-topic biomedical papers, and guards stance rationale", () => {
+    expect(
+      decodeHtmlEntities("Mackenzie River &amp; Arctic Climate &#8211; 2.5&deg;C (p &lt; 0.01)")
+    ).toBe("Mackenzie River & Arctic Climate – 2.5°C (p < 0.01)");
+
+    const cleanCit = sanitizeCitation({
+      title: "East Africa &amp; Indian Ocean Dipole Shifts",
+      authors: "Smith, A. &amp; Doe, J.",
+      journal: "Nature Climate Change",
+      year: 2024,
+      doi: "10.1038/s41558-024-00001-x",
+      abstract_snippet: "Surface warming (&#8722;1.2&deg;C dipole gradient) amplified drought.",
+    });
+    expect(cleanCit?.title).toBe("East Africa & Indian Ocean Dipole Shifts");
+    expect(cleanCit?.authors).toBe("Smith, A. & Doe, J.");
+
+    const offTopicLeish = sanitizeCitation({
+      title: "Cutaneous leishmaniasis patients in Madagascar clinical trial",
+      authors: "Med, R.",
+      journal: "Tropical Medicine",
+      year: 2022,
+      abstract_snippet: "Clinical treatment outcomes in patients with leishmaniasis.",
+    });
+    expect(offTopicLeish).toBeDefined();
+    expect(
+      isCitationRelevantToEarthQuery(
+        offTopicLeish!,
+        "Indian Ocean Dipole East Africa drought rainfall teleconnection"
+      )
+    ).toBe(false);
+
+    const onTopic = sanitizeCitation({
+      title: "Arctic amplification accelerates sea ice loss feedbacks",
+      authors: "Climate, A.",
+      journal: "Nature Communications Earth & Environment",
+      year: 2023,
+      abstract_snippet:
+        "Satellite observations show Arctic warming and dipole circulation coupling across high latitudes.",
+    })!;
+    expect(
+      isCitationRelevantToEarthQuery(onTopic, "Arctic amplification warming sea ice loss feedback")
+    ).toBe(true);
+
+    // Stance guard: must never report "supports" with "0 intensification cue(s)"
+    const dipoleOnlyNoUpward = sanitizeCitation({
+      title: "Indian Ocean Dipole and Arctic sea ice variability",
+      authors: "Observer, B.",
+      journal: "Climate Dynamics",
+      year: 2023,
+      abstract_snippet:
+        "We analyze Arctic sea ice variability alongside coupled dipole teleconnections in high-latitude basins.",
+    })!;
+    const evaluated = evaluateCitationClaimStance(dipoleOnlyNoUpward, {
+      claimText: "Arctic sea ice dipole variability intensifies",
+      direction: "increasing",
+      region: "Arctic",
+      parameter: "sea ice",
+    });
+    expect(evaluated.stance_rationale ?? "").not.toMatch(/0 intensification cue\(s\)/i);
+    if (evaluated.claim_stance === "supports") {
+      expect(evaluated.stance_rationale ?? "").not.toMatch(/0 .*cue\(s\)/i);
+    }
+  });
+
+  it("tracks monotonic noisy upward trends in predictFromGraph without level-shrinkage bias", () => {
+    const store = getEtgStore();
+    const series = Array.from({ length: 24 }, (_, idx) => {
+      const yr = 2000 + idx;
+      const noise = ((idx % 3) - 1) * 0.04;
+      return {
+        date: `${yr}-01`,
+        t: yr,
+        value: Number((10 + idx * 0.5 + noise).toFixed(4)),
+      };
+    });
+
+    const node = store.createNode({
+      uuid: "signal-trending-co2-like",
+      label: "Signal",
+      properties: {
+        name: "Trending Radiative Signal",
+        description: "Synthetic monotonic upward climate forcing series",
+        dataset: "nasa_power",
+        parameter: "radiative_temp",
+        observed_at: "2023-01-01T00:00:00Z",
+        series,
+      },
+    });
+
+    const forecast = predictFromGraph(store, {
+      targetUuid: node.uuid,
+      horizonSteps: 1,
+    });
+    expect(forecast).not.toBeNull();
+    // Out-of-sample trend steps continue rising (end of series ~ 21.5); delta-anchored prior
+    // should prevent regressing back near historical mean (~15) and keep forecast MAE well below 0.6.
+    expect(forecast.selfOnly.mae).toBeLessThan(0.6);
+    expect(forecast.graphAware.mae).toBeLessThan(0.6);
+    expect(forecast.recommendedForecastValue).toBeGreaterThan(21.2);
   });
 });

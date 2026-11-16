@@ -1,4 +1,11 @@
+import dns from "node:dns";
 import { NextRequest, NextResponse } from "next/server";
+
+// Prefer IPv4 DNS resolution so Node fetch() does not stall on blackholed IPv6
+// routes (e.g., api.open-meteo.com) before falling back within the 1.2s budget.
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 import { normalizeEarthCoordinates } from "@/lib/earth/coordinates";
 import { validateDatasetForSurface } from "@/lib/earth/surfaceMask";
 import {

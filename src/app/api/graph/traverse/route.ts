@@ -17,6 +17,7 @@ function handleTraverseRequest(params: {
   minAbsR?: number;
   limit?: number;
   includeSuperseded?: boolean;
+  includeProvenanceHubs?: boolean;
 }) {
   const store = getEtgStore();
   const mode =
@@ -55,6 +56,7 @@ function handleTraverseRequest(params: {
     edgeTypes: params.edgeTypes,
     minWeight: params.minWeight,
     includeSuperseded: params.includeSuperseded,
+    includeProvenanceHubs: params.includeProvenanceHubs,
   });
   return { mode: "subgraph", ...traversal };
 }
@@ -78,6 +80,7 @@ export async function GET(req: NextRequest) {
       minAbsR: searchParams.has("minAbsR") ? Number(searchParams.get("minAbsR")) : undefined,
       limit: searchParams.has("limit") ? Number(searchParams.get("limit")) : undefined,
       includeSuperseded: searchParams.get("includeSuperseded") !== "false",
+      includeProvenanceHubs: searchParams.get("includeProvenanceHubs") === "true",
     });
     return NextResponse.json(result, { status: 200 });
   } catch (err) {
