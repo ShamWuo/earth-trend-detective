@@ -15,12 +15,14 @@ export interface TraversalFilterState {
   maxHops: number | null;
   direction: TraversalDirection;
   layoutMode: Layout2DMode;
+  showProvenanceHubs?: boolean;
 }
 
 export const DEFAULT_TRAVERSAL_FILTER: TraversalFilterState = {
   maxHops: null,
   direction: "both",
   layoutMode: "force",
+  showProvenanceHubs: false,
 };
 
 export interface RegionSpotlightState {

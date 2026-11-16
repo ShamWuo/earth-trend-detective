@@ -873,11 +873,12 @@ export function CompactSpotCard({
                     <button
                       type="button"
                       onClick={() => onOpenBriefing(selectedNode.uuid)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-elevated px-2.5 py-1.5 text-[11px] font-medium text-text-primary hover:border-accent-fg cursor-pointer"
+                      title="Open scientific working paper & references for this node"
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-transparent px-2 py-1.5 text-[11px] font-medium text-text-muted hover:border-border-strong hover:text-text-primary cursor-pointer"
                     >
-                      <BookOpenText className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                      <BookOpenText className="h-3 w-3 text-text-muted" aria-hidden="true" />
                       <span>
-                        Briefing
+                        Paper
                         {selectedNode.properties.dossier?.citations.length
                           ? ` (${selectedNode.properties.dossier.citations.length})`
                           : ""}

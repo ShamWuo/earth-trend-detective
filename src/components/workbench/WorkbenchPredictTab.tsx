@@ -100,6 +100,21 @@ export function WorkbenchPredictTab({
 
   const loadPrediction = useCallback(
     async (signal?: AbortSignal) => {
+      const seriesCount = Array.isArray(selectedNode.properties.series)
+        ? selectedNode.properties.series.length
+        : 0;
+      if (seriesCount < 8) {
+        setPrediction(null);
+        setPredictLoading(false);
+        setPredictError(
+          `Target time series has only ${seriesCount} points; at least 8 observations are required for GNN inference.`
+        );
+        if (!signal?.aborted) {
+          await loadLedger(signal);
+        }
+        return;
+      }
+
       setPredictLoading(true);
       setPredictError(null);
       try {
@@ -136,7 +151,7 @@ export function WorkbenchPredictTab({
         await loadLedger(signal);
       }
     },
-    [selectedNode.uuid, maxHops, horizonSteps, candidatePreviewUuid, loadLedger]
+    [selectedNode.uuid, selectedNode.properties.series, maxHops, horizonSteps, candidatePreviewUuid, loadLedger]
   );
 
   useEffect(() => {

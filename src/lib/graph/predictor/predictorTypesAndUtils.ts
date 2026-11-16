@@ -266,6 +266,21 @@ export function previousCoarsePeriodKey(
   return `${py}-${String(pm).padStart(2, "0")}`;
 }
 
+function fitAnchoredRidge(
+  xRows: number[][],
+  yTargets: number[],
+  lambda: number,
+  anchorPrior: 0 | 1
+): number[] {
+  if (anchorPrior === 1 && (xRows[0]?.length ?? 0) > 1) {
+    const deltaTargets = yTargets.map((y, i) => y - (xRows[i][1] ?? 0));
+    const weights = fitRidgeRegression(xRows, deltaTargets, lambda).slice();
+    weights[1] = (weights[1] ?? 0) + 1;
+    return weights;
+  }
+  return fitRidgeRegression(xRows, yTargets, lambda);
+}
+
 export function tuneAndFitRidgeWithVal(
   xRows: number[][],
   yTrainZ: number[],
@@ -273,35 +288,54 @@ export function tuneAndFitRidgeWithVal(
   fallbackLambda: number
 ): { weights: number[]; valRmse: number; innerWeights: number[] } {
   let chosenLambda = fallbackLambda;
+  let chosenAnchor: 0 | 1 = 0;
   let bestValRmse = Infinity;
   let bestInnerWeights: number[] = [];
 
-  if (trainCount >= 16) {
-    const innerValSize = Math.max(4, Math.floor(trainCount * 0.25));
+  if (trainCount >= 12) {
+    const innerValSize = Math.max(3, Math.floor(trainCount * 0.25));
     const innerTrainEnd = trainCount - innerValSize;
-    if (innerTrainEnd >= 8) {
+    if (innerTrainEnd >= 6) {
       let bestValErr = Infinity;
-      for (const candLambda of [0.5, 1.5, 4.0, 9.0, 18.0]) {
-        const w = fitRidgeRegression(
-          xRows.slice(0, innerTrainEnd),
-          yTrainZ.slice(0, innerTrainEnd),
-          candLambda
-        );
-        let sq = 0;
-        for (let i = innerTrainEnd; i < trainCount; i++) {
-          const err = dot(w, xRows[i]) - yTrainZ[i];
-          sq += err * err;
+      const innerX = xRows.slice(0, innerTrainEnd);
+      const innerY = yTrainZ.slice(0, innerTrainEnd);
+      for (const anchorPrior of [0, 1] as const) {
+        let anchorBestErr = Infinity;
+        let anchorBestLambda = fallbackLambda;
+        let anchorBestWeights: number[] = [];
+        for (const candLambda of [0.5, 1.5, 4.0, 9.0, 18.0]) {
+          const w = fitAnchoredRidge(innerX, innerY, candLambda, anchorPrior);
+          let sq = 0;
+          for (let i = innerTrainEnd; i < trainCount; i++) {
+            const err = dot(w, xRows[i]) - yTrainZ[i];
+            sq += err * err;
+          }
+          if (sq < anchorBestErr) {
+            anchorBestErr = sq;
+            anchorBestLambda = candLambda;
+            anchorBestWeights = w;
+          }
         }
-        if (sq < bestValErr) {
-          bestValErr = sq;
-          chosenLambda = candLambda;
-          bestInnerWeights = w;
+        // Require >= 1% chronological validation MSE reduction to adopt the Delta-Anchored prior
+        // so stationary oscillating indices keep Level-Ridge while trending series avoid shrinkage bias.
+        const improvesEnough =
+          anchorPrior === 0 ? anchorBestErr < bestValErr : anchorBestErr < bestValErr * 0.99;
+        if (improvesEnough) {
+          bestValErr = anchorBestErr;
+          chosenLambda = anchorBestLambda;
+          chosenAnchor = anchorPrior;
+          bestInnerWeights = anchorBestWeights;
         }
       }
       bestValRmse = Math.sqrt(bestValErr / innerValSize);
     }
   }
-  const finalWeights = fitRidgeRegression(xRows.slice(0, trainCount), yTrainZ, chosenLambda);
+  const finalWeights = fitAnchoredRidge(
+    xRows.slice(0, trainCount),
+    yTrainZ,
+    chosenLambda,
+    chosenAnchor
+  );
   if (bestInnerWeights.length === 0) {
     bestInnerWeights = finalWeights;
   }

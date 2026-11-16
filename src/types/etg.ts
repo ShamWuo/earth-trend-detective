@@ -589,11 +589,14 @@ export interface SubgraphTraversalOptions {
   edgeTypes?: ETGRelationshipType[];
   minWeight?: number;
   includeSuperseded?: boolean;
+  includeProvenanceHubs?: boolean;
 }
 
 export interface CausalPathSummary {
   nodeUuids: string[];
   edgeUuids: string[];
+  edgeTypes?: ETGRelationshipType[];
+  meanAbsR?: number;
   cumulativeLagSteps: number;
   score: number;
   summary: string;

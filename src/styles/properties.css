@@ -1,4 +1,4 @@
-/* ─── Root Color Scheme & View Transitions ─── */
+/* Root Color Scheme & View Transitions */
 :root {
   color-scheme: light dark;
 
@@ -14,7 +14,7 @@ html {
   overscroll-behavior-y: none;
 }
 
-/* ─── View Transitions for Dual-View Earth <-> Graph Switches ─── */
+/* View Transitions for Dual-View Earth <-> Graph Switches */
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 240ms;

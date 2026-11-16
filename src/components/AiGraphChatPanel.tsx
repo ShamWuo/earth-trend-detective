@@ -225,7 +225,7 @@ export function AiGraphChatPanel({
 
         <div className="flex shrink-0 items-center gap-1.5">
           <span
-            title="Scientific Integrity Guard active — destructive or uncorroborated edits are blocked automatically"
+            title="Scientific Integrity Guard is active. Destructive or uncorroborated edits are blocked automatically."
             aria-label="Scientific Integrity Guard active"
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-emerald-400"
           >

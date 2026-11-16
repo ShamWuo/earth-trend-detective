@@ -136,6 +136,7 @@ export function useWorkspaceGraphActions({
       maxHops: String(traversalFilter.maxHops ?? 3),
       direction: traversalFilter.direction,
       includeSuperseded: String(showSuperseded),
+      includeProvenanceHubs: String(Boolean(traversalFilter.showProvenanceHubs)),
     });
     if (allowedEdgeTypes.length < ALL_ETG_RELATIONSHIP_TYPES.length) {
       params.set("edgeTypes", allowedEdgeTypes.join(","));
@@ -168,6 +169,7 @@ export function useWorkspaceGraphActions({
     traversalFilter.maxHops,
     traversalFilter.direction,
     traversalFilter.layoutMode,
+    traversalFilter.showProvenanceHubs,
     showSuperseded,
     onlyOpposite,
     enabledRelationCategories,

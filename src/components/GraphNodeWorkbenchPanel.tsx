@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useId, useMemo, useRef, useState } from "react";
-import { GitBranchPlus, Globe2, Sparkles, X } from "lucide-react";
+import { BookOpen, GitBranchPlus, Globe2, Sparkles, X } from "lucide-react";
 import type { EtgGraphSnapshot } from "@/lib/graph/etgStore";
 import { ETG_LABEL_PALETTE, resolveEtgNodeColor } from "@/lib/graph/graphVisuals";
 import { useIsLightTheme } from "@/components/graph/graphViewShared";
@@ -41,6 +41,7 @@ interface GraphNodeWorkbenchPanelProps {
   onMaterializeSolarGraph: () => Promise<void>;
   onLocateOnGlobe?: (node: ETGNode) => void;
   onOpenBriefing?: (nodeUuid: string) => void;
+  onHighlightCascadeEdges?: (edgeUuids: string[]) => void;
   onSnapshotChange: (snapshot: EtgGraphSnapshot, toast?: string) => void;
   onClose: () => void;
 }
@@ -67,6 +68,7 @@ export function GraphNodeWorkbenchPanel({
   onMaterializeSolarGraph,
   onLocateOnGlobe,
   onOpenBriefing,
+  onHighlightCascadeEdges,
   onSnapshotChange,
   onClose,
 }: GraphNodeWorkbenchPanelProps) {
@@ -203,7 +205,7 @@ export function GraphNodeWorkbenchPanel({
     }
   };
 
-  /* ── Mode A: Quick Phenomenon Node Creator ─────────────────────────────── */
+  // Mode A: Quick Phenomenon Node Creator
   if (quickAddOpen) {
     return (
       <WorkbenchQuickAddNodeForm
@@ -216,7 +218,7 @@ export function GraphNodeWorkbenchPanel({
     );
   }
 
-  /* ── Mode B: Edge Connection Composer / Editor ─────────────────────────── */
+  // Mode B: Edge Connection Composer / Editor
   if (pendingConnectPair || selectedEdge) {
     return (
       <WorkbenchEdgeComposerForm
@@ -228,6 +230,7 @@ export function GraphNodeWorkbenchPanel({
         busy={busy}
         onSetBusy={setBusy}
         onClearPendingConnect={onClearPendingConnect}
+        onSelectNode={onSelectNode}
         onSelectEdge={onSelectEdge}
         onDeleteEdge={handleDeleteEdge}
         onSnapshotChange={onSnapshotChange}
@@ -238,7 +241,7 @@ export function GraphNodeWorkbenchPanel({
 
   if (!selectedNode) return null;
 
-  /* ── Mode C: Selected Node 3-Tab Workbench ─────────────────────────────── */
+  // Mode C: Selected Node 3-Tab Workbench
   const nodeColor = resolveEtgNodeColor(selectedNode);
   const labelStyle = ETG_LABEL_PALETTE[selectedNode.label];
   const isHuman = selectedNode.properties.authored_by === "human";
@@ -339,6 +342,17 @@ export function GraphNodeWorkbenchPanel({
                 <span>Earth</span>
               </button>
             )}
+          {onOpenBriefing && (
+            <button
+              type="button"
+              onClick={() => onOpenBriefing(selectedNode.uuid)}
+              title="Open Scientific Research Briefing & Literature Citations"
+              className="etg-hud-btn inline-flex h-6 items-center gap-1 rounded-sm border border-emerald-400 bg-emerald-950 px-2 text-[10.5px] font-semibold text-emerald-300 hover:border-emerald-300 cursor-pointer"
+            >
+              <BookOpen className="h-3 w-3" aria-hidden="true" />
+              <span>Briefing</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -392,6 +406,7 @@ export function GraphNodeWorkbenchPanel({
             onDeleteEdge={handleDeleteEdge}
             onStartQuickConnect={onStartQuickConnect}
             onAcceptCandidateLink={onAcceptCandidateLink}
+            onHighlightCascadeEdges={onHighlightCascadeEdges}
             onSnapshotChange={onSnapshotChange}
             onSetLocalError={setLocalError}
             onSetLocalStatus={setLocalStatus}

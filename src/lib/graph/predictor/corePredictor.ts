@@ -213,7 +213,7 @@ export function predictFromGraph(
   const yAllPersist = originIndices.map((t) => targetEntries[t].value);
 
   const lambdaSelf = Math.max(1.5, localXAll[0].length * 0.65);
-  const selfWeights = fitRidgeRegression(localXAll.slice(0, trainCount), yTrainZ, lambdaSelf);
+  const selfWeights = tuneAndFitRidgeWithVal(localXAll, yTrainZ, trainCount, lambdaSelf).weights;
 
   const hasGraphFeatures =
     activeNeighbors.length > 0 || hasCausalImpulseFeature || activeCovarStats.length > 0;

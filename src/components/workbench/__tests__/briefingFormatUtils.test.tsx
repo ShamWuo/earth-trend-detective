@@ -93,4 +93,97 @@ describe("renderFormattedBriefing", () => {
     expect(html).not.toContain("[signal-noaa-sst-34s]");
     expect(html).toContain("[p &lt; 0.01]");
   });
+
+  it("renders inline blue Wikipedia links and unresolved dotted spans when variant is wikilink", () => {
+    const node = makeNode(
+      "node-arctic-amp",
+      "Arctic Amplification Polar Divergence",
+      "Arctic Circle"
+    );
+    const nodeById = new Map<string, ETGNode>([[node.uuid, node]]);
+    const onSelectNode = vi.fn();
+
+    const interactiveHtml = renderToStaticMarkup(
+      <p>
+        {renderFormattedBriefing(
+          "Observed in [node-arctic-amp] and [signal-nsidc-sea-ice].",
+          nodeById,
+          onSelectNode,
+          { variant: "wikilink" }
+        )}
+      </p>
+    );
+    expect(interactiveHtml).toContain('class="etg-wiki-link"');
+    expect(interactiveHtml).toContain('class="etg-wiki-link-unresolved"');
+    expect(interactiveHtml).toContain("NSIDC Sea Ice");
+    expect(interactiveHtml).not.toContain("rounded-xs border");
+
+    const staticHtml = renderToStaticMarkup(
+      <p>
+        {renderFormattedBriefing(
+          "Tracked in [node-arctic-amp].",
+          nodeById,
+          undefined,
+          { variant: "wikilink" }
+        )}
+      </p>
+    );
+    expect(staticHtml).not.toContain("<button");
+    expect(staticHtml).toContain("var(--wiki-link)");
+  });
+
+  it("strips stray backticks around node citations, renders inline KaTeX math, and preserves currency amounts", () => {
+    const node = makeNode("node-arctic-amp", "Arctic Amplification");
+    const nodeById = new Map<string, ETGNode>([[node.uuid, node]]);
+
+    const html = renderToStaticMarkup(
+      <div>
+        {renderFormattedBriefing(
+          "Link `[node-arctic-amp]` shows $r = -0.82$ at $\\Delta t = 0$, saving $418/yr vs $205/yr.",
+          nodeById,
+          () => {}
+        )}
+      </div>
+    );
+
+    expect(html).toContain("<button");
+    expect(html).not.toContain("`<button");
+    expect(html).not.toContain("</button>`");
+    expect(html).toContain('class="katex"');
+    expect(html).toContain("$418/yr vs $205/yr");
+  });
+
+  it("renders understated paper manuscript citations when variant is paper", () => {
+    const node = makeNode("node-arctic-amp", "Arctic Polar Amplification", "Arctic Basin");
+    const nodeById = new Map<string, ETGNode>([[node.uuid, node]]);
+
+    const interactiveHtml = renderToStaticMarkup(
+      <p>
+        {renderFormattedBriefing(
+          "Consistent with [node-arctic-amp] and [signal-nsidc-extent].",
+          nodeById,
+          () => {},
+          { variant: "paper" }
+        )}
+      </p>
+    );
+    expect(interactiveHtml).toContain('class="etg-paper-cite"');
+    expect(interactiveHtml).toContain('class="etg-paper-cite-unresolved"');
+    expect(interactiveHtml).toContain("Arctic Polar Amplification");
+    expect(interactiveHtml).toContain("NSIDC Extent");
+    expect(interactiveHtml).not.toContain("etg-wiki-link");
+
+    const staticHtml = renderToStaticMarkup(
+      <p>
+        {renderFormattedBriefing(
+          "Tracked in [node-arctic-amp].",
+          nodeById,
+          undefined,
+          { variant: "paper" }
+        )}
+      </p>
+    );
+    expect(staticHtml).not.toContain("<button");
+    expect(staticHtml).toContain("etg-paper-cite");
+  });
 });

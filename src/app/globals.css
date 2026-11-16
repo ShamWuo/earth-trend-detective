@@ -3,7 +3,7 @@
 
 @custom-variant dark (&:where(html:not(.light) *, html:not(.light)));
 
-/* ─── Layered Design System & Subsystems ─────────────────── */
+/* Layered Design System & Subsystems */
 @import "../styles/properties.css";
 @import "../styles/tokens.css";
 @import "../styles/theme.css";

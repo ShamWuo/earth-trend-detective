@@ -15,6 +15,7 @@ export interface WorkbenchEdgeComposerFormProps {
   busy: boolean;
   onSetBusy: (busy: boolean) => void;
   onClearPendingConnect: () => void;
+  onSelectNode?: (node: ETGNode) => void;
   onSelectEdge: (edge: ETGEdge) => void;
   onDeleteEdge: (edgeUuid: string) => Promise<void>;
   onSnapshotChange: (snapshot: EtgGraphSnapshot, toast?: string) => void;
@@ -30,6 +31,7 @@ export function WorkbenchEdgeComposerForm({
   busy,
   onSetBusy,
   onClearPendingConnect,
+  onSelectNode,
   onSelectEdge,
   onDeleteEdge,
   onSnapshotChange,
@@ -214,10 +216,36 @@ export function WorkbenchEdgeComposerForm({
             </div>
           </div>
           {srcNode && tgtNode && (
-            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
-              <span className="truncate font-medium text-text-primary">{srcNode.properties.name}</span>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-text-muted">
+              {onSelectNode ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(srcNode)}
+                  title="Inspect upstream source node"
+                  className="max-w-[10.5rem] truncate font-medium text-text-primary hover:text-accent-fg hover:underline cursor-pointer"
+                >
+                  {srcNode.properties.name}
+                </button>
+              ) : (
+                <span className="truncate font-medium text-text-primary">
+                  {srcNode.properties.name}
+                </span>
+              )}
               <ArrowRight className="h-3 w-3 shrink-0 text-amber-400" />
-              <span className="truncate font-medium text-text-primary">{tgtNode.properties.name}</span>
+              {onSelectNode ? (
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(tgtNode)}
+                  title="Inspect downstream target node"
+                  className="max-w-[10.5rem] truncate font-medium text-text-primary hover:text-accent-fg hover:underline cursor-pointer"
+                >
+                  {tgtNode.properties.name}
+                </button>
+              ) : (
+                <span className="truncate font-medium text-text-primary">
+                  {tgtNode.properties.name}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -328,16 +356,93 @@ export function WorkbenchEdgeComposerForm({
           />
         </div>
 
-        {selectedEdge?.properties.correlation_r !== undefined && (
-          <div className="flex items-center justify-between rounded-sm border border-border bg-surface-inset px-2.5 py-1.5 font-mono ws-numeric text-[11px] text-text-muted">
-            <span>Pearson r: {selectedEdge.properties.correlation_r.toFixed(3)}</span>
-            {selectedEdge.properties.predictive_lift_pct !== undefined && (
-              <span className="text-emerald-300">
-                Lift: +{selectedEdge.properties.predictive_lift_pct.toFixed(1)}%
-              </span>
-            )}
-          </div>
-        )}
+        {selectedEdge &&
+          (selectedEdge.properties.correlation_r !== undefined ||
+            selectedEdge.properties.detrended_r !== undefined ||
+            selectedEdge.properties.partial_r !== undefined ||
+            selectedEdge.properties.multivariate_partial_r !== undefined ||
+            selectedEdge.properties.p_value !== undefined ||
+            selectedEdge.properties.fdr_q_value !== undefined ||
+            selectedEdge.properties.predictive_lift_pct !== undefined ||
+            selectedEdge.properties.amplification_ratio !== undefined ||
+            selectedEdge.properties.mediated_by !== undefined) &&
+          (() => {
+            const ep = selectedEdge.properties;
+            const lift = ep.predictive_lift_pct;
+            const medNode = ep.mediated_by ? nodeById.get(ep.mediated_by) : undefined;
+            const stats: Array<{ label: string; value: string; cls?: string }> = [];
+            if (typeof ep.correlation_r === "number") {
+              stats.push({ label: "Pearson r", value: ep.correlation_r.toFixed(3) });
+            }
+            if (typeof ep.detrended_r === "number") {
+              stats.push({ label: "Detrended r", value: ep.detrended_r.toFixed(3) });
+            }
+            if (typeof ep.partial_r === "number") {
+              stats.push({ label: "Partial r", value: ep.partial_r.toFixed(3) });
+            }
+            if (typeof ep.multivariate_partial_r === "number") {
+              stats.push({ label: "MV Partial r", value: ep.multivariate_partial_r.toFixed(3) });
+            }
+            if (typeof ep.p_value === "number") {
+              stats.push({
+                label: "p-value",
+                value: ep.p_value < 0.0001 ? "<0.0001" : ep.p_value.toFixed(4),
+              });
+            }
+            if (typeof ep.fdr_q_value === "number") {
+              stats.push({
+                label: "FDR q",
+                value: ep.fdr_q_value < 0.0001 ? "<0.0001" : ep.fdr_q_value.toFixed(4),
+              });
+            }
+            if (typeof ep.optimal_lag_steps === "number") {
+              stats.push({
+                label: "Optimal lag",
+                value: `${ep.optimal_lag_steps} ${ep.lag_unit ?? "steps"}`,
+              });
+            }
+            if (typeof ep.amplification_ratio === "number") {
+              stats.push({ label: "Amp ratio", value: `${ep.amplification_ratio.toFixed(2)}×` });
+            }
+            if (typeof lift === "number" && Number.isFinite(lift)) {
+              stats.push({
+                label: "Out-of-sample lift",
+                value: `${lift >= 0 ? "+" : ""}${lift.toFixed(1)}%`,
+                cls: lift > 0 ? "text-emerald-300 font-semibold" : "text-rose-300 font-semibold",
+              });
+            }
+            return (
+              <div className="space-y-1.5 rounded-md border border-border bg-surface-inset p-2 text-[10.5px]">
+                <div className="ws-eyebrow text-sky-400">
+                  Empirical Coupling & Confounder Audit
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono ws-numeric">
+                  {stats.map((s) => (
+                    <div key={s.label} className="flex items-center justify-between gap-1">
+                      <span className="text-text-subtle">{s.label}</span>
+                      <span className={s.cls ?? "font-medium text-text-primary"}>{s.value}</span>
+                    </div>
+                  ))}
+                </div>
+                {ep.mediated_by && (
+                  <div className="flex flex-wrap items-center gap-1 border-t border-border/60 pt-1 text-[10px] text-amber-300">
+                    <span className="font-semibold">Mediated / Confounded by:</span>
+                    {medNode && onSelectNode ? (
+                      <button
+                        type="button"
+                        onClick={() => onSelectNode(medNode)}
+                        className="underline hover:text-amber-200 cursor-pointer text-left"
+                      >
+                        {medNode.properties.name}
+                      </button>
+                    ) : (
+                      <span>{medNode?.properties.name ?? ep.mediated_by}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
         {localError && (
           <div

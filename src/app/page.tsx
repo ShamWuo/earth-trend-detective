@@ -12,6 +12,17 @@ export default async function HomePage({
   const rawDemo = Array.isArray(sp?.demo) ? sp.demo[0] : sp?.demo;
   const initialDemoMode =
     rawDemo === "spaceapps" || rawDemo === "veritas" ? rawDemo : null;
+  const rawBriefing = Array.isArray(sp?.briefing) ? sp.briefing[0] : sp?.briefing;
+  const initialBriefingUuid =
+    typeof rawBriefing === "string" && rawBriefing.trim().length > 0
+      ? rawBriefing.trim()
+      : null;
   const snapshot = getEtgStore().getSnapshot();
-  return <DetectiveWorkspace initialSnapshot={snapshot} initialDemoMode={initialDemoMode} />;
+  return (
+    <DetectiveWorkspace
+      initialSnapshot={snapshot}
+      initialDemoMode={initialDemoMode}
+      initialBriefingUuid={initialBriefingUuid}
+    />
+  );
 }

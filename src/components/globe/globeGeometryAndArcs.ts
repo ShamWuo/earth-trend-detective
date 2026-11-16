@@ -690,7 +690,7 @@ export interface GlobePersistedPrefs {
   showPlaceLabels?: boolean;
 }
 
-export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v2";
+export const GLOBE_PREFS_STORAGE_KEY = "etg:globe-prefs:v3";
 
 export interface ProjectedArcLabel {
   uuid: string;

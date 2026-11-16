@@ -203,7 +203,7 @@ export function EarthGlobe3D({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState(600);
   const [autoRotate, setAutoRotate] = useState(true);
-  const [sunPreset, setSunPreset] = useState<SunPreset>(initialSunPreset ?? "live");
+  const [sunPreset, setSunPreset] = useState<SunPreset>(initialSunPreset ?? "daylight");
   const [liveUtcTime, setLiveUtcTime] = useState<string>("");
   const [showClouds, setShowClouds] = useState(false);
   const [arcMode, setArcMode] = useState<GlobeArcMode>("dipoles");
@@ -860,7 +860,6 @@ export function EarthGlobe3D({
 
     const raycaster = new THREE.Raycaster();
     raycaster.params.Line = { threshold: 2.2 };
-    const wheelHitVec = new THREE.Vector3();
     const dblHitVec = new THREE.Vector3();
     let isDragging = false;
     let downX = 0;
@@ -967,26 +966,6 @@ export function EarthGlobe3D({
         Math.min(330, alt * zoomFactor)
       );
       const nextRadius = EARTH_RADIUS + nextAlt;
-
-      if (clampedDelta < 0 && nextRadius < spherical.radius) {
-        raycaster.setFromCamera(getNormalizedCoords(e.clientX, e.clientY), camera);
-        if (intersectTrueEarthSphere(raycaster.ray, wheelHitVec)) {
-          const hitSph = new THREE.Spherical().setFromVector3(
-            wheelHitVec.clone().normalize()
-          );
-          let dTheta = hitSph.theta - spherical.theta;
-          while (dTheta > Math.PI) dTheta -= Math.PI * 2;
-          while (dTheta < -Math.PI) dTheta += Math.PI * 2;
-          const steerScale = alt > 80 ? 0.55 : 0.95;
-          const steerFrac =
-            Math.min(0.65, Math.max(0.06, 1 - nextAlt / alt)) * steerScale;
-          spherical.theta += dTheta * steerFrac;
-          spherical.phi = Math.max(
-            0.08,
-            Math.min(Math.PI - 0.08, spherical.phi + (hitSph.phi - spherical.phi) * steerFrac)
-          );
-        }
-      }
 
       spherical.radius = nextRadius;
       setAutoRotate(false);

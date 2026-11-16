@@ -59,14 +59,62 @@ function normalizeHttpsUrl(raw: unknown): string | undefined {
   return trimmed;
 }
 
+/** Decodes common HTML/XML character references across up to two encoding passes. */
+export function decodeHtmlEntities(input: string): string {
+  if (!input || !input.includes("&")) return input;
+  const decodeOnce = (text: string): string =>
+    text
+      .replace(/&#(\d+);/g, (m, dec) => {
+        const cp = Number.parseInt(dec, 10);
+        return Number.isFinite(cp) && cp >= 32 && cp <= 0x10ffff
+          ? String.fromCodePoint(cp)
+          : m;
+      })
+      .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) => {
+        const cp = Number.parseInt(hex, 16);
+        return Number.isFinite(cp) && cp >= 32 && cp <= 0x10ffff
+          ? String.fromCodePoint(cp)
+          : m;
+      })
+      .replace(/&(lt|gt|quot|apos|nbsp|ndash|mdash|minus|deg|#39|amp);/gi, (m, name) => {
+        switch (String(name).toLowerCase()) {
+          case "lt":
+            return "<";
+          case "gt":
+            return ">";
+          case "quot":
+            return "\"";
+          case "apos":
+          case "#39":
+            return "'";
+          case "nbsp":
+            return " ";
+          case "ndash":
+            return "–";
+          case "mdash":
+            return "—";
+          case "minus":
+            return "−";
+          case "deg":
+            return "°";
+          case "amp":
+            return "&";
+          default:
+            return m;
+        }
+      });
+  const pass1 = decodeOnce(input);
+  return pass1.includes("&") ? decodeOnce(pass1) : pass1;
+}
+
 export function sanitizeCitation(raw: unknown): ETGScientificCitation | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const c = raw as Record<string, unknown>;
-  const title = typeof c.title === "string" ? c.title.trim() : "";
-  const authors = typeof c.authors === "string" ? c.authors.trim() : "";
+  const title = typeof c.title === "string" ? decodeHtmlEntities(c.title).trim() : "";
+  const authors = typeof c.authors === "string" ? decodeHtmlEntities(c.authors).trim() : "";
   const journal =
     typeof c.journal === "string" && c.journal.trim()
-      ? c.journal.trim().slice(0, 200)
+      ? decodeHtmlEntities(c.journal).trim().slice(0, 200)
       : undefined;
   const year = typeof c.year === "number" ? Math.round(c.year) : Number(c.year);
   if (!title || title.length > 400 || !authors || authors.length > 400) return undefined;
@@ -100,7 +148,10 @@ export function sanitizeCitation(raw: unknown): ETGScientificCitation | undefine
       : undefined;
   const rawAbstract =
     typeof c.abstract_snippet === "string"
-      ? c.abstract_snippet.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200)
+      ? decodeHtmlEntities(c.abstract_snippet.replace(/<[^>]+>/g, " "))
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 1200)
       : "";
   const abstractSnippet =
     rawAbstract && !dossierContainsUnsafeContent(rawAbstract) ? rawAbstract : undefined;
@@ -112,7 +163,7 @@ export function sanitizeCitation(raw: unknown): ETGScientificCitation | undefine
       : undefined;
   const rawStanceRationale =
     typeof c.stance_rationale === "string"
-      ? c.stance_rationale.replace(/\s+/g, " ").trim().slice(0, 320)
+      ? decodeHtmlEntities(c.stance_rationale).replace(/\s+/g, " ").trim().slice(0, 320)
       : "";
   const stanceRationale =
     rawStanceRationale && !dossierContainsUnsafeContent(rawStanceRationale)
@@ -144,12 +195,15 @@ export function sanitizeResearchDossier(raw: unknown): ETGResearchDossier | unde
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
 
-  const abstract = typeof obj.abstract === "string" ? obj.abstract.trim() : "";
+  const abstract =
+    typeof obj.abstract === "string" ? decodeHtmlEntities(obj.abstract).trim() : "";
   const physicalMechanism =
-    typeof obj.physical_mechanism === "string" ? obj.physical_mechanism.trim() : "";
+    typeof obj.physical_mechanism === "string"
+      ? decodeHtmlEntities(obj.physical_mechanism).trim()
+      : "";
   const markdownBody =
     typeof obj.markdown_body === "string" && obj.markdown_body.trim()
-      ? obj.markdown_body.trim().slice(0, MAX_DOSSIER_MARKDOWN_LEN)
+      ? decodeHtmlEntities(obj.markdown_body).trim().slice(0, MAX_DOSSIER_MARKDOWN_LEN)
       : undefined;
 
   if (
@@ -168,7 +222,7 @@ export function sanitizeResearchDossier(raw: unknown): ETGResearchDossier | unde
   const empiricalFindings: string[] = [];
   for (const item of empiricalRaw.slice(0, 12)) {
     if (typeof item !== "string") continue;
-    const cleaned = item.trim().slice(0, MAX_DOSSIER_BULLET_LEN);
+    const cleaned = decodeHtmlEntities(item).trim().slice(0, MAX_DOSSIER_BULLET_LEN);
     if (!cleaned || dossierContainsUnsafeContent(cleaned)) continue;
     empiricalFindings.push(cleaned);
   }
@@ -177,7 +231,7 @@ export function sanitizeResearchDossier(raw: unknown): ETGResearchDossier | unde
   const impacts: string[] = [];
   for (const item of impactsRaw.slice(0, 10)) {
     if (typeof item !== "string") continue;
-    const cleaned = item.trim().slice(0, MAX_DOSSIER_BULLET_LEN);
+    const cleaned = decodeHtmlEntities(item).trim().slice(0, MAX_DOSSIER_BULLET_LEN);
     if (!cleaned || dossierContainsUnsafeContent(cleaned)) continue;
     impacts.push(cleaned);
   }

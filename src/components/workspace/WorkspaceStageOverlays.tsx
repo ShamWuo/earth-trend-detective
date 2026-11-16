@@ -70,8 +70,8 @@ export function WorkspaceStageBanner({
           <GitCompare className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
           <span className="truncate">
             {compareStep === 2
-              ? "Compare (Step 2/2) — click a second point on Earth"
-              : "Compare (Step 1/2) — click your first location on Earth"}
+              ? "Compare (Step 2/2): click a second point on Earth"
+              : "Compare (Step 1/2): click your first location on Earth"}
           </span>
           <button
             type="button"
