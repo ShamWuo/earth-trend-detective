@@ -145,7 +145,7 @@ export function IngestionModal({
       const res = await fetch("/api/earth/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxEonetSites: 7 }),
+        body: JSON.stringify({ compact: true, clearExisting: true }),
       });
       const data = await res.json();
       if (res.ok) {

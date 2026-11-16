@@ -502,6 +502,41 @@ export function GraphCanvas2D({
   }> = [];
 
   const placedDotLabelUuids2D = new Set<string>();
+  if (detailTier === "dots") {
+    const dotCandidates: ScreenLabelCandidate[] = [];
+    for (const node of nodes) {
+      const p = positions.get(node.uuid);
+      if (!p) continue;
+      const sx = viewportSize.width / 2 + camera.panX + p.x * camera.zoom;
+      const sy = viewportSize.height / 2 + camera.panY + p.y * camera.zoom;
+      if (sx < 40 || sx > viewportSize.width - 40 || sy < 40 || sy > viewportSize.height - 40) {
+        continue;
+      }
+      const deg = neighborMap.get(node.uuid)?.size ?? 0;
+      const clean = humanizeNodeText(node.properties.name);
+      const shortTitle = clean.length > 44 ? `${clean.slice(0, 42)}…` : clean;
+      let priority = deg * 16;
+      if (node.label === "Insight") priority += 300;
+      if (dipoleNodeUuids2D.has(node.uuid)) priority += 90;
+      if (node.uuid === selectedNodeUuid) priority += 1000;
+      if (node.uuid === hoveredNodeUuid) priority += 800;
+      if (matchingUuids.has(node.uuid)) priority += 450;
+      dotCandidates.push({
+        uuid: node.uuid,
+        title: shortTitle,
+        label: node.label,
+        color: resolveEtgNodeColor(node),
+        x: sx,
+        y: sy,
+        priority,
+        boxHeightPx: 26,
+        maxWidthPx: 250,
+      });
+    }
+    for (const placed of selectNonOverlappingLabels(dotCandidates, 14, 14, 10)) {
+      placedDotLabelUuids2D.add(placed.uuid);
+    }
+  }
 
   const nodeAvoidBoxes2D = nodes
     .map((node) => {
@@ -607,7 +642,11 @@ export function GraphCanvas2D({
         : "";
     const pillLabel = `${relationLabel}${lagSuffix}${corrSuffix}`;
     const showPillCandidate =
-      isEdgeHovered || isEdgeSelected || isCascadeEdge || isConnectedToFocus;
+      isEdgeHovered ||
+      isEdgeSelected ||
+      isCascadeEdge ||
+      isConnectedToFocus ||
+      (nodes.length <= 28 && !activeFocusUuid && (isOpposite || isSupersedes));
     const pillPriority = isEdgeSelected
       ? 1000
       : isEdgeHovered

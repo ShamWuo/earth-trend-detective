@@ -41,7 +41,13 @@ export function WorkspaceStageBanner({
 
   return (
     <div
-      className={`pointer-events-none absolute z-30 flex justify-center max-sm:inset-x-2.5 max-sm:top-14 ${
+      className={`pointer-events-none absolute z-30 flex justify-center max-sm:inset-x-2.5 ${
+        viewMode === "globe"
+          ? inspectorOpen
+            ? "max-sm:top-[8.75rem]"
+            : "max-sm:bottom-16"
+          : "max-sm:top-14"
+      } ${
         !statusMessage && compareMode && inspectorOpen ? "max-lg:hidden" : ""
       } ${
         viewMode === "globe"
@@ -103,6 +109,16 @@ export function WorkspaceMissionCard({
   onRunCaseStudy: (preset: GuidedDipoleCase) => void;
   onDismiss: () => void;
 }) {
+  React.useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onDismiss();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onDismiss]);
+
   return (
     <aside
       aria-label="Observatory quick guide and color key"

@@ -504,9 +504,12 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
     else clusters.set(id, [node]);
   }
 
+  const isCompactGraph = nodes.length <= 36;
   const clusterAnchors = new Map<string, Point3D>();
   const clusterKeys = Array.from(clusters.keys()).sort();
-  const spread = Math.max(150, Math.sqrt(Math.max(1, clusterKeys.length)) * 96);
+  const spread = isCompactGraph
+    ? Math.max(96, Math.sqrt(Math.max(1, clusterKeys.length)) * 58)
+    : Math.max(150, Math.sqrt(Math.max(1, clusterKeys.length)) * 96);
   const geoMeans3D = new Map<string, { lat: number; lng: number } | null>();
   let hasGeoClusters3D = false;
   for (const key of clusterKeys) {
@@ -554,7 +557,9 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
         const bKey = clusterKeys[j];
         const b = clusterAnchors.get(bKey)!;
         const bMembers = clusters.get(bKey)?.length ?? 1;
-        const minDist = 115 + (Math.sqrt(aMembers) + Math.sqrt(bMembers)) * 22;
+        const minDist = isCompactGraph
+          ? 76 + (Math.sqrt(aMembers) + Math.sqrt(bMembers)) * 14
+          : 115 + (Math.sqrt(aMembers) + Math.sqrt(bMembers)) * 22;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const dz = b.z - a.z;
@@ -576,7 +581,9 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
     const regId = nodeRegionId.get(node.uuid)!;
     const anchor = clusterAnchors.get(regId) ?? { x: 0, y: 0, z: 0 };
     const memberCount = clusters.get(regId)?.length ?? 1;
-    const jitterScale = 22 + Math.sqrt(memberCount) * 10 + hash01(node.uuid, 7) * 14;
+    const jitterScale = isCompactGraph
+      ? 15 + Math.sqrt(memberCount) * 7 + hash01(node.uuid, 7) * 9
+      : 22 + Math.sqrt(memberCount) * 10 + hash01(node.uuid, 7) * 14;
     const jx = (hash01(node.uuid, 13) - 0.5) * 2 * jitterScale;
     const jy = (hash01(node.uuid, 19) - 0.5) * 2 * jitterScale * 0.78;
     const jz = (hash01(node.uuid, 29) - 0.5) * 2 * jitterScale;
@@ -590,7 +597,7 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
 
   // Force relaxation: tight intra-region topology + light cross-region bridges + anchor tether
   const iterations = 52;
-  const repulseStrength = 2600;
+  const repulseStrength = isCompactGraph ? 1450 : 2600;
 
   for (let iter = 0; iter < iterations; iter++) {
     const forces = new Map<string, Point3D>();
@@ -638,8 +645,26 @@ export function computeLayout3D(nodes: ETGNode[], edges: ETGEdge[]): Map<string,
       if (!pa || !pb) continue;
       const sameRegion = nodeRegionId.get(e.source_uuid) === nodeRegionId.get(e.target_uuid);
       const isAdminSpoke = e.type === "monitors" || e.type === "verified_by";
-      const idealLen = isAdminSpoke ? 165 : sameRegion ? 46 : 155;
-      const springStrength = isAdminSpoke ? 0.008 : sameRegion ? 0.048 : 0.005;
+      const idealLen = isAdminSpoke
+        ? isCompactGraph
+          ? 110
+          : 165
+        : sameRegion
+          ? isCompactGraph
+            ? 34
+            : 46
+          : isCompactGraph
+            ? 96
+            : 155;
+      const springStrength = isAdminSpoke
+        ? 0.008
+        : sameRegion
+          ? isCompactGraph
+            ? 0.062
+            : 0.048
+          : isCompactGraph
+            ? 0.018
+            : 0.005;
 
       const fa = forces.get(e.source_uuid)!;
       const fb = forces.get(e.target_uuid)!;
@@ -770,9 +795,12 @@ export function computeLayout2D(
       else regionBuckets.set(id, [node]);
     }
 
+    const isCompactGraph2D = nodes.length <= 32;
     const regionKeys = Array.from(regionBuckets.keys()).sort();
     const regionAnchors = new Map<string, Point2D>();
-    const spread2D = Math.max(460, Math.sqrt(Math.max(1, regionKeys.length)) * 380);
+    const spread2D = isCompactGraph2D
+      ? Math.max(310, Math.sqrt(Math.max(1, regionKeys.length)) * 235)
+      : Math.max(460, Math.sqrt(Math.max(1, regionKeys.length)) * 380);
     const geoMeans2D = new Map<string, { lat: number; lng: number } | null>();
     let hasGeoClusters2D = false;
     for (const key of regionKeys) {
@@ -808,12 +836,16 @@ export function computeLayout2D(
       for (let i = 0; i < regionKeys.length; i++) {
         const aKey = regionKeys[i];
         const a = regionAnchors.get(aKey)!;
-        const radA = 185 + Math.sqrt(regionBuckets.get(aKey)?.length ?? 1) * 145;
+        const radA =
+          (isCompactGraph2D ? 135 : 185) +
+          Math.sqrt(regionBuckets.get(aKey)?.length ?? 1) * (isCompactGraph2D ? 105 : 145);
         for (let j = i + 1; j < regionKeys.length; j++) {
           const bKey = regionKeys[j];
           const b = regionAnchors.get(bKey)!;
-          const radB = 185 + Math.sqrt(regionBuckets.get(bKey)?.length ?? 1) * 145;
-          const minDist = radA + radB + 140;
+          const radB =
+            (isCompactGraph2D ? 135 : 185) +
+            Math.sqrt(regionBuckets.get(bKey)?.length ?? 1) * (isCompactGraph2D ? 105 : 145);
+          const minDist = radA + radB + (isCompactGraph2D ? 75 : 140);
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const d = Math.hypot(dx, dy) || 0.01;
@@ -879,8 +911,26 @@ export function computeLayout2D(
         if (!pa || !pb) continue;
         const sameRegion = nodeRegionId.get(e.source_uuid) === nodeRegionId.get(e.target_uuid);
         const isAdminSpoke = e.type === "monitors" || e.type === "verified_by";
-        const ideal = isAdminSpoke ? 420 : sameRegion ? 235 : 460;
-        const strength = isAdminSpoke ? 0.006 : sameRegion ? 0.048 : 0.01;
+        const ideal = isAdminSpoke
+          ? isCompactGraph2D
+            ? 340
+            : 420
+          : sameRegion
+            ? isCompactGraph2D
+              ? 210
+              : 235
+            : isCompactGraph2D
+              ? 360
+              : 460;
+        const strength = isAdminSpoke
+          ? 0.006
+          : sameRegion
+            ? isCompactGraph2D
+              ? 0.056
+              : 0.048
+            : isCompactGraph2D
+              ? 0.02
+              : 0.01;
         const fa = forces.get(e.source_uuid)!;
         const fb = forces.get(e.target_uuid)!;
         const dx = pb.x - pa.x;

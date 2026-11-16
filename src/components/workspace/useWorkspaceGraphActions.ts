@@ -498,7 +498,7 @@ export function useWorkspaceGraphActions({
       const res = await fetch("/api/earth/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxEonetSites: 7 }),
+        body: JSON.stringify({ compact: true, clearExisting: true }),
       });
       const data = await res.json();
       if (res.ok && data.snapshot) {
@@ -514,6 +514,10 @@ export function useWorkspaceGraphActions({
       } else {
         setStatusMessage(data.error || "Live trend discovery failed.");
       }
+    } catch (err) {
+      setStatusMessage(
+        err instanceof Error ? err.message : "Live trend discovery failed."
+      );
     } finally {
       setDiscoverBusy(false);
     }
@@ -530,8 +534,16 @@ export function useWorkspaceGraphActions({
       const data = await res.json();
       if (res.ok && data.snapshot) {
         setSnapshot(data.snapshot);
+        const syncedCount =
+          typeof data.added === "number"
+            ? data.added + (typeof data.updated === "number" ? data.updated : 0)
+            : Array.isArray(data.signals)
+              ? data.signals.length
+              : 0;
+        const sourceLabel =
+          typeof data.provenance === "string" ? data.provenance : "NASA EONET v3";
         setStatusMessage(
-          `Synced ${data.ingestedCount} Earth event(s) from ${data.source}.`
+          `Synced ${syncedCount} Earth event(s) from ${sourceLabel}.`
         );
         hidePopoverById("etg-more-popover");
       } else {

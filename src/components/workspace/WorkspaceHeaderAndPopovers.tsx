@@ -124,21 +124,22 @@ export function WorkspaceHeader({
     : topicButtonLabel;
 
   return (
-    <header className="z-30 flex min-h-11 shrink-0 flex-nowrap items-center justify-between gap-1.5 border-b border-border bg-header px-2.5 py-1 sm:gap-2 sm:px-3.5">
+    <header className="z-30 flex min-h-11 shrink-0 flex-nowrap items-center justify-between gap-1 border-b border-border bg-header px-1.5 py-1 sm:gap-2 sm:px-3.5">
       {/* Left Group: Brand + Dataset Filter + Relations */}
-      <div className="flex min-w-0 shrink items-center gap-1 sm:gap-1.5">
-        <div className="flex items-center gap-1.5 pr-0.5" title="Earth Trend Detective">
+      <div className="flex min-w-0 shrink-0 items-center gap-1 sm:gap-1.5">
+        <div className="hidden items-center gap-1.5 pr-0.5 sm:flex" title="Earth Trend Detective">
           <span className="h-2 w-2 shrink-0 rounded-full bg-accent-fg" aria-hidden="true" />
           {viewMode === "briefings" ? (
             <span className="whitespace-nowrap font-outfit text-[13.5px] font-semibold tracking-tight text-text-primary">
-              <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
+              Earth Trend Detective
             </span>
           ) : (
             <h1 className="whitespace-nowrap font-outfit text-[13.5px] font-semibold tracking-tight text-text-primary">
-              <span className="sr-only sm:not-sr-only">Earth Trend Detective</span>
+              Earth Trend Detective
             </h1>
           )}
         </div>
+        <h1 className="sr-only sm:hidden">Earth Trend Detective</h1>
 
         <div
           role="separator"
@@ -151,7 +152,7 @@ export function WorkspaceHeader({
           popoverTarget="etg-filter-popover"
           title={topicButtonLabel}
           aria-label={topicButtonLabel}
-          className={`etg-hud-btn inline-flex min-h-7 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11.5px] font-medium transition-colors cursor-pointer ${
+          className={`etg-hud-btn inline-flex min-h-7 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[11.5px] font-medium transition-colors cursor-pointer sm:px-2 ${
             activeFilterCount > 0
               ? "border-amber-400/50 bg-amber-950/50 text-amber-200"
               : "border-border bg-surface-elevated/70 text-text-muted hover:border-border-strong hover:text-text-primary"
@@ -171,7 +172,7 @@ export function WorkspaceHeader({
           popoverTarget="etg-dipoles-popover"
           aria-label={`View Earth relations (${relationsCount})`}
           title="View opposite trends, causal chains, teleconnections, and corroboration relations"
-          className="etg-hud-btn inline-flex min-h-7 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-surface-elevated/70 px-2 py-0.5 text-[11.5px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer"
+          className="etg-hud-btn inline-flex min-h-7 items-center gap-1 whitespace-nowrap rounded-md border border-border bg-surface-elevated/70 px-1.5 py-0.5 text-[11.5px] font-medium text-text-muted transition-colors hover:border-border-strong hover:text-text-primary cursor-pointer sm:px-2"
         >
           <span className="h-2 w-2 shrink-0 rounded-full bg-rose-400" aria-hidden="true" />
           <span className="hidden xl:inline">Relations</span>
@@ -191,7 +192,7 @@ export function WorkspaceHeader({
           onClick={() => onSwitchView("globe")}
           aria-pressed={viewMode === "globe"}
           title="Interactive 3D Earth Globe"
-          className={`inline-flex min-h-6.5 items-center gap-1 whitespace-nowrap rounded-sm px-2 py-0.5 text-[11.5px] font-medium transition-colors cursor-pointer sm:px-2.5 ${
+          className={`inline-flex min-h-6.5 items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer sm:px-2.5 sm:text-[11.5px] ${
             viewMode === "globe"
               ? "bg-surface-elevated text-text-primary font-semibold shadow-xs"
               : "text-text-muted hover:text-text-primary"
@@ -206,7 +207,7 @@ export function WorkspaceHeader({
           onClick={() => onSwitchView("graph")}
           aria-pressed={viewMode === "graph"}
           title="Knowledge Graph"
-          className={`inline-flex min-h-6.5 items-center gap-1 whitespace-nowrap rounded-sm px-2 py-0.5 text-[11.5px] font-medium transition-colors cursor-pointer sm:px-2.5 ${
+          className={`inline-flex min-h-6.5 items-center gap-1 whitespace-nowrap rounded-sm px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer sm:px-2.5 sm:text-[11.5px] ${
             viewMode === "graph"
               ? "bg-surface-elevated text-text-primary font-semibold shadow-xs"
               : "text-text-muted hover:text-text-primary"
@@ -246,7 +247,7 @@ export function WorkspaceHeader({
       </nav>
 
       {/* Right Group: Search + Briefings + AI + Add + Tools + Guide + Theme */}
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
         <search className="relative hidden items-center md:flex">
           <Search
             className="pointer-events-none absolute left-2 h-3.5 w-3.5 text-text-subtle"

@@ -1090,7 +1090,7 @@ export function createGlobeGibsTileController(params: {
       scheduleMultiHdUpgrade();
 
       const isPreviewCancelled = () =>
-        disposed || activeModeSignature !== modeSig;
+        disposed || activeModeSignature !== modeSig || desiredGlobalKey !== reqKey;
       enqueuePreviewJob(async () => {
         if (isPreviewCancelled()) return;
         try {
@@ -1319,7 +1319,7 @@ export function createGlobeGibsTileController(params: {
     scheduleHdUpgrade();
 
     const isPreviewCancelled = () =>
-      disposed || activeModeSignature !== modeSig;
+      disposed || activeModeSignature !== modeSig || desiredGlobalKey !== wmtsSpec.key;
     enqueuePreviewJob(async () => {
       if (isPreviewCancelled()) return;
       try {

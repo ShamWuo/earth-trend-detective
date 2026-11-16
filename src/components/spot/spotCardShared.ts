@@ -64,6 +64,7 @@ export interface CompactSpotCardProps {
   allNodes: ETGNode[];
   allEdges: ETGEdge[];
   visibleNodes: ETGNode[];
+  timelineCutoffMs?: number | null;
   microscopeScan?: TrendMicroscopeScanResult | null;
   microscopeByNode?: Record<string, NodeTrendMicroscopeCue>;
   probedCoord: { lat: number; lng: number } | null;
