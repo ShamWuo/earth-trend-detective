@@ -12,6 +12,11 @@ import {
   GUIDED_DIPOLE_CASES,
   computeDipoleFramingTarget,
 } from "@/components/DetectiveWorkspace";
+import {
+  EARTH_RADIUS,
+  latLngToVector3,
+} from "@/components/globe/globeGeometryAndArcs";
+import { resolveGlobePointerClick } from "@/components/globe/globeSceneReconcilers";
 import type { ETGEdge, ETGNode, ETGRelationshipType } from "@/types/etg";
 
 function makeGeoNode(uuid: string, lat: number, lng: number): ETGNode {
@@ -496,5 +501,76 @@ describe("EarthGlobe3D arc filtering & low-profile geometry", () => {
       unitLabel: "NDVI",
     };
     expect(formatGibsColorbarForUnit(ndviCb, "F")).toEqual(ndviCb);
+  });
+
+  it("ignores invisible arc hit tubes when zoomed in (camAlt < 35) so clicks probe surface instead of flying out", () => {
+    const surfaceDir = latLngToVector3(39.74, -104.99, 1).normalize();
+    const arcHitGeo = new THREE.SphereGeometry(1.75, 8, 8);
+    const arcHitMat = new THREE.MeshBasicMaterial();
+    const arcHitMesh = new THREE.Mesh(arcHitGeo, arcHitMat);
+    arcHitMesh.position.copy(surfaceDir).multiplyScalar(EARTH_RADIUS + 1.0);
+    arcHitMesh.updateMatrixWorld();
+
+    const arcsGroup = new THREE.Group();
+    arcsGroup.visible = true;
+    arcsGroup.add(arcHitMesh);
+    const markersGroup = new THREE.Group();
+    const earthMesh = new THREE.Mesh(new THREE.SphereGeometry(EARTH_RADIUS, 8, 8), arcHitMat);
+    const edge = makeEdge("arc-1", "a", "b", "teleconnects", 0.7);
+    const arcMap = new Map<THREE.Object3D, ETGEdge>([[arcHitMesh, edge]]);
+    const markerMap = new Map<THREE.Object3D, ETGNode>();
+
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 2000);
+    camera.position.copy(surfaceDir).multiplyScalar(EARTH_RADIUS + 20);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+
+    const onSelectNode = vi.fn();
+    const onSelectEdge = vi.fn();
+    const onProbeCoordinate = vi.fn();
+
+    resolveGlobePointerClick({
+      raycaster: new THREE.Raycaster(),
+      ndc: new THREE.Vector2(0, 0),
+      camera,
+      showPins: true,
+      markersGroup,
+      arcsGroup,
+      earthMesh,
+      markerMap,
+      arcMap,
+      onSelectNode,
+      onSelectEdge,
+      onProbeCoordinate,
+    });
+
+    expect(onSelectEdge).not.toHaveBeenCalled();
+    expect(onProbeCoordinate).toHaveBeenCalledTimes(1);
+
+    // At global altitude (camAlt >= 35), clicking the visible arc selects the edge
+    camera.position.copy(surfaceDir).multiplyScalar(EARTH_RADIUS + 150);
+    camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld();
+
+    resolveGlobePointerClick({
+      raycaster: new THREE.Raycaster(),
+      ndc: new THREE.Vector2(0, 0),
+      camera,
+      showPins: true,
+      markersGroup,
+      arcsGroup,
+      earthMesh,
+      markerMap,
+      arcMap,
+      onSelectNode,
+      onSelectEdge,
+      onProbeCoordinate,
+    });
+
+    expect(onSelectEdge).toHaveBeenCalledWith(edge);
+
+    arcHitGeo.dispose();
+    arcHitMat.dispose();
+    earthMesh.geometry.dispose();
   });
 });

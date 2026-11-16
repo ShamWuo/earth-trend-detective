@@ -724,9 +724,11 @@ function pickGlobeSceneHit(ctx: RaycastPickContext):
   | { kind: "edge"; edge: ETGEdge }
   | { kind: "earth"; point: THREE.Vector3 }
   | null {
+  const camAlt = Math.max(0.008, ctx.camera.position.length() - EARTH_RADIUS);
+  ctx.raycaster.params.Line.threshold = Math.min(2.2, Math.max(0.03, camAlt * 0.013));
   ctx.raycaster.setFromCamera(ctx.ndc, ctx.camera);
 
-  if (ctx.showPins) {
+  if (ctx.showPins && ctx.markersGroup.visible) {
     const markerHits = ctx.raycaster.intersectObjects(ctx.markersGroup.children, false);
     const markerHit = markerHits.find((h) => ctx.markerMap.has(h.object));
     if (markerHit) {
@@ -735,18 +737,22 @@ function pickGlobeSceneHit(ctx: RaycastPickContext):
     }
   }
 
-  // Check front-hemisphere teleconnection arcs against true Earth sphere (avoids 124k-tri traversal & sagitta offset)
+  // Check front-hemisphere teleconnection arcs against true Earth sphere (avoids 124k-tri traversal & sagitta offset).
+  // Skip arc hit-testing when zoomed into regional/local view (camAlt < 35) or when arcs are hidden so wide
+  // invisible hit tubes never hijack surface clicks and yank the camera back out to global dipole framing.
   const earthHitPoint = intersectTrueEarthSphere(ctx.raycaster.ray);
   const earthDist = earthHitPoint
     ? ctx.camera.position.distanceTo(earthHitPoint)
     : Infinity;
-  const arcHits = ctx.raycaster.intersectObjects(ctx.arcsGroup.children, false);
-  const arcHit = arcHits.find(
-    (h) => ctx.arcMap.has(h.object) && h.distance <= earthDist + 2.5
-  );
-  if (arcHit) {
-    const edge = ctx.arcMap.get(arcHit.object);
-    if (edge) return { kind: "edge", edge };
+  if (ctx.arcsGroup.visible && camAlt >= 35) {
+    const arcHits = ctx.raycaster.intersectObjects(ctx.arcsGroup.children, false);
+    const arcHit = arcHits.find(
+      (h) => ctx.arcMap.has(h.object) && h.distance <= earthDist + 2.5
+    );
+    if (arcHit) {
+      const edge = ctx.arcMap.get(arcHit.object);
+      if (edge) return { kind: "edge", edge };
+    }
   }
 
   if (earthHitPoint) {

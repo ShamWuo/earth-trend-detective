@@ -410,8 +410,23 @@ export function EarthGlobe3D({
     setAutoRotate(false);
   }, [regionalFocusRequest]);
 
+  const lastCameraSelectionSigRef = useRef<string>("");
+
   // Sync camera target to frame a focused dipole arc midpoint, a 2-spot comparison pair, or a single selected node
   useEffect(() => {
+    const selectionSig = selectedEdgeUuid
+      ? `edge:${selectedEdgeUuid}`
+      : probedCoord && comparePinB
+        ? `pair:${probedCoord.lat.toFixed(4)},${probedCoord.lng.toFixed(4)}->${comparePinB.lat.toFixed(4)},${comparePinB.lng.toFixed(4)}`
+        : selectedNodeUuid
+          ? `node:${selectedNodeUuid}`
+          : "";
+    if (!selectionSig) {
+      lastCameraSelectionSigRef.current = "";
+      return;
+    }
+    if (selectionSig === lastCameraSelectionSigRef.current) return;
+
     if (selectedEdgeUuid) {
       const edge = edges.find((e) => e.properties.uuid === selectedEdgeUuid);
       if (edge) {
@@ -430,6 +445,7 @@ export function EarthGlobe3D({
             tgt.properties.lng
           );
           if (framed) {
+            lastCameraSelectionSigRef.current = selectionSig;
             cameraTargetRef.current = framed;
             setAutoRotate(false);
             return;
@@ -446,6 +462,7 @@ export function EarthGlobe3D({
         comparePinB.lng
       );
       if (framed) {
+        lastCameraSelectionSigRef.current = selectionSig;
         cameraTargetRef.current = framed;
         setAutoRotate(false);
         return;
@@ -453,9 +470,13 @@ export function EarthGlobe3D({
     }
 
     if (!selectedNodeUuid) return;
-    if (Date.now() - lastFocusSeqTimestampRef.current < 150) return;
+    if (Date.now() - lastFocusSeqTimestampRef.current < 150) {
+      lastCameraSelectionSigRef.current = selectionSig;
+      return;
+    }
     const node = nodes.find((n) => n.uuid === selectedNodeUuid);
     if (node?.properties.lat !== undefined && node.properties.lng !== undefined) {
+      lastCameraSelectionSigRef.current = selectionSig;
       const vec = latLngToVector3(node.properties.lat, node.properties.lng, 1);
       const spherical = new THREE.Spherical().setFromVector3(vec);
       const currentRadius =
@@ -468,6 +489,11 @@ export function EarthGlobe3D({
         const camDir = new THREE.Vector3().setFromSpherical(currentSph).normalize();
         const nodeDir = vec.clone().normalize();
         const omega = Math.acos(Math.max(-1, Math.min(1, camDir.dot(nodeDir))));
+        // Keep zoomed-in camera steady when clicking a pin already in view
+        if (omega < 0.22) {
+          setAutoRotate(false);
+          return;
+        }
         if (omega > 0.28) {
           targetRadius = DEFAULT_REGIONAL_FOCUS_RADIUS;
         }
@@ -851,6 +877,7 @@ export function EarthGlobe3D({
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       isDragging = true;
       downX = e.clientX;
       downY = e.clientY;
@@ -1318,7 +1345,7 @@ export function EarthGlobe3D({
       if (arcsGroup.visible) {
         for (const child of arcsGroup.children) {
           if (child.userData.isArcHit) {
-            child.visible = curAlt >= 5;
+            child.visible = curAlt >= 35;
           } else if (typeof child.userData.baseOpacity === "number") {
             const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
             mat.opacity = (child.userData.baseOpacity as number) * arcDeepFade;
